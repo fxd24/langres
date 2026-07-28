@@ -47,7 +47,9 @@ models -- the whole question is whether the effect is model-specific.**
 
 ## Effect on candidate recall at k=20
 
-`doc shift` / `query shift` are `1 - mean cosine` against the no-prompt arm's vectors: **any non-zero value is proof the prompt reached the encoder**, and a prompted arm measuring exactly 0 aborts the run instead of reporting a flat result. `pair J` is the Jaccard overlap of the candidate-pair set with the no-prompt arm -- proof the changed vectors changed the *retrieved neighbours*, not just the geometry. `**` on an interval means it excludes zero.
+**`recall` and `Δ per-record` are different estimators and the second is NOT the difference of the first.** `recall` is *micro* candidate recall -- the fraction of all gold pairs captured. `Δ per-record` is *macro* over records -- the mean per-record fraction of that record's gold partners captured -- because a paired bootstrap needs a per-entity score to resample by cluster. They diverge when clusters differ in size (bge/wdc_computers: micro moves +0.1098, macro reads +0.1224). The CI belongs to the macro quantity.
+
+`doc shift` / `query shift` are `1 - mean cosine` against the no-prompt arm's vectors, reported as magnitudes. The *guard* does not use them: it compares the arrays directly, because on float16 an ignored prompt yields a small non-zero residual rather than exactly 0. `pair J` is the Jaccard overlap of the candidate-pair set with the no-prompt arm -- proof the changed vectors changed the *retrieved neighbours*, not just the geometry. `**` on an interval means it excludes zero.
 
 ### `sentence-transformers/all-MiniLM-L6-v2`
 
@@ -55,7 +57,7 @@ models -- the whole question is whether the effect is model-specific.**
 
 Control: not instruction-trained, ships no prompts.
 
-| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
+| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 4880 |
 | fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0.2486 | 0.7514 | 0.459 | 5294 |
@@ -74,7 +76,7 @@ Control: not instruction-trained, ships no prompts.
 
 109482240 params, dim 768, licence `mit` (OSI-approved).
 
-| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
+| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 4505 |
 | fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0.1969 | 0.8031 | 0.438 | 5415 |
@@ -101,7 +103,7 @@ Control: not instruction-trained, ships no prompts.
 
 109482240 params, dim 768, licence `mit` (OSI-approved).
 
-| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
+| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 4431 |
 | fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0.07455 | 0.9254 | 0.542 | 5088 |
@@ -130,7 +132,7 @@ Control: not instruction-trained, ships no prompts.
 
 Gated + use-restricted licence. Never the default recommendation.
 
-| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
+| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 4161 |
 | fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0.2381 | 0.2381 | 1.0000 | 0.401 | 4629 |
@@ -165,7 +167,7 @@ Gated + use-restricted licence. Never the default recommendation.
 
 595776512 params, dim 1024, licence `apache-2.0` (OSI-approved).
 
-| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
+| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | -0.0001261 | -0.0001261 | 1.0001 | 1.000 | 5385 |
 | fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | -0.0001261 | 0.0842 | 0.9158 | 0.604 | 5480 |

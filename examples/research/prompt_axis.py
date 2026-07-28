@@ -350,7 +350,18 @@ class Row:
     doc_query_cosine: float
     pair_jaccard_vs_none: float | None
     # Effect vs the no-prompt arm, bootstrapped by gold cluster (headline k only).
-    delta_recall_vs_none: float | None = None
+    #
+    # NOTE THE ESTIMATOR DIFFERS from `candidate_recall` above, and the two are
+    # not interchangeable. `candidate_recall` is MICRO -- the fraction of all gold
+    # pairs captured. This delta is MACRO over records -- the mean per-record
+    # fraction of that record's gold partners captured -- because a paired
+    # bootstrap needs a per-entity score to resample by cluster, and a single
+    # corpus-wide micro ratio has no per-entity decomposition to resample.
+    # They diverge whenever clusters differ in size: for bge/wdc_computers micro
+    # recall moves +0.1098 while this macro delta reads +0.1224. Naming it
+    # `delta_recall_vs_none` invited reading it as the difference of the recall
+    # column beside it, which it is not. (Found by automated review on PR #252.)
+    delta_per_record_recall: float | None = None
     ci_low: float | None = None
     ci_high: float | None = None
     n_clusters: int | None = None
@@ -401,38 +412,53 @@ def _shift(vectors: np.ndarray, baseline: np.ndarray) -> float:
 
 def _prompt_reached_encoder(
     recipe: Recipe,
-    doc_shift: float,
-    query_shift: float,
+    doc_vectors: np.ndarray,
+    query_vectors: np.ndarray,
+    baseline_vectors: np.ndarray,
     doc_query_cosine: float,
 ) -> None:
     """Fail loudly when a non-empty prompt left the vectors untouched.
 
     Three independent signals, because a single one can be satisfied by accident:
 
-    1. ``doc_shift`` -- the corpus vectors moved. Proves ``prompt_name`` reached
+    1. the corpus vectors moved -- proves ``prompt_name`` reached
        ``SentenceTransformer.encode`` through the *index build* path.
-    2. ``query_shift`` -- the query vectors moved. Proves ``query_prompt`` reached
-       the encoder through the *search* path, which is the exact seam that used to
-       discard it.
+    2. the query vectors moved -- proves ``query_prompt`` reached the encoder
+       through the *search* path, the exact seam that used to discard it.
     3. ``doc_query_cosine`` -- for a symmetric recipe the two sides must agree
        (cosine ~1), for an asymmetric one they must not. This catches a prompt
        that reached one path but was silently rewritten on the other, which
-       neither shift alone can see.
+       neither of the first two can see alone.
 
-    A byte-identical result is a harness bug until proven otherwise, so this
-    raises rather than recording a flat row.
+    **(1) and (2) compare the arrays directly rather than thresholding the
+    cosine shift, and that distinction is load-bearing.** An earlier version
+    tested ``shift == 0.0``. On a ``float16`` checkpoint an *ignored* prompt does
+    not produce exactly zero -- the committed Qwen3 baseline rows carry residuals
+    like ``-0.0002207`` because the self-cosine lands just above 1 -- so a dropped
+    prompt would have slipped past the exact comparison, and an ignored symmetric
+    recipe would also have satisfied the cosine tolerance. The harness would then
+    publish a flat result as evidence the prompt was applied: precisely the
+    failure this guard exists to prevent. Array equality has no tolerance to tune
+    and cannot drift: if the encoder ignored the prompt, the two calls saw
+    identical input and returned identical bytes. (Found by automated review on
+    PR #252.)
+
+    Note the asymmetry in what each check compares. (1) and (2) compare *the same
+    code path with and without a prompt*, so bit-identity is the correct
+    predicate. (3) compares *two different code paths*, which legitimately differ
+    in last-bit round-off, so it keeps a tolerance.
     """
-    if recipe.document_prompt and doc_shift == 0.0:
+    if recipe.document_prompt and np.array_equal(doc_vectors, baseline_vectors):
         raise RuntimeError(
             f"arm {recipe.arm!r} sets document_prompt={recipe.document_prompt!r} but the "
-            "corpus vectors are identical to the no-prompt arm. The prompt never "
+            "corpus vectors are bit-identical to the no-prompt arm. The prompt never "
             "reached the encoder -- this is a harness bug, not evidence that "
             "instructions do not help."
         )
-    if recipe.query_prompt and query_shift == 0.0:
+    if recipe.query_prompt and np.array_equal(query_vectors, baseline_vectors):
         raise RuntimeError(
             f"arm {recipe.arm!r} sets query_prompt={recipe.query_prompt!r} but the query "
-            "vectors are identical to the no-prompt arm. The prompt never reached "
+            "vectors are bit-identical to the no-prompt arm. The prompt never reached "
             "the encoder (this is exactly the search_all() bug #242 hardened)."
         )
     symmetric = recipe.document_prompt == recipe.query_prompt
@@ -442,11 +468,11 @@ def _prompt_reached_encoder(
             f"but its document and query vectors disagree (cosine={doc_query_cosine:.6f}). "
             "One of the two encode paths is not applying the prompt it was given."
         )
-    if not symmetric and math.isclose(doc_query_cosine, 1.0, abs_tol=1e-6):
+    if not symmetric and np.array_equal(doc_vectors, query_vectors):
         raise RuntimeError(
             f"arm {recipe.arm!r} is asymmetric (document={recipe.document_prompt!r}, "
-            f"query={recipe.query_prompt!r}) but both sides produced identical vectors. "
-            "At least one side ignored its prompt."
+            f"query={recipe.query_prompt!r}) but both sides produced bit-identical "
+            "vectors. At least one side ignored its prompt."
         )
 
 
@@ -484,9 +510,21 @@ def _source_sizes(corpus: Sequence[Any]) -> tuple[int, int] | None:
 def _per_record_recall(
     candidate_pairs: set[frozenset[str]], gold_clusters: Sequence[set[str]]
 ) -> dict[str, tuple[float, str]]:
-    """Per record: what fraction of its gold partners blocking captured."""
+    """Per record: what fraction of its gold partners blocking captured.
+
+    Clusters are labelled from a **deterministically ordered** copy, not from the
+    loader's incoming order. The gold clusters arrive as ``set`` objects, so their
+    enumeration order varies between processes under Python's per-process string
+    hash randomisation. That order reaches the paired bootstrap as the cluster-id
+    list ``random.Random(seed).choice`` samples from, which made the "seeded,
+    reproducible" interval **not reproducible**: re-running an identical cell
+    moved the CI bounds by ~0.002 while leaving the point estimate exactly
+    unchanged (the observed difference is an order-independent mean; only the
+    resampling saw the shuffle). Sorting by each cluster's smallest member is
+    stable across processes and makes the seed mean what it claims.
+    """
     scores: dict[str, tuple[float, str]] = {}
-    for index, cluster in enumerate(gold_clusters):
+    for index, cluster in enumerate(sorted(gold_clusters, key=lambda c: min(c))):
         if len(cluster) < 2:
             continue
         cluster_id = f"c{index}"
@@ -519,7 +557,9 @@ def _paired_interval(
     return paired_entity_bootstrap(observations, seed=SEED)
 
 
-def _build_embedder(spec: ModelSpec, document_prompt: str | None, cache_dir: Path) -> Any:
+def _build_embedder(
+    spec: ModelSpec, document_prompt: str | None, cache_dir: Path, *, texts: Sequence[str] = ()
+) -> Any:
     """An embedder whose *document* side carries ``document_prompt``.
 
     Uses the shipped ``prompts=``/``prompt_name=`` API rather than hand-prefixing
@@ -544,7 +584,56 @@ def _build_embedder(spec: ModelSpec, document_prompt: str | None, cache_dir: Pat
     )
     digest = hashlib.blake2b((document_prompt or "").encode(), digest_size=8).hexdigest()
     namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}__doc{digest}"
-    return DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
+    cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
+    _assert_cache_matches_checkpoint(base, cached, texts)
+    return cached
+
+
+def _assert_cache_matches_checkpoint(base: Any, cached: Any, texts: Sequence[str]) -> None:
+    """Refuse a cache partition whose vectors the current checkpoint disagrees with.
+
+    The namespace keys on the *mutable* model name, dtype and document prompt --
+    not on an immutable revision -- so a cache surviving a checkpoint or
+    sentence-transformers upgrade would keep hitting. A resumed sweep would then
+    mix stale vectors with fresh misses, or silently measure the old checkpoint
+    entirely, **while every prompt-reach guard still passed**: the guards compare
+    arms against each other, so uniformly stale vectors look perfectly consistent.
+
+    So re-encode one real corpus text through the raw checkpoint and compare it to
+    what the cache serves. ``embedder_ladder.py`` guards the identical hazard with
+    the same canary technique. (Found by automated review on PR #252.)
+    """
+    if not texts:
+        return
+    fresh = base.encode([texts[0]])
+    served = cached.encode([texts[0]])
+    if not np.allclose(fresh, served, atol=_CANARY_TOLERANCE):
+        raise RuntimeError(
+            f"embedding cache {cached.db_path} disagrees with the live checkpoint "
+            f"(max |delta| = {float(np.max(np.abs(fresh - served))):.3g}). It was written "
+            "by a different checkpoint or embedding runtime, and its namespace pins "
+            "neither. Delete the cache directory and re-run rather than publishing a "
+            "measurement of a model you are no longer loading."
+        )
+
+
+#: Canary agreement bound. Well above float16 encode jitter, far below the
+#: disagreement a genuinely different checkpoint produces.
+_CANARY_TOLERANCE = 1e-3
+
+
+def _document_prompt_order(recipes: Sequence[Recipe]) -> list[str | None]:
+    """Distinct document prompts, bare-document group first.
+
+    The ``none`` arm lives in the bare group and establishes the baseline vectors
+    and per-record recall every other arm is measured against, so its group must
+    run first.
+    """
+    seen: list[str | None] = []
+    for recipe in sorted(recipes, key=lambda r: r.document_prompt is not None):
+        if recipe.document_prompt not in seen:
+            seen.append(recipe.document_prompt)
+    return seen
 
 
 def evaluate_model_on_benchmark(
@@ -575,112 +664,121 @@ def evaluate_model_on_benchmark(
     ceiling = _reachable_ceiling(corpus, gold_pairs)
     sizes = _source_sizes(corpus)
 
-    # One index per distinct document prompt; arms sharing a document side share it.
-    indexes: dict[str | None, tuple[Any, np.ndarray, Any]] = {}
     baseline_vectors: np.ndarray | None = None
     baseline_pairs: set[frozenset[str]] | None = None
     baseline_recall: dict[str, tuple[float, str]] | None = None
     rows: list[Row] = []
     facts: dict[str, int | None] = {"parameter_count": None, "embedding_dim": None}
 
-    for recipe in recipes:
-        started = time.perf_counter()
-        if recipe.document_prompt not in indexes:
-            embedder = _build_embedder(spec, recipe.document_prompt, cache_dir)
-            index = FAISSIndex(embedder=embedder, metric="cosine")
-            index.create_index(texts)
-            indexes[recipe.document_prompt] = (index, embedder.encode(texts), embedder)
-        index, doc_vectors, embedder = indexes[recipe.document_prompt]
+    # Arms are walked GROUPED BY DOCUMENT PROMPT, with the bare-document group
+    # first (it holds the `none` baseline every other arm is measured against).
+    # Grouping is what keeps exactly one checkpoint resident: a per-arm loop would
+    # hold one loaded model per distinct document prompt, and EmbeddingGemma has
+    # six of them -- roughly 7.2 GB of fp32 weights before inference or FAISS
+    # allocations, enough to OOM an 8 GB GPU even though the arms run
+    # sequentially. (Found by automated review on PR #252.)
+    for document_prompt in _document_prompt_order(recipes):
+        embedder = _build_embedder(spec, document_prompt, cache_dir, texts=texts)
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+        index.create_index(texts)
+        doc_vectors = embedder.encode(texts)
         if facts["parameter_count"] is None:
             facts["parameter_count"] = getattr(embedder.embedder, "parameter_count", None)
             facts["embedding_dim"] = int(doc_vectors.shape[1])
 
-        query_vectors = embedder.encode(texts, prompt=recipe.query_prompt)
-        if recipe.arm == "none":
-            baseline_vectors = doc_vectors
-        assert baseline_vectors is not None, "the 'none' arm must run first"
+        for recipe in [r for r in recipes if r.document_prompt == document_prompt]:
+            started = time.perf_counter()
+            query_vectors = embedder.encode(texts, prompt=recipe.query_prompt)
+            if recipe.arm == "none":
+                baseline_vectors = doc_vectors
+            assert baseline_vectors is not None, "the 'none' arm must run first"
 
-        doc_shift = _shift(doc_vectors, baseline_vectors)
-        query_shift = _shift(query_vectors, baseline_vectors)
-        doc_query_cosine = _mean_cosine(doc_vectors, query_vectors)
-        _prompt_reached_encoder(recipe, doc_shift, query_shift, doc_query_cosine)
-
-        arm_rows: list[Row] = []
-        for k in k_values:
-            blocker = VectorBlocker(
-                vector_index=index,
-                schema=schema,
-                text_field_extractor="concat_comparable_fields",
-                k_neighbors=k,
-                query_prompt=recipe.query_prompt,
+            doc_query_cosine = _mean_cosine(doc_vectors, query_vectors)
+            _prompt_reached_encoder(
+                recipe, doc_vectors, query_vectors, baseline_vectors, doc_query_cosine
             )
-            candidates = list(blocker.stream(records))
-            if sizes is not None:
-                candidates = [c for c in candidates if c.left.source != c.right.source]
-                stats = evaluate_blocking(
-                    candidates, gold_clusters, n_left=sizes[0], n_right=sizes[1]
+            doc_shift = _shift(doc_vectors, baseline_vectors)
+            query_shift = _shift(query_vectors, baseline_vectors)
+
+            arm_rows: list[Row] = []
+            for k in k_values:
+                blocker = VectorBlocker(
+                    vector_index=index,
+                    schema=schema,
+                    text_field_extractor="concat_comparable_fields",
+                    k_neighbors=k,
+                    query_prompt=recipe.query_prompt,
                 )
-            else:
-                stats = evaluate_blocking(candidates, gold_clusters, num_records=len(corpus))
+                candidates = list(blocker.stream(records))
+                if sizes is not None:
+                    candidates = [c for c in candidates if c.left.source != c.right.source]
+                    stats = evaluate_blocking(
+                        candidates, gold_clusters, n_left=sizes[0], n_right=sizes[1]
+                    )
+                else:
+                    stats = evaluate_blocking(candidates, gold_clusters, num_records=len(corpus))
 
-            pairs = {frozenset({str(c.left.id), str(c.right.id)}) for c in candidates}
-            jaccard: float | None = None
-            if k == HEADLINE_K:
-                if recipe.arm == "none":
-                    baseline_pairs = pairs
-                    baseline_recall = _per_record_recall(pairs, gold_clusters)
-                if baseline_pairs is not None:
-                    union = len(pairs | baseline_pairs)
-                    jaccard = len(pairs & baseline_pairs) / union if union else 1.0
+                pairs = {frozenset({str(c.left.id), str(c.right.id)}) for c in candidates}
+                jaccard: float | None = None
+                if k == HEADLINE_K:
+                    if recipe.arm == "none":
+                        baseline_pairs = pairs
+                        baseline_recall = _per_record_recall(pairs, gold_clusters)
+                    if baseline_pairs is not None:
+                        union = len(pairs | baseline_pairs)
+                        jaccard = len(pairs & baseline_pairs) / union if union else 1.0
 
-            row = Row(
-                model=spec.name,
-                benchmark=benchmark,
-                arm=recipe.arm,
-                kind=recipe.kind,
-                k=k,
-                document_prompt=recipe.document_prompt,
-                query_prompt=recipe.query_prompt,
-                note=recipe.note,
-                candidate_recall=stats.candidate_recall,
-                candidate_precision=stats.candidate_precision,
-                reduction_ratio=stats.reduction_ratio,
-                total_candidates=stats.total_candidates,
-                reachable_ceiling=ceiling,
-                recall_of_reachable=(stats.candidate_recall / ceiling) if ceiling else 0.0,
-                doc_shift_vs_none=doc_shift,
-                query_shift_vs_none=query_shift,
-                doc_query_cosine=doc_query_cosine,
-                pair_jaccard_vs_none=jaccard,
-                parameter_count=facts["parameter_count"],
-                embedding_dim=facts["embedding_dim"],
-                license=spec.license,
-                osi_approved=spec.osi_approved,
-                seconds=time.perf_counter() - started,
+                row = Row(
+                    model=spec.name,
+                    benchmark=benchmark,
+                    arm=recipe.arm,
+                    kind=recipe.kind,
+                    k=k,
+                    document_prompt=recipe.document_prompt,
+                    query_prompt=recipe.query_prompt,
+                    note=recipe.note,
+                    candidate_recall=stats.candidate_recall,
+                    candidate_precision=stats.candidate_precision,
+                    reduction_ratio=stats.reduction_ratio,
+                    total_candidates=stats.total_candidates,
+                    reachable_ceiling=ceiling,
+                    recall_of_reachable=(stats.candidate_recall / ceiling) if ceiling else 0.0,
+                    doc_shift_vs_none=doc_shift,
+                    query_shift_vs_none=query_shift,
+                    doc_query_cosine=doc_query_cosine,
+                    pair_jaccard_vs_none=jaccard,
+                    parameter_count=facts["parameter_count"],
+                    embedding_dim=facts["embedding_dim"],
+                    license=spec.license,
+                    osi_approved=spec.osi_approved,
+                    seconds=time.perf_counter() - started,
+                )
+                if k == HEADLINE_K and baseline_recall is not None:
+                    arm_recall = _per_record_recall(pairs, gold_clusters)
+                    interval = _paired_interval(baseline_recall, arm_recall)
+                    if interval is not None:
+                        row.delta_per_record_recall = interval.observed_difference
+                        row.ci_low = interval.lower
+                        row.ci_high = interval.upper
+                        row.n_clusters = interval.n_clusters
+                arm_rows.append(row)
+            rows.extend(arm_rows)
+            recalls = {r.k: r.candidate_recall for r in arm_rows}
+            logger.info(
+                "%s | %s | %s: recall@%s=%.4f doc_shift=%.4g query_shift=%.4g cos=%.4f",
+                spec.name,
+                benchmark,
+                recipe.arm,
+                max(recalls),
+                recalls[max(recalls)],
+                doc_shift,
+                query_shift,
+                doc_query_cosine,
             )
-            if k == HEADLINE_K and baseline_recall is not None:
-                arm_recall = _per_record_recall(pairs, gold_clusters)
-                interval = _paired_interval(baseline_recall, arm_recall)
-                if interval is not None:
-                    row.delta_recall_vs_none = interval.observed_difference
-                    row.ci_low = interval.lower
-                    row.ci_high = interval.upper
-                    row.n_clusters = interval.n_clusters
-            arm_rows.append(row)
-        rows.extend(arm_rows)
-        recalls = {r.k: r.candidate_recall for r in arm_rows}
-        logger.info(
-            "%s | %s | %s: recall@%s=%.4f doc_shift=%.4g query_shift=%.4g cos=%.4f",
-            spec.name,
-            benchmark,
-            recipe.arm,
-            max(recalls),
-            recalls[max(recalls)],
-            doc_shift,
-            query_shift,
-            doc_query_cosine,
-        )
-        yield arm_rows
+            yield arm_rows
+
+        # Drop this document prompt's checkpoint before loading the next one.
+        del embedder, index, doc_vectors
 
 
 # --------------------------------------------------------------------------
@@ -785,12 +883,23 @@ def render_report(rows: Sequence[Row]) -> str:
     add(f"## Effect on candidate recall at k={HEADLINE_K}")
     add("")
     add(
+        "**`recall` and `Δ per-record` are different estimators and the second is NOT "
+        "the difference of the first.** `recall` is *micro* candidate recall -- the "
+        "fraction of all gold pairs captured. `Δ per-record` is *macro* over records -- "
+        "the mean per-record fraction of that record's gold partners captured -- "
+        "because a paired bootstrap needs a per-entity score to resample by cluster. "
+        "They diverge when clusters differ in size (bge/wdc_computers: micro moves "
+        "+0.1098, macro reads +0.1224). The CI belongs to the macro quantity."
+    )
+    add("")
+    add(
         "`doc shift` / `query shift` are `1 - mean cosine` against the no-prompt arm's "
-        "vectors: **any non-zero value is proof the prompt reached the encoder**, and a "
-        "prompted arm measuring exactly 0 aborts the run instead of reporting a flat "
-        "result. `pair J` is the Jaccard overlap of the candidate-pair set with the "
-        "no-prompt arm -- proof the changed vectors changed the *retrieved neighbours*, "
-        "not just the geometry. `**` on an interval means it excludes zero."
+        "vectors, reported as magnitudes. The *guard* does not use them: it compares the "
+        "arrays directly, because on float16 an ignored prompt yields a small non-zero "
+        "residual rather than exactly 0. `pair J` is the Jaccard overlap of the "
+        "candidate-pair set with the no-prompt arm -- proof the changed vectors changed "
+        "the *retrieved neighbours*, not just the geometry. `**` on an interval means it "
+        "excludes zero."
     )
     add("")
     for spec in MODELS:
@@ -808,8 +917,8 @@ def render_report(rows: Sequence[Row]) -> str:
             add(spec.note)
         add("")
         add(
-            "| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | "
-            "query shift | doc·query | pair J | candidates |"
+            "| benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI "
+            "| doc shift | query shift | doc·query | pair J | candidates |"
         )
         add("|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|")
         for benchmark in BENCHMARKS:
@@ -817,7 +926,7 @@ def render_report(rows: Sequence[Row]) -> str:
             for row in sorted(bench_rows, key=lambda r: (r.kind != "baseline", r.arm)):
                 add(
                     f"| {benchmark} | `{row.arm}` | {row.kind} | {row.candidate_recall:.4f} "
-                    f"| {_fmt(row.delta_recall_vs_none)} | {_interval(row)} "
+                    f"| {_fmt(row.delta_per_record_recall)} | {_interval(row)} "
                     f"| {row.doc_shift_vs_none:.4g} | {row.query_shift_vs_none:.4g} "
                     f"| {row.doc_query_cosine:.4f} | {_fmt(row.pair_jaccard_vs_none, 3)} "
                     f"| {row.total_candidates} |"

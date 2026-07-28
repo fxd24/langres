@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).parents[2]
@@ -43,19 +44,24 @@ def _recipe(document: str | None, query: str | None, arm: str = "test") -> objec
     )
 
 
+BASE = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+MOVED = np.array([[0.8, 0.6], [0.6, 0.8]], dtype=np.float32)
+OTHER = np.array([[0.6, 0.8], [0.8, 0.6]], dtype=np.float32)
+
+
 def test_document_prompt_that_never_moved_the_corpus_vectors_raises() -> None:
     """The index-build path silently dropping the prompt must not pass as a flat result."""
-    with pytest.raises(RuntimeError, match="corpus vectors are identical"):
+    with pytest.raises(RuntimeError, match="corpus vectors are bit-identical"):
         harness._prompt_reached_encoder(
-            _recipe("doc: ", "query: "), doc_shift=0.0, query_shift=0.2, doc_query_cosine=0.8
+            _recipe("doc: ", "query: "), BASE, MOVED, BASE, doc_query_cosine=0.8
         )
 
 
 def test_query_prompt_that_never_moved_the_query_vectors_raises() -> None:
     """This is the exact shape of the search_all() bug #242 hardened."""
-    with pytest.raises(RuntimeError, match="query vectors are identical"):
+    with pytest.raises(RuntimeError, match="query vectors are bit-identical"):
         harness._prompt_reached_encoder(
-            _recipe(None, "query: "), doc_shift=0.0, query_shift=0.0, doc_query_cosine=1.0
+            _recipe(None, "query: "), BASE, BASE, BASE, doc_query_cosine=1.0
         )
 
 
@@ -63,19 +69,34 @@ def test_symmetric_recipe_whose_two_encode_paths_disagree_raises() -> None:
     """One side applying the prompt and the other not, when both were told to."""
     with pytest.raises(RuntimeError, match="disagree"):
         harness._prompt_reached_encoder(
-            _recipe("same: ", "same: "), doc_shift=0.2, query_shift=0.2, doc_query_cosine=0.75
+            _recipe("same: ", "same: "), MOVED, OTHER, BASE, doc_query_cosine=0.75
         )
 
 
 def test_asymmetric_recipe_producing_identical_vectors_raises() -> None:
     """Two different prompts cannot legitimately yield the same vectors."""
-    with pytest.raises(RuntimeError, match="both sides produced identical vectors"):
+    with pytest.raises(RuntimeError, match="both sides produced bit-identical"):
         harness._prompt_reached_encoder(
-            _recipe("doc: ", "query: "), doc_shift=0.2, query_shift=0.2, doc_query_cosine=1.0
+            _recipe("doc: ", "query: "), MOVED, MOVED, BASE, doc_query_cosine=1.0
         )
 
 
-def test_float16_round_off_above_one_is_tolerated() -> None:
+def test_float16_residual_does_not_hide_an_ignored_prompt() -> None:
+    """The regression that motivated comparing arrays instead of thresholding shift.
+
+    On a float16 checkpoint an *ignored* prompt does not produce ``shift == 0.0``
+    -- the committed Qwen3 baseline rows carry residuals like ``-0.0002207``. The
+    old exact-equality test would have let that through and published a flat
+    result as evidence the prompt was applied. Array equality has no such hole:
+    the vectors are bit-identical regardless of what the cosine rounds to.
+    """
+    with pytest.raises(RuntimeError, match="query vectors are bit-identical"):
+        harness._prompt_reached_encoder(
+            _recipe(None, "query: "), BASE, BASE, BASE, doc_query_cosine=1.000126
+        )
+
+
+def test_float16_round_off_above_one_is_tolerated_for_the_symmetric_check() -> None:
     """A cosine >1 is impossible for distinct unit vectors, so it is round-off.
 
     Measured on ``Qwen/Qwen3-Embedding-0.6B`` (float16): the no-prompt arm, where
@@ -83,11 +104,40 @@ def test_float16_round_off_above_one_is_tolerated() -> None:
     abort a run.
     """
     harness._prompt_reached_encoder(
-        _recipe(None, None, arm="none"),
-        doc_shift=0.0,
-        query_shift=0.0,
-        doc_query_cosine=1.000126,
+        _recipe(None, None, arm="none"), BASE, BASE, BASE, doc_query_cosine=1.000126
     )
+
+
+def test_document_prompt_order_puts_the_bare_group_first() -> None:
+    """The `none` arm establishes the baseline, so its group must run first."""
+    recipes = [
+        harness.Recipe("a", "doc: ", "doc: ", "ours", ""),
+        harness.Recipe("none", None, None, "baseline", ""),
+        harness.Recipe("b", None, "q: ", "ours", ""),
+    ]
+    assert harness._document_prompt_order(recipes)[0] is None
+
+
+def test_a_cache_disagreeing_with_the_checkpoint_is_refused() -> None:
+    """A stale cache is invisible to the prompt guards, so it needs its own check.
+
+    Every prompt-reach guard compares arms *against each other*, so uniformly
+    stale vectors look perfectly consistent. Only a comparison against the live
+    checkpoint can catch it.
+    """
+
+    class _Base:
+        def encode(self, texts, prompt=None):  # noqa: ANN001, ANN202, ARG002
+            return np.array([[1.0, 0.0]], dtype=np.float32)
+
+    class _StaleCache:
+        db_path = "stale.db"
+
+        def encode(self, texts, prompt=None):  # noqa: ANN001, ANN202, ARG002
+            return np.array([[0.0, 1.0]], dtype=np.float32)
+
+    with pytest.raises(RuntimeError, match="disagrees with the live checkpoint"):
+        harness._assert_cache_matches_checkpoint(_Base(), _StaleCache(), ["a text"])
 
 
 def test_tolerance_still_rejects_the_smallest_real_divergence_measured() -> None:
@@ -101,7 +151,7 @@ def test_tolerance_still_rejects_the_smallest_real_divergence_measured() -> None
     assert harness._SYMMETRIC_TOLERANCE < (1.0 - 0.9446) / 10
     with pytest.raises(RuntimeError, match="disagree"):
         harness._prompt_reached_encoder(
-            _recipe("x: ", "x: "), doc_shift=0.1, query_shift=0.1, doc_query_cosine=0.9446
+            _recipe("x: ", "x: "), MOVED, OTHER, BASE, doc_query_cosine=0.9446
         )
 
 

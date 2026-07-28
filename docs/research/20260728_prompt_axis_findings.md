@@ -13,6 +13,17 @@ Everything below is **candidate recall at fixed `k`** — never F1 at a threshol
 which would confound the retrieval effect with where the cut falls. Confidence
 intervals are paired bootstraps resampled **by gold cluster**.
 
+> **Two estimators, and the Δ is not the difference of the recalls.** A `recall`
+> figure is *micro* — the fraction of all gold pairs captured. Every **Δ** and
+> **CI** below is *macro over records* — the mean per-record fraction of that
+> record's gold partners captured — because a paired bootstrap needs a per-entity
+> score to resample by cluster, and a corpus-wide micro ratio has no per-entity
+> decomposition. The two diverge when clusters differ in size: for
+> bge/`wdc_computers`, micro recall moves `+0.1098` where the macro Δ reads
+> `+0.1224`. Both are honest; they answer slightly different questions, and the
+> interval belongs to the macro one. (Distinction surfaced by automated review on
+> PR #252; the column is now named `delta_per_record_recall` in the rows.)
+
 ---
 
 ## The answer, in four lines
@@ -34,9 +45,10 @@ intervals are paired bootstraps resampled **by gold cluster**.
    default, even when that default describes *web search*. Take the checkpoint's
    retrieval prompt; do not author a better one. (§4.2 has the three tiers.)
 4. **The effect is strongly model-specific**, which is why nothing here is
-   averaged. The same instruction is +0.0474 on one model and −0.0701 on another
-   for the same benchmark. A non-instruction-trained control gained nothing
-   anywhere.
+   averaged. On `wdc_computers`, the *identical* `er_in_official_template` arm is
+   **−0.1589** for EmbeddingGemma and **+0.0388** for Qwen3 — a spread of
+   **0.1977** across two models on one benchmark with one prompt. A
+   non-instruction-trained control gained nothing anywhere.
 
 **The operating rule: drive the sides the checkpoint was trained on.** *Not*
 "always drive both halves" — that sounds sensible and is wrong. For bge and Qwen3
@@ -257,13 +269,23 @@ models where it matters most, **actively harmful**:
 | `intfloat/e5-base-v2` | abt_buy | **−0.0436** | [−0.0568, −0.0314] |
 | `google/embeddinggemma-300m` | wdc_computers | +0.0004 | [−0.0139, +0.0139] |
 
-**The lever is the checkpoint's trained prefix, not better English.** A prompt to
-these models is not an instruction that is understood; it is a token sequence
-whose embedding geometry was fixed during contrastive training. A prefix the
-model never saw in training moves every vector by a large, roughly common
-displacement (our ER sentence shifts vectors by `0.20`–`0.38`, versus `0.02`–`0.10`
-for the models' own prefixes) and that displacement crowds out the
-record-specific signal blocking depends on.
+**The lever is the checkpoint's trained prefix, not better English.** That is the
+measured claim, and it is all the data supports.
+
+A tempting *mechanism* — that an untrained prefix displaces every vector by a
+large common offset which crowds out record-specific signal — is **not supported
+by these rows, and an earlier draft of this doc asserted it with numbers that do
+not appear in the data.** Recomputed from the committed rows: our ER sentence
+shifts vectors by `0.0511`–`0.3825`, while the models' own documented prompted
+sides shift by `0.0111`–`0.3625`. Those ranges **overlap almost entirely**, so
+displacement magnitude does not separate the helpful prompts from the harmful
+ones. Gemma's `clustering` template has the single largest shift in the sweep
+(`0.3625`) *and* is documented *and* is the most damaging arm — three properties
+the mechanism cannot jointly explain.
+
+Whatever makes a prefix helpful, it is not how far it moves the vectors. Treat
+the mechanism as **an open question**, not a finding. (Caught by automated review
+on PR #252.)
 
 **But the honest version of this has three tiers, not two.** Qwen3 forced the
 distinction, and it is the more useful result:
