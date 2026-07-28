@@ -248,6 +248,42 @@ PY
 # ---------------------------------------------------------------------------
 # 3. One model at a time: measure, render, commit, push.
 # ---------------------------------------------------------------------------
+# Used swap in MiB, or empty when it cannot be read. The MPS allocator caches
+# across encodes and never releases, so a long sweep can accumulate tens of GiB
+# of allocations for a sub-1B model while RSS stays under a gigabyte -- RSS is
+# useless here, swap is the observable. Sampled per cell so a monotonic climb is
+# caught while there is still a machine to catch it on.
+swap_used_mib() {
+  sysctl vm.swapusage 2>/dev/null | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p'
+}
+
+SWAP_BASELINE="$(swap_used_mib)"
+SWAP_PREV="$SWAP_BASELINE"
+SWAP_RISES=0
+#: Consecutive per-cell rises before the sweep stops. Three, not one: swap
+#: fluctuates with everything else on the machine, and a single sample is noise.
+SWAP_RISE_LIMIT=3
+
+check_swap() {
+  local now
+  now="$(swap_used_mib)"
+  [ -z "$now" ] || [ -z "$SWAP_PREV" ] && { SWAP_PREV="$now"; return 0; }
+  if awk "BEGIN{exit !($now > $SWAP_PREV)}"; then
+    SWAP_RISES=$((SWAP_RISES + 1))
+  else
+    SWAP_RISES=0
+  fi
+  log "  swap used ${now}M (baseline ${SWAP_BASELINE}M, consecutive rises ${SWAP_RISES})"
+  SWAP_PREV="$now"
+  if [ "$SWAP_RISES" -ge "$SWAP_RISE_LIMIT" ]; then
+    log "ABORT: used swap rose on $SWAP_RISES consecutive cells (${SWAP_BASELINE}M -> ${now}M)."
+    log "  That is the allocator-accumulation signature, and continuing risks taking the"
+    log "  machine down. Everything measured so far is committed. Re-run to resume."
+    return 1
+  fi
+  return 0
+}
+
 for model in "${MODELS[@]}"; do
   safe="${model//\//__}"
   log "=== $model ==="
@@ -258,14 +294,47 @@ for model in "${MODELS[@]}"; do
   # host without it exit non-zero -- and the failure path below then DELETES
   # that model's previously measured rows and commits the deletion. Set
   # LADDER_DEVICE only to override deliberately.
-  uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
-    --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
-    --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
-    --ladder-models "${MODELS[@]}" \
-    ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
-    ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
-    > "$LOG_DIR/$safe.log" 2>&1
-  code=$?
+  measure_cell() {  # $1 = space-separated benchmark list, $2 = log mode (> or >>)
+    if [ "$2" = "truncate" ]; then : > "$LOG_DIR/$safe.log"; fi
+    # shellcheck disable=SC2086  # word splitting is the interface here
+    uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
+      --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
+      --benchmarks $1 \
+      --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
+      --ladder-models "${MODELS[@]}" \
+      ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
+      ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
+      >> "$LOG_DIR/$safe.log" 2>&1
+  }
+
+  code=0
+  if [ "${LADDER_BENCHMARK_GRANULAR:-}" = "1" ]; then
+    # One BENCHMARK per process, not just one model. The model reload costs ~10s
+    # per cell; against a multi-hour sweep that is trivial insurance against the
+    # MPS allocator accumulating across benchmarks inside one process, which has
+    # already OOM'd this machine once (42.44 GiB of allocations for a 0.6B model
+    # at 0.8 GB RSS).
+    first=truncate
+    for benchmark in $BENCHMARKS; do
+      log "  -- $model on $benchmark"
+      measure_cell "$benchmark" "$first"
+      cell_code=$?
+      first=append
+      [ $cell_code -ne 0 ] && code=$cell_code
+      # A cache-integrity refusal must stop immediately, not after the remaining
+      # benchmarks have each recorded their own failure row.
+      [ $cell_code -eq 3 ] && break
+      check_swap || { code=9; break; }
+    done
+  else
+    measure_cell "$BENCHMARKS" truncate
+    code=$?
+    check_swap || code=9
+  fi
+
+  if [ $code -eq 9 ]; then
+    log "$model: stopping the sweep on memory pressure. Rows measured so far are committed below."
+  fi
 
   # A cache-integrity refusal is NOT a model failure, and must not be recorded as
   # one: record_process_failure deletes every existing row for the model and the
@@ -289,7 +358,10 @@ for model in "${MODELS[@]}"; do
     exit 3
   fi
 
-  if [ $code -ne 0 ]; then
+  # Code 9 is THIS script stopping on memory pressure, not the model failing.
+  # Recording a failure row would delete every good row this model already
+  # produced and commit the deletion -- the same trap as the exit-3 path.
+  if [ $code -ne 0 ] && [ $code -ne 9 ]; then
     log "$model exited $code -- recording a failure row and continuing"
     record_process_failure "$model" "$code"
     # Re-render so the failure is visible in the report too. The paths and the
@@ -327,6 +399,14 @@ for model in "${MODELS[@]}"; do
     fi
     log "committed $model"
     git push -q origin HEAD 2>/dev/null && log "pushed" || log "push failed (will retry next model)"
+  fi
+
+  # Committed first, THEN stop: the whole point of aborting on memory pressure is
+  # to keep what was measured, and exiting before the commit above would throw
+  # away exactly the rows the abort was protecting.
+  if [ $code -eq 9 ]; then
+    log "stopping: memory pressure. Re-run this driver to resume from the committed rows."
+    exit 9
   fi
 done
 

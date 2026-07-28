@@ -20,6 +20,15 @@
 #                 "what retrieval tuning bought on this backbone" rather than
 #                 "which model is better". Never merge these rows into study A.
 #
+#                 Study B also carries `random-init-control-350M`: the same
+#                 architecture with SEEDED RANDOM WEIGHTS. It is the noise floor,
+#                 and it is here because a randomly initialised 350M backbone
+#                 scored 0.9911 recall / 0.9971 AUC on fodors_zagat. A benchmark
+#                 where the control lands near the tuned models cannot separate a
+#                 trained retriever from a random feature map, and no embedder
+#                 claim may rest on it. Running it on all five turns that from an
+#                 anecdote into a per-benchmark verdict on the portfolio.
+#
 # Both write their own rows/report/sidecar via LADDER_ARTIFACT, and both share
 # one embedding cache -- so LFM2.5-Embedding-350M, which appears in both, is
 # encoded once and read from cache the second time.
@@ -44,6 +53,14 @@ cd "$ROOT" || exit 1
 # OMP_NUM_THREADS=1 is the load-bearing one.
 export OMP_NUM_THREADS=1
 export KMP_DUPLICATE_LIB_OK=TRUE
+
+# One BENCHMARK per subprocess, not just one model. ~10s of model reload per cell
+# against a multi-hour sweep, in exchange for the MPS allocator being unable to
+# accumulate across benchmarks inside a single process. It has already OOM'd this
+# machine once, at 42.44 GiB of allocations for a 0.6B model whose RSS read
+# 0.8 GB -- RSS cannot see this, so the driver samples swap per cell instead and
+# aborts on a monotonic climb.
+export LADDER_BENCHMARK_GRANULAR=1
 
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
@@ -71,7 +88,7 @@ fi
 say "study B (base masked-LM encoders) -- baseline LiquidAI/LFM2.5-Embedding-350M"
 LADDER_ARTIFACT="docs/research/20260729_lfm25_base_encoders" \
 LADDER_REFERENCE_MODEL="LiquidAI/LFM2.5-Embedding-350M" \
-LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M" \
+LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M random-init-control-350M" \
   bash examples/research/run_ladder.sh
 code=$?
 if [ $code -ne 0 ]; then

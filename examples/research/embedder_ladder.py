@@ -172,6 +172,29 @@ class ModelSpec:
     #: shares their backbone, where the delta means "what retrieval tuning
     #: bought" instead of "which model is better".
     tuned_for_retrieval: bool = True
+    #: The Hugging Face id to LOAD, when it differs from the row's display
+    #: ``name``. Lets one checkpoint be measured under two configurations —
+    #: specifically the random-init control below, which must not collide with
+    #: the real checkpoint's rows.
+    checkpoint: str | None = None
+    #: Build the backbone from the checkpoint's **config only**, with weights
+    #: randomly initialised from a fixed seed — deliberately, as a **noise
+    #: floor**, not as an accident.
+    #:
+    #: This is a control arm, and it earns its place from a measurement. A
+    #: randomly initialised 350M backbone scored **0.9911 candidate recall and
+    #: 0.9971 separability AUC on ``fodors_zagat``**. A random transformer is a
+    #: random feature map, and on a benchmark of near-duplicate strings that is
+    #: enough — so a benchmark where the control scores near the tuned models
+    #: cannot distinguish a trained retriever from noise, and no embedder claim
+    #: may rest on it. Running the control on every benchmark turns that from an
+    #: anecdote into a per-benchmark statement about which ones carry signal.
+    random_init: bool = False
+
+    @property
+    def hf_id(self) -> str:
+        """The checkpoint to load. ``name`` is the identity of the ROW, not of the weights."""
+        return self.checkpoint or self.name
 
 
 #: Licences that are OSI-approved, so a langres default carrying one adds no
@@ -281,6 +304,19 @@ EXTRA_SPECS: tuple[ModelSpec, ...] = (
         "LiquidAI/LFM2.5-Encoder-230M",
         trust_remote_code=True,
         backbone_auto_class="AutoModelForMaskedLM",
+        tuned_for_retrieval=False,
+        license="lfm1.0",
+    ),
+    # The noise floor. Same architecture as the 350M pair, no trained weights at
+    # all. Its recall is what this benchmark hands to a model that knows nothing,
+    # so it is the only number that says whether a benchmark can separate signal
+    # from noise. Named for what it IS, so no reader mistakes the row for a
+    # LiquidAI checkpoint.
+    ModelSpec(
+        "random-init-control-350M",
+        checkpoint="LiquidAI/LFM2.5-Encoder-350M",
+        trust_remote_code=True,
+        random_init=True,
         tuned_for_retrieval=False,
         license="lfm1.0",
     ),
@@ -1145,9 +1181,30 @@ def _preflight_backbone(spec: ModelSpec) -> Any | None:
 
     import transformers
 
+    if spec.random_init:
+        # Config only, no weights, seeded. `from_config` is the EXPLICIT random
+        # path -- as opposed to the accidental one this harness already refuses,
+        # where a key-prefix mismatch randomises a backbone that was supposed to
+        # load. Seeded so the noise floor is a reproducible number rather than a
+        # different draw each run.
+        import torch
+
+        torch.manual_seed(SEED)
+        config = transformers.AutoConfig.from_pretrained(spec.hf_id, trust_remote_code=True)
+        backbone = transformers.AutoModel.from_config(config, trust_remote_code=True)
+        backbone.eval()
+        logger.info(
+            "%s: built a RANDOMLY INITIALISED %s from config (seed=%d) — this is the "
+            "noise floor, not a checkpoint",
+            spec.name,
+            type(backbone).__name__,
+            SEED,
+        )
+        return backbone
+
     auto_class = getattr(transformers, spec.backbone_auto_class or "AutoModel")
     model, info = auto_class.from_pretrained(
-        spec.name, trust_remote_code=True, output_loading_info=True
+        spec.hf_id, trust_remote_code=True, output_loading_info=True
     )
     missing = sorted(info.get("missing_keys", []))
     if missing:
@@ -1253,10 +1310,16 @@ def _substitute_backbone(spec: ModelSpec, base: Any, st_model: Any, backbone: An
             f"weights would still be the ones measured."
         )
     logger.info(
-        "%s: substituted the correctly loaded backbone from %s into child %r "
-        "(AutoModel randomises every weight for this checkpoint)",
+        "%s: substituted %s into child %r",
         spec.name,
-        spec.backbone_auto_class,
+        (
+            f"a SEEDED RANDOM backbone (seed={SEED}) — this row is the noise floor"
+            if spec.random_init
+            else (
+                f"the correctly loaded backbone from {spec.backbone_auto_class} "
+                f"(AutoModel randomises every weight for this checkpoint)"
+            )
+        ),
         child_name,
     )
 
@@ -1279,7 +1342,10 @@ def _build_embedder(
     from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
 
     base = SentenceTransformerEmbedder(
-        spec.name,
+        # `hf_id`, not `name`: the row's identity and the weights' identity are
+        # different things for a control arm measured off another checkpoint's
+        # architecture.
+        spec.hf_id,
         batch_size=spec.batch_size or batch_size,
         device=device,
         trust_remote_code=spec.trust_remote_code,
@@ -1312,8 +1378,13 @@ def _build_embedder(
     # run that adopted the former under `--trust-existing-cache` would publish
     # numbers no checkpoint produced. The canary catches this unaided; the
     # namespace makes it impossible to vouch for by mistake.
-    namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}" + (
-        f"__{spec.backbone_auto_class}" if spec.backbone_auto_class else ""
+    namespace = (
+        f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
+        + (f"__{spec.backbone_auto_class}" if spec.backbone_auto_class else "")
+        # The seed IS the control's identity: a different seed is a different
+        # random model, and reusing one seed's cached vectors under another would
+        # publish a noise floor nothing drew.
+        + (f"__randinit-seed{SEED}" if spec.random_init else "")
     )
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
     _assert_cache_matches_checkpoint(

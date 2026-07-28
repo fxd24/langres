@@ -193,6 +193,54 @@ def _wins(rows: list[dict[str, Any]], model: str, baseline: str) -> tuple[list[s
     return ahead, behind
 
 
+CONTROL = "random-init-control-350M"
+
+
+def _noise_floor_table(
+    tuned: list[dict[str, Any]], base: list[dict[str, Any]]
+) -> tuple[str, list[str], list[str]]:
+    """Every benchmark's tuned-model spread against the random-init noise floor.
+
+    The control is the same 350M architecture with seeded random weights. Its
+    recall is what a benchmark hands a model that knows nothing, so the gap
+    between it and the best tuned model is the benchmark's entire usable
+    dynamic range. Where that gap is ~0, the benchmark cannot separate a trained
+    retriever from a random feature map and carries no evidence about any
+    embedder.
+
+    Returns ``(table, uninformative, informative)``.
+    """
+    benchmarks = sorted({row["benchmark"] for row in tuned} | {row["benchmark"] for row in base})
+    table = "| benchmark | random-init control | best tuned model | margin over noise |\n"
+    table += "|---|---|---|---|\n"
+    uninformative: list[str] = []
+    informative: list[str] = []
+    for benchmark in benchmarks:
+        control = _best_arm(base, CONTROL, benchmark)
+        tuned_cells = [
+            cell
+            for model in {row["model"] for row in tuned}
+            if (cell := _best_arm(tuned, model, benchmark))
+        ]
+        if control is None or not tuned_cells:
+            table += f"| `{benchmark}` | — | — | — |\n"
+            continue
+        floor = control["candidate_recall"]
+        best = max(tuned_cells, key=lambda c: c["candidate_recall"])
+        margin = best["candidate_recall"] - floor
+        # 0.05 is a judgement call, stated rather than hidden: a benchmark whose
+        # entire tuned-vs-random range is under five recall points cannot support
+        # a claim about a model, because the measurement's own noise floor is
+        # inside the effect it would have to detect.
+        verdict = "**uninformative**" if margin < 0.05 else "usable"
+        (uninformative if margin < 0.05 else informative).append(benchmark)
+        table += (
+            f"| `{benchmark}` | {_fmt(floor)} | {_fmt(best['candidate_recall'])} "
+            f"(`{best['model']}`) | **{margin:+.4f}** {verdict} |\n"
+        )
+    return table, uninformative, informative
+
+
 def _licence_clauses() -> list[str]:
     """The clauses that decide whether this may be a shipped default, quoted from the file."""
     text = LICENSE.read_text()
@@ -251,6 +299,7 @@ def render() -> str:
     fwer = 1 - 0.95**n_tests if n_tests else 0.0
 
     base_interval_table, base_degenerate = _interval_table(base, BASE_BASELINE)
+    noise_table, uninformative, informative = _noise_floor_table(tuned, base)
 
     parts = [
         "# LiquidAI LFM2.5 encoders on ER candidate blocking",
@@ -397,12 +446,41 @@ def render() -> str:
 
     parts += [
         "",
-        "## Saturation",
+        "## The noise floor — which benchmarks can separate signal from noise",
         "",
-        "`fodors_zagat` is **saturated** (112 gold pairs; every usable embedder scores near "
-        "the ceiling). It is a never-regress floor and carries no ranking signal — it must "
-        "never be cited as evidence that one model beats another. Saturation is imported "
-        "from the portfolio stream, not measured here.",
+        "**A named finding, not a footnote.** `random-init-control-350M` is the LFM2.5 350M "
+        "architecture with **seeded random weights and no training whatsoever**, run through "
+        "the identical pipeline. A random transformer is a random feature map: near-duplicate "
+        "strings still land near each other, so it retrieves real candidates. Its recall is "
+        "therefore what a benchmark hands a model that knows *nothing*, and the gap above it "
+        "is the benchmark's entire usable dynamic range.",
+        "",
+        noise_table,
+        "",
+        (
+            f"**Benchmarks that cannot support an embedder claim: "
+            f"{', '.join(f'`{b}`' for b in uninformative) if uninformative else 'none'}.** "
+            f"On these the whole tuned-vs-random range is under five recall points, so the "
+            f"measurement's own noise floor sits inside any effect it would have to detect. "
+            f"A model ranking read off them is not evidence."
+        ),
+        "",
+        (
+            f"Benchmarks with usable range: "
+            f"{', '.join(f'`{b}`' for b in informative) if informative else '**none**'}."
+        ),
+        "",
+        "This reframes `fodors_zagat` specifically. It was already labelled *saturated* — "
+        "every usable embedder scoring near the ceiling. The control shows it is stronger "
+        "than that: it is **uninformative in the strict sense**, because an untrained network "
+        "also scores near the ceiling. Saturation says the models agree; this says the "
+        "benchmark cannot tell a trained retriever from noise. It must never be cited as "
+        "evidence that one embedder beats another.",
+        "",
+        "The control also exists because this harness *shipped* the bug it now guards "
+        "against: a substitution that silently left random weights running scored 0.9911 "
+        "recall and 0.9971 AUC on `fodors_zagat`, and nothing in the row looked wrong. "
+        "A permanent noise-floor arm is how that stays visible instead of being rediscovered.",
         "",
         "## Licence — this model must not become the default",
         "",

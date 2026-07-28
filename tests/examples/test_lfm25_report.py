@@ -91,6 +91,20 @@ def artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             vs_reference_ci_high=-0.43,
             reference_model="LiquidAI/LFM2.5-Embedding-350M",
         ),
+        # The noise floor: far below the tuned models on abt_buy, level with them
+        # on the saturated benchmark.
+        _row(
+            "random-init-control-350M",
+            "abt_buy",
+            parameter_count=354_483_968,
+            candidate_recall=0.20,
+        ),
+        _row(
+            "random-init-control-350M",
+            "fodors_zagat",
+            parameter_count=354_483_968,
+            candidate_recall=0.988,
+        ),
     ]
     probe = {
         "transformers_version": "4.57.6",
@@ -221,8 +235,45 @@ class TestStudySeparation:
     def test_saturated_benchmark_is_marked_as_carrying_no_signal(self, artifacts: Path) -> None:
         report = REPORT.render()
 
-        assert "`fodors_zagat` is **saturated**" in report
-        assert "carries no ranking signal" in report
+        assert "uninformative in the strict sense" in report
+        assert "must never be cited as evidence" in report
+
+
+class TestNoiseFloor:
+    """The random-init control is a first-class result, not an incident report."""
+
+    def test_a_benchmark_the_control_matches_is_called_uninformative(self, artifacts: Path) -> None:
+        # fodors_zagat: control 0.9880 vs best tuned 0.9900 -> margin 0.0020.
+        table, uninformative, informative = REPORT._noise_floor_table(
+            REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
+        )
+
+        assert "fodors_zagat" in uninformative
+        assert "fodors_zagat" not in informative
+        assert "**uninformative**" in table
+
+    def test_a_benchmark_with_real_range_is_called_usable(self, artifacts: Path) -> None:
+        # abt_buy: control 0.2000 vs best tuned 0.8700 -> margin 0.6700.
+        _table, uninformative, informative = REPORT._noise_floor_table(
+            REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
+        )
+
+        assert "abt_buy" in informative
+        assert "abt_buy" not in uninformative
+
+    def test_the_margin_is_computed_not_asserted(self, artifacts: Path) -> None:
+        table, _uninformative, _informative = REPORT._noise_floor_table(
+            REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
+        )
+
+        assert "+0.6700" in table  # abt_buy
+        assert "+0.0020" in table  # fodors_zagat
+
+    def test_the_write_up_names_the_unusable_benchmarks(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "cannot support an embedder claim" in report
+        assert "is not evidence" in report
 
 
 class TestLicenceBlocker:
