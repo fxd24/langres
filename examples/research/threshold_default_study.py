@@ -505,8 +505,28 @@ def write_results(results: list[CellResult], out: Path) -> None:
 
 
 def read_results(path: Path) -> list[CellResult]:
-    """Load a previously written artifact back into :class:`CellResult` rows."""
-    return [CellResult.model_validate(row) for row in json.loads(path.read_text())]
+    """Load a previously written artifact, checking the one invariant that ties it together.
+
+    ``kept`` and ``final_threshold`` are recorded from two different places --
+    ``threshold_fit.source`` and the model's clusterer *after* ``fit`` returned --
+    so agreeing is evidence that the race's report and the model's actual state
+    did not diverge. A ``kept="derived"`` row whose model still carries ``0.5``
+    would mean every Δ in the table describes a cut that was never applied.
+
+    Raises:
+        RuntimeError: If any row's ``final_threshold`` is not the cut its ``kept``
+            claims won.
+    """
+    results = [CellResult.model_validate(row) for row in json.loads(path.read_text())]
+    for r in results:
+        expected = r.derived_threshold if r.kept == "derived" else r.incumbent_threshold
+        if r.final_threshold != expected:
+            raise RuntimeError(
+                f"{path}: {r.benchmark}/{r.method}/seed={r.seed} says kept={r.kept} but the "
+                f"model ended at {r.final_threshold} (expected {expected}). The race's report "
+                "and the model's state disagree; the deltas describe a cut that was not applied."
+            )
+    return results
 
 
 def print_tables(results: list[CellResult]) -> None:
