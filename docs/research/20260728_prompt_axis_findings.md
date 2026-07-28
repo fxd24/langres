@@ -220,21 +220,53 @@ verdicts are computed **by the harness**, not by hand: `20260728_prompt_axis.md`
 carries a `Holm` column on every headline row and a section listing every
 comparison and its p-value.
 
-**The p-values are approximate, and the exact route was unavailable.** Holm needs
-p-values; the rows carry percentile intervals, and the bootstrap replicate
-distributions were not retained (re-measuring costs the whole sweep). Each p is
-recovered by reading the interval as normal and scaling from the bound **facing
-zero** only — the side that decides exclusion — so no symmetry is assumed. Two
-properties then follow by arithmetic rather than by judgement, which is what
-makes this safe to use for a *retraction*:
+**The p-values come from the bootstrap, not from the intervals.** This is the
+part that had to be rebuilt. Holm tests at `α/m … α` — here as low as `0.0125` —
+and a 95% interval simply does not determine the tail probability at 1.25%. An
+earlier version of this section recovered one anyway, by turning the interval's
+zero-facing endpoint into a standard error and applying a normal tail. That
+construction is *pinned* to agree with the interval at 0.95 and is uncalibrated
+at every other level, which is every level the correction actually reads. The
+retraction it produced rested on numbers the method could not supply. (Caught by
+automated review on PR #252, twice — the second time decisively.)
 
-- An interval that spans zero yields `p > 0.05`. **Correction can only remove
-  claims, never add one** — so no result below was promoted by this step.
-- A bound resting *exactly* on zero yields `p = 0.05` exactly, and therefore
-  fails every Holm threshold in a family of more than one. The four such cells
-  (`e5`/`official_asymmetric`/`wdc_computers`, `e5`/`er_query_only`/`abt_buy`,
-  `Qwen3`/`er_query_only`/`abt_buy`, `Qwen3`/`er_query_only`/`amazon_google`)
-  drop out without anyone deciding they should.
+The bootstrap now reports its own **achieved significance level** from the same
+replicates that produce the interval:
+
+> `p = 2 · min( P(Δ* ≤ 0), P(Δ* ≥ 0) )`, with the usual `(count+1)/(B+1)` correction
+
+which is the percentile interval **inverted**. So `p ≤ t` means *"the `1−t`
+percentile interval over this draw excludes zero"* at **every** `t`, not just at
+`t = 0.05` — the coherence property that makes it legitimate to read at a
+corrected threshold. It is a property of the estimator, not an assumption:
+`langres.experiments.statistics` tests it at six confidence levels.
+
+Two consequences that follow rather than being asserted:
+
+- An interval that spans zero yields `p > 0.05` by construction. **Correction can
+  only remove claims, never add one** — nothing below was promoted by this step.
+- Nothing smaller than `2/(B+1)` is observable, so the estimator floors there
+  instead of reporting `0` and claiming a precision the draw does not have.
+
+**The replicate count is set by the correction, not by the intervals.** `B` is
+**20 000**, twenty times the library default. A p-value estimated from `B`
+replicates carries Monte-Carlo error `√(p(2−p)/B)` — note the `2−p`, since the
+p-value is a tail proportion *doubled* for two-sidedness. At `p ≈ 0.02` that is
+`0.0044` with `B = 1000`, a third of the `0.0125` threshold being tested against:
+the verdict would be decided by how the bootstrap happened to resample rather
+than by the data. At `B = 20 000` it is `0.0010`. **The report names every verdict
+sitting within 3 Monte-Carlo standard errors of its own Holm threshold**, so a
+resolution-limited decision is visible as one rather than presented as a finding.
+
+**Every measured benchmark stays in its family, including the ones an arm left
+untouched.** A comparison where no record's recall moved is a genuine
+non-rejection (`p = 1`), not an absent one. An earlier version dropped those,
+which made the Holm denominator depend on the observed result — a family was
+size 3 or size 4 according to whether an arm happened to move the saturated
+benchmark. A data-dependent family size is invalid *however well the p-values are
+calibrated*, so this was a second, independent defect rather than a detail of the
+first. Every family here is therefore **m = 4**, and the thresholds are
+`0.0125 / 0.0167 / 0.025 / 0.05`. (Also caught by automated review on PR #252.)
 
 **Counts.** Of 80 comparisons, **61 are testable** and **19 are not** — the arm
 changed no record's recall, so the estimate and both bounds are exactly zero and
@@ -539,18 +571,20 @@ real documented prompt strings rather than synthetic ones.
 
 Stated because each one bounds a claim above, not as boilerplate.
 
-**The p-values behind §4's Holm column are approximate.** They are recovered from
-the stored percentile intervals under a normal reading (zero-facing side only, so
-no symmetry is assumed) because the bootstrap replicate distributions were not
-retained. The exact procedure — re-running the bootstrap at each Holm threshold —
-costs the whole sweep. The approximation is conservative in the direction that
-matters (a spanning interval can never become significant), but a comparison
-close to a threshold could in principle fall on the other side of it under the
-exact computation. Three of the sweep's 61 testable comparisons sit in that
-region: exactly the three e5 cells this document withdraws, at p `0.0197`–`0.0229`
-against a `0.0167` threshold. They are not marginal *by a little* — they miss by
-18%, 33% and 38% of the threshold — but a reader who needs e5 settled should
-re-measure rather than rely on this.
+**The p-values are percentile-bootstrap achieved significance levels, with the
+percentile method's known limits.** They are coherent with the intervals reported
+beside them by construction, and they are read from the replicate distribution
+rather than extrapolated — but the percentile method carries neither a bias nor
+an acceleration correction. BCa would give both and would be the stronger choice
+if any verdict here were close enough for that to matter; §4's resolution check
+reports whether any is.
+
+**Every p-value is an estimate from a finite draw.** `B = 20 000` puts the
+Monte-Carlo error at `≈0.0010` near `p = 0.02`, and nothing below `2/20001 ≈
+1e-4` is observable at all — so a very strong effect and an overwhelming one are
+not distinguishable here, and are not claimed to be. Verdicts within 3 Monte-Carlo
+standard errors of their threshold are named in §4 rather than reported as
+settled.
 
 **A full sweep does not fit in one process on this machine.** The single-process
 run OOMed at row 324 of 400, with torch requesting **42.44 GiB** on MPS while
