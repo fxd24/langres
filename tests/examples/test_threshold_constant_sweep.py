@@ -38,6 +38,7 @@ from examples.research.threshold_constant_sweep import (
     _unit_index,
     dedupe_scores,
     lobo_constants,
+    to_transfer_markdown,
     to_verdict_markdown,
 )
 from langres.core.models import PairwiseJudgement
@@ -271,6 +272,63 @@ class TestEmbedderOverride:
         wrapped = _EmbedderOverride(_NoIndexBench(), "intfloat/e5-base-v2")  # type: ignore[arg-type]
         with pytest.raises(SystemExit, match="no .*vector_index.embedder|cannot apply"):
             wrapped.build_blocker(5)
+
+
+class TestCheckpointTransfer:
+    """The cross-encoder question: a `sim_cos` cut is a cut on a cosine SCALE,
+    and the scale belongs to the checkpoint. These pin the pre-registered
+    transfer rule, which judges **harm relative to the incumbent** rather than
+    distance from the variant's own optimum.
+    """
+
+    def _report(self, cells: list[CellResult]) -> SweepReport:
+        return SweepReport(
+            grid=list(GRID), shipped_threshold=0.5, bootstrap_resamples=10, cells=cells
+        )
+
+    def _variant(self, *, ci_hi: float, curve: list[float]) -> list[CellResult]:
+        cells = []
+        for name in ("alpha", "beta", "gamma"):
+            cell = _cell(name, curve=curve)
+            cell.embedder = "intfloat/e5-base-v2"
+            cell.ci_hi_blocked = [ci_hi] * len(GRID)
+            cells.append(cell)
+        return cells
+
+    def test_a_constant_that_still_helps_transfers(self) -> None:
+        baseline = self._report([_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")])
+        variant = self._report(self._variant(ci_hi=0.4, curve=_peak_at(0.80)))
+        assert "**TRANSFERS**" in to_transfer_markdown(baseline, variant)
+
+    def test_a_constant_that_significantly_hurts_does_not_transfer(self) -> None:
+        """Every seed's interval entirely below zero -- the veto case."""
+        baseline = self._report([_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")])
+        # On the variant, 0.80 scores BELOW the incumbent at 0.50.
+        losing = [0.9] * len(GRID)
+        losing[GRID.index(0.80)] = 0.1
+        variant = self._report(self._variant(ci_hi=-0.01, curve=losing))
+        assert "**DOES NOT TRANSFER**" in to_transfer_markdown(baseline, variant)
+
+    def test_it_names_the_variant_checkpoint(self) -> None:
+        """A transfer claim that does not say which encoder is unfalsifiable."""
+        baseline = self._report([_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")])
+        variant = self._report(self._variant(ci_hi=0.4, curve=_peak_at(0.80)))
+        assert "intfloat/e5-base-v2" in to_transfer_markdown(baseline, variant)
+
+    def test_a_moved_argmax_alone_is_not_a_veto(self) -> None:
+        """Pre-registered on purpose: off-optimum but far better than 0.5 is
+        still a strict improvement for that user.
+        """
+        baseline = self._report([_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")])
+        # Variant peaks elsewhere, but 0.80 still beats the incumbent at 0.50.
+        curve = [0.1] * len(GRID)
+        curve[GRID.index(0.50)] = 0.2
+        curve[GRID.index(0.80)] = 0.7
+        curve[GRID.index(0.95)] = 0.9  # the variant's own optimum, far from 0.80
+        variant = self._report(self._variant(ci_hi=0.4, curve=curve))
+        markdown = to_transfer_markdown(baseline, variant)
+        assert "**TRANSFERS**" in markdown
+        assert "0.80 -> 0.95" in markdown
 
 
 class TestCellResultRecordsItsCheckpoint:
