@@ -40,7 +40,7 @@ import warnings
 from collections.abc import Callable
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from langres.core.comparator import Comparator
 from langres.core.comparators import StringComparator
@@ -55,6 +55,7 @@ from langres.core.model_ref import (
     UnsupportedBackboneError,
     normalize_model_ref,
 )
+from langres.core.score_type import DEFAULT_THRESHOLDS, ScoreType
 
 __all__ = [
     "DEFAULT_EMBEDDING_MODEL",
@@ -118,7 +119,14 @@ class MethodSpec(BaseModel):
             when a run produces no judgements.
         default_threshold: The decision threshold used when a caller passes
             ``threshold=None`` (E12: score scales differ per family, so each
-            method carries its own sane default).
+            method carries its own sane default). **Omit it and it is filled
+            from the method's own ``score_type`` via**
+            :data:`~langres.core.score_type.DEFAULT_THRESHOLDS`, which is where
+            a family's shipped cut is written down. Set it explicitly only to
+            *override* the family -- a per-method deviation someone should have
+            to justify. Before this defaulted from the family, seven specs each
+            spelled out the same two literals, and a change to the family's cut
+            would have moved some of them and silently left the rest behind.
         default_model: The underlying model id when the caller names none --
             the value stamped on results as ``model`` (``None`` for judges
             with no model at all, e.g. pure-string similarity).
@@ -154,6 +162,23 @@ class MethodSpec(BaseModel):
     accepted_kinds: frozenset[BackboneKind] = frozenset()
     needs_comparator: bool = False
     requires_extra: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_threshold_from_family(cls, data: Any) -> Any:
+        """Fill an omitted ``default_threshold`` from the method's ``score_type``.
+
+        ``mode="before"`` because it must distinguish *omitted* from *explicitly
+        0.5*, and after validation the field default has already erased that
+        difference. An unknown ``score_type`` is left alone rather than raising
+        here -- the field's own validation owns that error, and swallowing it
+        would report a threshold problem for what is really a bad family tag.
+        """
+        if isinstance(data, dict) and "default_threshold" not in data:
+            family = data.get("score_type")
+            if family in DEFAULT_THRESHOLDS:
+                return {**data, "default_threshold": DEFAULT_THRESHOLDS[cast(ScoreType, family)]}
+        return data
 
     def check_backbone(self, model: str | dict[str, str] | ModelRef | None) -> ModelRef | None:
         """Validate a caller's ``model=`` against this method's ``accepted_kinds``.
@@ -535,14 +560,12 @@ def _register_builtins() -> None:
             name="string",
             build=_build_string,
             score_type="heuristic",
-            default_threshold=0.5,
             needs_comparator=True,
         ),
         MethodSpec(
             name="embedding",
             build=_build_embedding,
             score_type="sim_cos",
-            default_threshold=0.5,
             # The judge scores the preset-built VectorBlocker's cosine sims,
             # so the pipeline's model IS the pinned embedder.
             default_model=DEFAULT_EMBEDDING_MODEL,
@@ -554,7 +577,6 @@ def _register_builtins() -> None:
             name="zero_shot_llm",
             build=_build_zero_shot_llm,
             score_type="prob_llm",
-            default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
             # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
             # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
@@ -565,7 +587,6 @@ def _register_builtins() -> None:
             name="prompt_llm",
             build=_build_prompt_llm,
             score_type="prob_llm",
-            default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
             # LLMMatcher-backed: litellm AND a transformers backend.
             accepted_kinds=SERVED_KINDS | IN_PROCESS_KINDS,
@@ -597,7 +618,6 @@ def _register_builtins() -> None:
             name="llm_judge",
             build=_build_prompt_llm,
             score_type="prob_llm",
-            default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
             # LLMMatcher-backed: litellm AND a transformers backend.
             accepted_kinds=SERVED_KINDS | IN_PROCESS_KINDS,
@@ -607,7 +627,6 @@ def _register_builtins() -> None:
             name="dspy_judge",
             build=_build_zero_shot_llm,
             score_type="prob_llm",
-            default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
             # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
             # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
@@ -618,7 +637,6 @@ def _register_builtins() -> None:
             name="select_judge",
             build=_build_select_judge,
             score_type="prob_group_llm",
-            default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
             # DSPy-backed: litellm-only, so a local dir/adapter is rejected at
             # construction (B10). `hf` is admitted -- see LITELLM_ROUTABLE_KINDS.
@@ -631,7 +649,6 @@ def _register_builtins() -> None:
             # the fallback tag names the LLM family it escalates into.
             build=_build_cascade,
             score_type="prob_llm",
-            default_threshold=0.7,
             default_model=DEFAULT_OPENROUTER_MODEL,
             # LLMMatcher-backed: litellm AND a transformers backend.
             accepted_kinds=SERVED_KINDS | IN_PROCESS_KINDS,

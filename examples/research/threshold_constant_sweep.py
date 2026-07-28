@@ -64,7 +64,21 @@ blocking is the benchmark's own ``VectorBlocker``, so a run needs the
 
 Run (offline, $0)::
 
-    uv run --env-file .env python examples/research/threshold_constant_sweep.py
+    OMP_NUM_THREADS=1 uv run --env-file .env python \\
+        examples/research/threshold_constant_sweep.py
+
+``OMP_NUM_THREADS=1`` is not optional on macOS. faiss and a torch model in one
+process **deadlock silently** without it -- no error, no output, no CPU, forever;
+``KMP_DUPLICATE_LIB_OK`` suppresses the OpenMP *abort* but not the *deadlock*.
+The module sets it via ``os.environ.setdefault`` above before any import that
+could pull either in, which is the layer that protects a run however it was
+launched; the command line and ``.env`` are belt and braces.
+
+Each benchmark runs in its **own subprocess** (see
+:func:`run_benchmark_isolated`) to bound torch's non-releasing MPS allocator, and
+every cell is checkpointed, so an interrupted sweep continues with::
+
+    ... threshold_constant_sweep.py --resume
 
 A narrowed run must name its own ``--out``; the write replaces the file
 wholesale, so pointing a subset at the canonical artifact would shrink it::
@@ -91,6 +105,8 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 import argparse  # noqa: E402
 import logging  # noqa: E402
 import statistics  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
 import time  # noqa: E402
 from collections.abc import Iterator, Sequence  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -733,13 +749,20 @@ def to_lobo_markdown(report: SweepReport) -> str:
             delta = cell.f1_blocked[index] - cell.shipped_f1_blocked
             headroom = cell.oracle_f1_blocked - cell.shipped_f1_blocked
             capture = f"{delta / headroom:.0%}" if headroom > 1e-9 else "n/a"
-            flag = "" if cell.selection_eligible else " *(not eligible)*"
             lines.append(
-                f"| `{family}` | {cell.benchmark}{flag} | {cell.seed} | {constant:.2f} | "
+                f"| `{family}` | {cell.benchmark} | {cell.seed} | {constant:.2f} | "
                 f"{cell.shipped_f1_blocked:.4f} | {cell.f1_blocked[index]:.4f} | "
                 f"{delta:+.4f} | [{cell.ci_lo_blocked[index]:+.4f}, "
                 f"{cell.ci_hi_blocked[index]:+.4f}] | {cell.oracle_f1_blocked:.4f} | {capture} |"
             )
+    excluded = sorted({c.benchmark for c in report.cells if not c.selection_eligible})
+    lines.append("")
+    lines.append(
+        f"Selection-ineligible and therefore absent above: "
+        f"{', '.join(f'`{n}`' for n in excluded) if excluded else 'none'} "
+        f"(fewer than {MIN_SELECTION_GOLD} blocked gold pairs held out, so one pair "
+        "swings the metric). They are still measured -- see the per-cell table."
+    )
     return "\n".join(lines)
 
 
@@ -791,10 +814,15 @@ def to_stability_markdown(report: SweepReport) -> str:
         constants = sorted(
             lobo_constants([c for c in report.cells if c.score_family == family]).values()
         )
-        lines.append(
-            f"| `{family}` | {len({c.benchmark for c in family_cells})} | {in_sample:.2f} | "
-            f"{constants[0]:.2f} | {constants[-1]:.2f} | {constants[-1] - constants[0]:.2f} |"
+        count = len({c.benchmark for c in family_cells})
+        # Empty on a narrowed run: leaving one benchmark out of ONE benchmark
+        # leaves nothing to select from. Report that rather than indexing [0].
+        span = (
+            f"{constants[0]:.2f} | {constants[-1]:.2f} | {constants[-1] - constants[0]:.2f}"
+            if constants
+            else "n/a | n/a | n/a"
         )
+        lines.append(f"| `{family}` | {count} | {in_sample:.2f} | {span} |")
     return "\n".join(lines)
 
 
@@ -972,6 +1000,72 @@ def read_report(path: Path) -> SweepReport:
     return report
 
 
+def _worker_command(name: str, args: argparse.Namespace, out: Path) -> list[str]:
+    """The argv that measures ONE benchmark in a fresh interpreter."""
+    return [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--in-process",
+        # The parent prints the tables once, over the whole matrix. A worker's
+        # single-benchmark tables would be noise ten times over.
+        "--no-tables",
+        "--only",
+        name,
+        "--methods",
+        *args.methods,
+        "--seeds",
+        *[str(seed) for seed in args.seeds],
+        "--resamples",
+        str(args.resamples),
+        "--out",
+        str(out),
+    ]
+
+
+def run_benchmark_isolated(name: str, args: argparse.Namespace, scratch: Path) -> list[CellResult]:
+    """Measure one benchmark in a SUBPROCESS and return its cells.
+
+    Process isolation is a memory bound, not tidiness. torch's MPS caching
+    allocator does not release between encodes, so a long single-process sweep
+    grows until the OS kills it -- measured on this machine at **42 GiB of MPS
+    allocations for a 0.6B model**, while the process's RSS still read 0.8 GB
+    (MPS allocations do not appear in RSS, so ``ps`` says the process is
+    innocent; ``sysctl vm.swapusage`` is the signal that isn't lying). Every cell
+    here builds a ``VectorBlocker`` (sentence-transformers + FAISS), so the same
+    accumulation applies -- smaller per cell, because the portfolio pins
+    ``all-MiniLM-L6-v2``, but unbounded over 60 cells all the same.
+
+    One benchmark per process caps the pool at what one benchmark needs and costs
+    nothing: the corpus and the embedding cache are on disk, and the interpreter
+    start is seconds against minutes of blocking. ``--in-process`` opts out.
+
+    Args:
+        name: Registry benchmark name.
+        args: Parsed CLI namespace (methods/seeds/resamples are forwarded).
+        scratch: The parent's checkpoint path -- the worker's own file is named
+            beside it so an abandoned one is visible to ``git status -uall``.
+
+    Returns:
+        The worker's cells.
+
+    Raises:
+        RuntimeError: If the worker exits non-zero or writes no artifact. The
+            caller downgrades this to a per-benchmark failure; a *killed* worker
+            (OOM, SIGKILL) lands here rather than taking the sweep with it.
+    """
+    worker_out = scratch.with_name(f"{scratch.name}.{name}.json")
+    worker_out.unlink(missing_ok=True)
+    completed = subprocess.run(_worker_command(name, args, worker_out), check=False)
+    if completed.returncode != 0 or not worker_out.exists():
+        raise RuntimeError(
+            f"worker for {name} exited {completed.returncode} "
+            f"(artifact {'written' if worker_out.exists() else 'missing'})"
+        )
+    cells = read_report(worker_out).cells
+    worker_out.unlink()
+    return cells
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -980,6 +1074,28 @@ def main() -> None:
     parser.add_argument("--methods", nargs="+", default=list(DEFAULT_METHODS))
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
     parser.add_argument("--resamples", type=int, default=BOOTSTRAP_RESAMPLES)
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help=(
+            "measure in THIS interpreter instead of one subprocess per benchmark. "
+            "Also what each subprocess runs. Opting out removes the memory bound -- "
+            "see run_benchmark_isolated"
+        ),
+    )
+    parser.add_argument(
+        "--no-tables",
+        action="store_true",
+        help="write the artifact but print no tables (what each subprocess worker runs)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "continue an interrupted sweep: read the .partial checkpoint and skip "
+            "the (benchmark, method, seed) cells it already holds"
+        ),
+    )
     parser.add_argument(
         "--out",
         type=Path,
@@ -1038,40 +1154,63 @@ def main() -> None:
     # in `git status -uall` and force a decision rather than vanish with the
     # worktree.
     scratch = out.with_name(out.name + ".partial")
-    for stale in (scratch, scratch.with_name(scratch.name + ".writing")):
-        if stale.exists():
-            parser.error(
-                f"{stale} exists: an earlier sweep was interrupted and those cells are "
-                "its only copy. Read it, then move, commit or delete it (or pick a "
-                "different --out) before re-running."
+    cells: list[CellResult] = []
+    if args.resume and scratch.exists():
+        cells = read_report(scratch).cells
+        print(f"[resume] {len(cells)} cell(s) already measured in {scratch}", flush=True)
+    else:
+        for stale in (scratch, scratch.with_name(scratch.name + ".writing")):
+            if stale.exists():
+                parser.error(
+                    f"{stale} exists: an earlier sweep was interrupted and those cells are "
+                    "its only copy. Pass --resume to continue it, or read it and then "
+                    "move, commit or delete it (or pick a different --out)."
+                )
+
+    def checkpoint() -> None:
+        try:
+            write_report(
+                SweepReport(
+                    grid=list(GRID),
+                    shipped_threshold=SHIPPED_THRESHOLD,
+                    bootstrap_resamples=args.resamples,
+                    cells=cells,
+                ),
+                scratch,
             )
+        except OSError as exc:
+            # A benchmark that fails is recoverable -- skip it and carry on. A
+            # checkpoint that cannot be written is NOT: every later cell would run
+            # for minutes with nothing catching it. Abort while the loss is small.
+            raise CheckpointError(f"cannot write checkpoint {scratch}: {exc}") from exc
 
     selected = select_benchmarks(fast=args.fast, only=args.only)
     expected_cells = len(selected) * len(args.methods) * len(args.seeds)
-    cells: list[CellResult] = []
+    done = {(c.benchmark, c.method, c.seed) for c in cells}
     failures: list[str] = []
     for name in selected:
-        print(f"[run] {name}: {' '.join(args.methods)} ($0 spend) ...", flush=True)
+        wanted = {(name, m, s) for m in args.methods for s in args.seeds}
+        if wanted <= done:
+            print(f"[skip] {name}: already in the checkpoint", flush=True)
+            continue
+        where = "in-process" if args.in_process else "subprocess"
+        print(f"[benchmark] {name} ({where}): {' '.join(args.methods)} ($0 spend)", flush=True)
         try:
-            for cell in run_benchmark(
-                name,
-                methods=tuple(args.methods),
-                seeds=tuple(args.seeds),
-                resamples=args.resamples,
-            ):
-                cells.append(cell)
-                try:
-                    write_report(
-                        SweepReport(
-                            grid=list(GRID),
-                            shipped_threshold=SHIPPED_THRESHOLD,
-                            bootstrap_resamples=args.resamples,
-                            cells=cells,
-                        ),
-                        scratch,
-                    )
-                except OSError as exc:
-                    raise CheckpointError(f"cannot write checkpoint {scratch}: {exc}") from exc
+            if args.in_process:
+                for cell in run_benchmark(
+                    name,
+                    methods=tuple(args.methods),
+                    seeds=tuple(args.seeds),
+                    resamples=args.resamples,
+                ):
+                    cells.append(cell)
+                    checkpoint()
+            else:
+                # A partially-done benchmark is re-measured whole: the worker owns
+                # a benchmark, not a cell, so resume granularity IS the benchmark.
+                cells = [c for c in cells if c.benchmark != name]
+                cells.extend(run_benchmark_isolated(name, args, scratch))
+                checkpoint()
         except CheckpointError:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
@@ -1087,7 +1226,7 @@ def main() -> None:
         cells=cells,
     )
     print()
-    if cells:
+    if cells and not args.no_tables:
         print_tables(report)
         print()
     if failures:

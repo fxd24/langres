@@ -32,6 +32,7 @@ from langres.core.op_adapters import (
 )
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
+from langres.core.score_type import resolve_threshold
 
 __all__ = ["Reranker"]
 
@@ -106,7 +107,9 @@ class Reranker(ERModel):
             ``FuzzyString``, whose ``_topology`` defers binding until first use).
         k: The number of survivors ``TopKSelect`` keeps per anchor after the cheap
             first pass.
-        threshold: The match cut on the reranked (full-evidence) score.
+        threshold: The match cut on the reranked (full-evidence) score. ``None``
+            (the default) takes the ``"heuristic"`` family's shipped cut from
+            :data:`~langres.core.score_type.DEFAULT_THRESHOLDS`.
         budget_usd: Spend cap for this model's lifetime. Present for symmetry and
             metered like any other model's -- but this architecture reports $0 per
             pair (free string matchers only), so the cap can never trip.
@@ -126,7 +129,7 @@ class Reranker(ERModel):
         schema: type[BaseModel],
         *,
         k: int,
-        threshold: float,
+        threshold: float | None = None,
         budget_usd: float | None = None,
     ) -> Self:
         """Build a ``Reranker`` for ``schema`` as an explicit 7-op chain.
@@ -143,7 +146,21 @@ class Reranker(ERModel):
         Args:
             schema: The entity schema (required -- see the class docstring).
             k: Survivors ``TopKSelect`` keeps per anchor after the cheap pass.
-            threshold: The match cut on the reranked score.
+            threshold: The match cut on the reranked score. ``None`` takes the
+                ``"heuristic"`` family default.
+
+                **Why this joined the per-family default scheme when it used to
+                demand an explicit number:** the score it cuts is produced by
+                ``MatcherScore(WeightedAverageMatcher(feature_specs=<all>))`` --
+                the same class, over the same full feature set, as
+                ``FuzzyString``'s matcher. Same construction, same scale, same
+                measured family, so requiring a number here while ``FuzzyString``
+                defaults was an inconsistency rather than a safety feature; the
+                "calibrate before trusting it" caution it was standing in for is
+                in the class docstring, where ``FuzzyString`` keeps its identical
+                one. Contrast ``RetrieveRerank``, which is *also* tagged
+                ``"heuristic"`` but cuts a cross-encoder's score -- a different
+                scale wearing the same coarse family tag.
             budget_usd: Spend cap for the instance's lifetime (``None`` -> the
                 default; this architecture cannot spend regardless).
 
@@ -173,7 +190,7 @@ class Reranker(ERModel):
             # The Score AFTER the Select -- the reranker. A different feature subset
             # from pass 1, so it genuinely re-ranks the survivors.
             MatcherScore(WeightedAverageMatcher(feature_specs=full_pass), out_space="heuristic"),
-            ThresholdSelect(threshold),
+            ThresholdSelect(resolve_threshold(threshold, "heuristic")),
             ClustererStage(Clusterer(threshold=0.0)),
         ]
         return cls.from_topology(ops=ops, budget_usd=budget_usd)
