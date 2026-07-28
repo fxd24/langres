@@ -21,3 +21,16 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # `github/codeql-action/init` and `.../analyze` are separate "dependencies"
+      # to Dependabot but ONE product: init writes a config file stamped with its
+      # own version and analyze refuses to read a config from a different one.
+      # Bumping half the pair therefore always fails the job outright:
+      #   ##[error]Loaded a configuration file for version '4.37.3',
+      #            but running version '4.37.0'
+      # That is exactly what killed PR #231 (init 4.37.0->4.37.3) and #233
+      # (analyze 4.37.0->4.37.3) -- two red PRs for one un-splittable bump.
+      # Grouping them means one PR moves every codeql-action step together.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"

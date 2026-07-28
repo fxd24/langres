@@ -2,11 +2,15 @@ name: CodeQL
 
 # Static security analysis (free for public repos). Python-only; findings land
 # in the repo's Security tab -> Code scanning.
+# NOTE: `pull_request.branches` filters by TARGET branch, so this list has to
+# track the one in `lint.yml`/`test.yml` -- a PR into a branch missing here gets
+# NO security scan at all, silently. Both integration branches below still exist
+# on the remote, so the drift was a live gap, not a stale entry.
 on:
   push:
-    branches: [main]
+    branches: [main, epic/193-core-algebra]
   pull_request:
-    branches: [main]
+    branches: [main, feat/core-packages, epic/193-core-algebra]
   schedule:
     # Weekly on Monday at 07:00 UTC (between the test-full and security crons)
     - cron: "0 7 * * 1"
