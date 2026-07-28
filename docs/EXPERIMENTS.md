@@ -447,6 +447,28 @@ It is **opt-in**: the default leaves the constructed threshold alone, which is t
 right no-data fallback. What it changes is that a user who *does* have labels no
 longer resolves at a constant nobody measured.
 
+**Measured, so you can decide whether to switch it on.** Across the whole
+9-benchmark portfolio × 2 $0 scorers × 3 seeds (54 cells, every number graded on
+a corpus-disjoint held-out split), `fit(derive_threshold=True)` **improves 45
+cells, ties 7 (the race declined, so nothing moved), and loses 2** — both on the
+12-record `tiny_fixture`, whose held-out corpus holds a single gold pair. On the
+8 real benchmarks the shipped outcome never loses at any seed for either scorer;
+the wins run from +0.0011 to **+0.8887** pair-F1. Those are outcomes of *derive
+then race*: the raw Youden candidate alone is 45 better / 1 tied / **8 worse**,
+and the race declined 7 times and was right all 7 — catching 6 real-benchmark
+regressions that a plain derive-and-apply would have shipped.
+Full per-benchmark table, the caveats, and what deriving does *not* fix:
+[`docs/research/20260728_threshold_default.md`](research/20260728_threshold_default.md).
+
+> **Do not trust the report's held-out numbers on a *dense* label set.** That
+> study also found that `align_pairs`' entity-disjoint split — which assigns
+> whole union-find components — holds out **zero** pairs in 26 of 27
+> (benchmark, seed) rows when the labels are a blocked-candidate dump, because a
+> k-NN candidate graph is essentially one component. Selection itself runs on
+> `train` and never reads `valid` — but `split=` is not inert either: pairs moved
+> into `valid` leave `train`, so a nonempty split derives the cut from a smaller
+> sample. Check `fit_report_.n_valid` before quoting a `held_out_f1`.
+
 **It derives, then races — it does not just apply.** A derived cut is not
 automatically a better cut. Youden's J maximizes `tpr - fpr`, which is flat
 across a wide separating gap, so on cleanly-separated data it happily returns a
@@ -993,6 +1015,10 @@ with `examples/data/flywheel/generate_fixtures.py`.
 - `examples/research/m4_experiment_loop.py` — the runnable zero-spend loop documented here.
 - `examples/research/m4_dspy_judge.py` — DSPyMatcher compile + save/load round-trip.
 - `examples/research/m4_calibration.py` — honest held-out `derive_threshold` lift on AG.
+- `examples/research/threshold_default_study.py` — should `fit(derive_threshold=True)`
+  be the *default*? The whole portfolio × 2 $0 scorers × 3 seeds, graded on a
+  corpus-disjoint split; `--render <json>` reprints every table from the tracked
+  artifact without re-measuring.
 - `examples/judgement_log_demo.py` — `JudgementLog` write-then-read round-trip.
 - `examples/flywheel_threshold_harvest.py` — harvest verdicts + corrections → a
   re-derived threshold, with before/after held-out gold F1.
