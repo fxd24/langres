@@ -77,6 +77,60 @@ class TestDefaultThresholdsMap:
             DEFAULT_THRESHOLDS["heuristic"] = 0.9  # type: ignore[index]
 
 
+class TestTheShippedConstantsArePinnedToTheirEvidence:
+    """Pin the VALUES, with literals on both sides.
+
+    Every other test here asserts ``something == DEFAULT_THRESHOLDS[family]``,
+    which is right for checking *wiring* and useless for checking *the number*:
+    both sides move together, so editing a constant leaves the suite green. That
+    is the "gate decoupled from the thing it checks" failure this repo keeps
+    hitting, so the numbers are pinned once, here, against literals.
+
+    Changing one of these is not a code change, it is a claim about measured
+    data. If this test fails, the fix is to re-run
+    ``examples/research/threshold_constant_sweep.py`` and update
+    ``docs/research/20260728_threshold_constant.md`` -- not to edit the literal.
+    """
+
+    def test_sim_cos_is_the_measured_constant(self) -> None:
+        """Measured: LOBO-selected, beat 0.5 on every eligible benchmark+seed.
+
+        Also the SAFE value across embedding checkpoints, which is why it is not
+        the higher constant e5-base-v2's own sweep prefers: carried back to the
+        pinned MiniLM blocker, that one significantly harms abt_buy.
+        """
+        assert DEFAULT_THRESHOLDS["sim_cos"] == 0.90
+
+    def test_heuristic_stayed_at_the_incumbent_on_purpose(self) -> None:
+        """Measured AND rejected: a better median, but it reliably harms abt_buy.
+
+        Not an unmeasured leftover -- the sweep found a stable constant (0.74)
+        and the pre-registered ship rule turned it down. Do not "finish the job"
+        by setting it here.
+        """
+        assert DEFAULT_THRESHOLDS["heuristic"] == 0.5
+
+    @pytest.mark.parametrize(
+        ("family", "value"),
+        [
+            ("prob_llm", 0.7),
+            ("prob_group_llm", 0.7),
+            ("calibrated_prob", 0.5),
+            ("prob_fs", 0.5),
+            ("prob_rf", 0.5),
+        ],
+    )
+    def test_the_unmeasured_families_record_the_status_quo(
+        self, family: str, value: float
+    ) -> None:
+        """NOT findings: paid-per-score LLM families, and fitted matchers.
+
+        Pinned so that a future sweep changing one is a deliberate, visible edit
+        rather than a drive-by.
+        """
+        assert DEFAULT_THRESHOLDS[family] == value  # type: ignore[index]
+
+
 class TestResolveThreshold:
     def test_none_takes_the_family_default(self) -> None:
         assert resolve_threshold(None, "prob_llm") == DEFAULT_THRESHOLDS["prob_llm"]

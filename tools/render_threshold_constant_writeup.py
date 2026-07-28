@@ -36,7 +36,14 @@ SECTIONS: dict[str, str] = {
 }
 
 #: Filled from a SECOND artifact (``--embedder``), not from ``print_tables``.
+#:
+#: BOTH directions are rendered, and that is not symmetry for its own sake. A
+#: transfer test run one way only is a cherry-pick: it asks "does *my* constant
+#: survive elsewhere?" and never "would the *other* checkpoint's constant have
+#: been safe here?". Those two questions have different answers in this study,
+#: and the second one is what disqualifies the higher constant.
 TRANSFER_MARKER = "@@TRANSFER@@"
+TRANSFER_REVERSE_MARKER = "@@TRANSFER_REVERSE@@"
 
 REPO = Path(__file__).resolve().parent.parent
 HARNESS = REPO / "examples/research/threshold_constant_sweep.py"
@@ -119,8 +126,13 @@ def main() -> None:
 
     blocks = split_sections(render(args.artifact))
     blocks[TRANSFER_MARKER] = render_transfer(args.artifact, args.variant)
+    blocks[TRANSFER_REVERSE_MARKER] = render_transfer(args.variant, args.artifact)
     text = args.body.read_text()
-    for marker, heading in {**SECTIONS, TRANSFER_MARKER: TRANSFER_MARKER}.items():
+    extra = {
+        TRANSFER_MARKER: TRANSFER_MARKER,
+        TRANSFER_REVERSE_MARKER: TRANSFER_REVERSE_MARKER,
+    }
+    for marker, heading in {**SECTIONS, **extra}.items():
         if marker not in text:
             raise RuntimeError(f"{args.body} has no {marker} to fill")
         text = text.replace(marker, blocks[heading])

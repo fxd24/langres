@@ -300,6 +300,16 @@ class Retrieve(_ResearchRecipe):
     value from :data:`~langres.core.score_type.DEFAULT_THRESHOLDS` -- the
     ``Retrieve`` op tags its cosine similarities ``"sim_cos"``, so that is the
     family whose scale the cut lives on.
+
+    **That default is a floor, not a tuning, and you are choosing the scale it
+    sits on.** ``embedder=`` is required here, and a cosine cut belongs to the
+    encoder, not to the family tag -- two models both emitting "cosine
+    similarity" disagree about what ``0.9`` means. The shipped value was picked
+    to be *safe* on every checkpoint measured rather than optimal on any one of
+    them (see ``docs/research/20260728_threshold_constant.md`` §7), so it stops
+    the out-of-the-box path being badly wrong and no more. If you have labels,
+    derive the cut instead:
+    :func:`langres.training.calibration.derive_threshold`.
     """
 
     def __init__(

@@ -152,6 +152,49 @@ constant graded on those cells.
 
 @@TRANSFER@@
 
+### The same test in the other direction
+
+Run one way only, a transfer test is a cherry-pick. "Does *my* constant survive
+elsewhere?" is the flattering question; the one that actually constrains the
+choice is "would the *other* checkpoint's constant have been safe **here**?" The
+e5 run selects its own constant by the same leave-one-out procedure, so that
+question is free to answer — and it is the one that decides what ships:
+
+@@TRANSFER_REVERSE@@
+
+### Reading both directions together
+
+The two runs agree on the finding that matters and disagree on the number, and
+both halves are load-bearing:
+
+- **They agree that `0.5` is the wrong order of magnitude for a cosine.** On
+  *both* checkpoints, on every benchmark, cutting at `0.5` leaves F1 in the low
+  hundredths. Whatever the right constant is, it is nowhere near `0.5`.
+- **They disagree about how high.** Each checkpoint's own leave-one-out
+  selection is internally rock-solid — and they land in different places. That is
+  not noise between two unstable estimates; it is two stable estimates of two
+  different scales, which is precisely what "the cosine scale belongs to the
+  encoder" predicts.
+- **The asymmetry is the verdict.** The lower constant is safe on both
+  checkpoints. The higher one is not: carried back, it lands **significantly
+  below `0.5` on `abt_buy`, on every seed, with intervals entirely below zero** —
+  the same clause-(2) failure that disqualifies `heuristic` in §8. So the higher
+  constant is not "the better number measured on the more relevant checkpoint";
+  it is a number with a demonstrated victim.
+- **What the safe constant is worth is honestly asymmetric.** On the pinned
+  checkpoint it is transformative. On the shipped default it is *safe but close
+  to inert* — several benchmarks score identically to `0.5`, because on that
+  encoder almost every candidate pair already sits above the cut. Its Δ there is
+  positive and never negative, which is what the pre-registered rule asks, but
+  the honest word for the magnitude is "small", and the table says so rather
+  than the prose.
+
+That combination — a real floor, safe everywhere, worth a great deal on one
+scale and little on another — is exactly what a *default* should be, and exactly
+why it is not a substitute for tuning. A shipped constant's job is to stop the
+out-of-the-box path being catastrophically wrong. It is not to be optimal on
+your encoder, and this table is the evidence that it cannot be.
+
 ## 8. Verdict
 
 @@VERDICT@@
@@ -175,6 +218,14 @@ per-family default exists to prevent.
 That is also why this is the family where wiring the default mattered most: the
 same `0.5` is defensible for a `heuristic` score and indefensible for a cosine,
 and a single global constant cannot be both.
+
+**What ships is the *safe* constant, not the best one.** §7 measured a second
+checkpoint and the two directions are not symmetric: the constant selected here
+is harmless on the other encoder, while that encoder's own (higher) constant
+predictably damages `abt_buy` when carried back. Where the two disagree this
+study ships the one with no demonstrated victim, which is the same standard
+clause (2) applies to `heuristic` — applied to our own preferred answer rather
+than only to the one we were ready to reject.
 
 ### Reading the `heuristic` row: it is not instability
 
@@ -223,7 +274,9 @@ good.
 - The stability of that selection under dropping one dataset.
 - Whether a `sim_cos` constant survives a change of embedding checkpoint (§7),
   measured on `intfloat/e5-base-v2` — the library's own default — under the same
-  protocol.
+  protocol, **in both directions**: this study's constant graded on that
+  checkpoint's cells, and that checkpoint's own leave-one-out constant graded
+  back on these.
 
 **Inferred, not measured** — flagged because it would be easy to read this
 document as covering it:
@@ -262,4 +315,25 @@ measuring anything:
 ```bash
 uv run --env-file .env python examples/research/threshold_constant_sweep.py \
     --render examples/research/results/threshold_constant_sweep.json
+```
+
+The §7 checkpoint variant, and the two transfer directions it feeds:
+
+```bash
+OMP_NUM_THREADS=1 uv run --env-file .env python \
+    examples/research/threshold_constant_sweep.py \
+    --methods embedding_cosine --embedder intfloat/e5-base-v2 \
+    --out examples/research/results/threshold_constant_sweep.e5.json
+
+# --compare BASELINE VARIANT: select on BASELINE, grade on VARIANT's cells.
+uv run --env-file .env python examples/research/threshold_constant_sweep.py \
+    --compare examples/research/results/threshold_constant_sweep.json \
+              examples/research/results/threshold_constant_sweep.e5.json
+```
+
+To regenerate this whole document — every table above — from the committed
+artifacts:
+
+```bash
+uv run --env-file .env python tools/render_threshold_constant_writeup.py
 ```
