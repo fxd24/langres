@@ -208,6 +208,29 @@ MODELS: tuple[ModelSpec, ...] = (
 
 MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in MODELS}
 
+
+def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
+    """Every model this document is accountable for: :data:`MODELS` plus whatever ran.
+
+    ``--models`` accepts a checkpoint outside the fixed tuple (``main()`` falls
+    back to a bare :class:`ModelSpec`), so the tuple alone is not the ladder. The
+    coverage denominator already accounted for that; the "What did not run"
+    enumeration did not, and iterated ``MODELS`` — so a failed custom checkpoint
+    produced "14 of the 15 models" above a table that could not name the
+    fifteenth, and a partially measured one escaped grid validation entirely
+    while the report was free to conclude "every model, benchmark and prompt arm
+    was measured".
+
+    One function so the denominator and the enumeration cannot disagree: they
+    were two expressions of the same set, and only one of them got fixed.
+    Derived from the ROWS, including stale and failed ones — a run that went
+    badly must not shrink the ladder it was measured against. (Cross-model
+    review.)
+    """
+    extra = sorted({row.model for row in rows} - set(MODELS_BY_NAME))
+    return [*MODELS, *(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in extra)]
+
+
 #: ``fodors_zagat`` is the never-regress floor (small, long-solved); the other
 #: four are the working set. This portfolio is a **documented prior, not a
 #: finding of this sweep** — see the report's saturation caveat.
@@ -1391,7 +1414,7 @@ def _excludes_zero(low: float | None, high: float | None) -> bool:
 
 def _render_recommendation(
     ok: Sequence[LadderRow],
-    models: Sequence[str],
+    ladder: Sequence[str],
     benchmarks: Sequence[str],
     headline_k: int,
 ) -> list[str]:
@@ -1508,7 +1531,7 @@ def _render_recommendation(
         return len(comparable_benchmarks(model))
 
     measured = sorted({row.model for row in ok})
-    candidates = [name for name in models if name != REFERENCE_MODEL and name in measured]
+    candidates = [name for name in ladder if name != REFERENCE_MODEL and name in measured]
     osi = [name for name in candidates if _is_osi(MODELS_BY_NAME.get(name) or ModelSpec(name))]
     # Three buckets, not two. Failing an ALLOW list means "not shown to be OSI",
     # which is not the same claim as "shown to be restricted" — and a ``--models``
@@ -1526,16 +1549,6 @@ def _render_recommendation(
 
     out: list[str] = []
     out.append(f"\n## Recommendation (k={headline_k}, no instruction)\n")
-    # The denominator is the LADDER plus every model that RAN, not ``len(MODELS)``
-    # and not the successes. ``--models`` accepts a name outside the fixed tuple
-    # (main() falls back to a bare ``ModelSpec``), so such a model never appears in
-    # ``MODELS`` — and a fixed denominator would print "15 of the 14 models" and
-    # point at a 'What did not run' section that only iterates ``MODELS`` and so
-    # cannot account for the difference. ``models`` and not ``measured``: measured
-    # is derived from ``ok`` rows only, so a custom model that FAILED would drop
-    # out of the denominator entirely while still being listed in the Failures
-    # table — the ladder would appear to shrink because a run went badly.
-    ladder = {spec.name for spec in MODELS} | set(models)
     out.append(
         f"\n**{len(measured)} of the {len(ladder)} models in the ladder have a row at "
         f"metric revision {METRIC_REVISION}.** Everything below is a statement about "
@@ -1877,6 +1890,11 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             name,
         ),
     )
+    # The ONE ladder set: the coverage denominator, the "what did not run" table
+    # and the grid check all read it, so they cannot disagree about which models
+    # this document is accountable for.
+    ladder_specs = _ladder_specs(rows)
+    ladder_names = [spec.name for spec in ladder_specs]
 
     out: list[str] = []
     out.append("# Embedder ladder: which embedding model at which parameter count\n")
@@ -2462,7 +2480,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
                 f"{_fmt(row.ci_clusters)} |\n"
             )
 
-    out.extend(_render_recommendation(ok, models, benchmarks, headline_k))
+    out.extend(_render_recommendation(ok, ladder_names, benchmarks, headline_k))
 
     out.append("\n## The recall/cost frontier (every k)\n")
     out.append(
@@ -2491,11 +2509,8 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     measured = {row.model for row in ok}
     stale_models = {row.model for row in stale}
     failed_models = {row.model for row in failures}
-    never = [spec for spec in MODELS if spec.name not in measured]
-    # Same denominator as the recommendation section, and computed the same way:
-    # every model that RAN, not just the ones that succeeded. Counting only
-    # `measured` here would make a custom model's failure shrink the ladder.
-    ladder_size = len({spec.name for spec in MODELS} | measured | stale_models | failed_models)
+    never = [spec for spec in ladder_specs if spec.name not in measured]
+    ladder_size = len(ladder_specs)
     if never:
         out.append(
             f"\n**{len(never)} of the {ladder_size} models in the ladder have no usable "
@@ -2521,7 +2536,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # exactly that: one missing (benchmark x arm) cell while the report declared
     # every model, benchmark and arm measured.
     gaps: list[str] = []
-    for spec in MODELS:
+    for spec in ladder_specs:
         if spec.name not in measured:
             continue
         cells = {(row.benchmark, row.prompt_arm, row.k) for row in ok if row.model == spec.name}

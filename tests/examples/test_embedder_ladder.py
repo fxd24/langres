@@ -939,7 +939,10 @@ class TestReport:
         assert "not measured against the current" in section
 
     def test_rows_from_an_older_metric_revision_are_excluded_and_named(self) -> None:
-        # Two definitions of the same metric must never share a column.
+        # Two definitions of the same metric must never share a column. The
+        # property is that no stale NUMBER reaches a measurement table -- not
+        # that the name is unmentionable: "What did not run" naming it, with the
+        # reason, is the accounting that keeps the exclusion visible.
         rows = [
             _cell("current", "none"),
             _cell(
@@ -948,8 +951,56 @@ class TestReport:
         ]
         report = LADDER.render_report(rows)
         assert "legacy" in report.split("## Models that were measured")[0]
-        assert "`legacy`" not in report.split("## Models that were measured")[1]
         assert "older metric definition" in report
+
+        body = report.split("## Models that were measured")[1]
+        tables, did_not_run = body.split("## What did not run")
+        # No stale row in any measurement table.
+        assert "`legacy`" not in tables
+        # ...and it is still accounted for, with the reason.
+        assert "| `legacy` | measured under an older metric revision" in did_not_run
+
+    def test_a_failed_custom_checkpoint_is_counted_and_then_named(self) -> None:
+        """The denominator and the enumeration must describe the same ladder.
+
+        ``--models`` accepts a checkpoint outside ``MODELS``. The coverage
+        denominator counted it while "What did not run" iterated ``MODELS``, so
+        the report said "N of the N+1 models" above a table that could not name
+        the extra one — a promise the section could not keep.
+        """
+        rows = [
+            _cell("all-MiniLM-L6-v2", "none"),
+            LADDER.LadderRow(
+                model="someone/custom-checkpoint",
+                benchmark="bench",
+                prompt_arm="-",
+                k=0,
+                status="failed",
+                metric_revision=LADDER.METRIC_REVISION,
+                error="OSError: gated repo",
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        did_not_run = report.split("## What did not run")[1]
+
+        assert "| `someone/custom-checkpoint` | **failed**" in did_not_run
+        # The two counts are the same ladder: 14 fixed + this one.
+        assert "of the 15 models in the ladder have a row" in report
+        assert "of the 15 models in the ladder have no usable row" in did_not_run
+
+    def test_a_partially_measured_custom_checkpoint_is_grid_checked(self) -> None:
+        """The grid check iterated ``MODELS`` too, so a custom model escaped it.
+
+        Without this, a custom checkpoint measured on one benchmark could leave
+        the report concluding "every model, benchmark and prompt arm was
+        measured".
+        """
+        rows = [_cell("someone/custom-checkpoint", "none")]
+        report = LADDER.render_report(rows)
+        did_not_run = report.split("## What did not run")[1]
+
+        assert "Every model, benchmark and prompt arm" not in did_not_run
+        assert "| `someone/custom-checkpoint` | benchmarks" in did_not_run
 
     def test_a_failed_model_is_a_row_in_the_report_not_a_silent_gap(self) -> None:
         rows = [
