@@ -37,12 +37,14 @@ Design decisions, each load-bearing:
   still records what ``align_pairs(split=0.3)`` *would* have held out
   (``align_split_train`` / ``align_split_valid``), so this design choice is
   justified by data in the tracked artifact rather than by a claim.
-* **The race is untouched.** ``_select_threshold`` selects on ``train`` and
-  never reads ``valid``; the ``split=`` argument only affects what ``fit``
-  *reports*. So running ``fit(..., split=None)`` on the train corpus gives the
-  race exactly the label set a user would give it, and grading on the disjoint
-  test corpus is a strictly *stronger* held-out estimate than the one ``fit``
-  would have printed.
+* **Selection never reads ``valid``.** ``_select_threshold`` scores both cuts on
+  ``train`` only. Note ``split=`` is still not inert: ``resolver.py:1276`` aligns
+  before selecting, so a nonempty ``valid`` takes those pairs *out* of ``train``
+  and the cut is derived from a smaller sample. ``split=`` changes which pairs
+  the race sees, not which side it grades on. Running ``fit(..., split=None)``
+  therefore hands the race the whole label set -- what a user with labels would
+  give it -- and grading on the disjoint test corpus is a strictly *stronger*
+  held-out estimate than the one ``fit`` would have printed.
 * **The label set is EVERY blocked candidate on the train corpus**, labeled by
   the closed-world gold partition. That is the distribution the cut operates on
   at inference, and it is the *most generous* labeling budget deriving could
@@ -525,9 +527,20 @@ def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
 
 
 def write_results(results: list[CellResult], out: Path) -> None:
-    """Persist the machine-readable findings to ``out`` (creating parents)."""
+    """Persist the machine-readable findings to ``out`` (creating parents).
+
+    Atomically: a plain ``write_text`` truncates first, so an interruption
+    part-way through leaves a half-written file where a complete one used to be.
+    That is the worst outcome available here -- it destroys the previous
+    checkpoint *and* is not obviously broken until something tries to parse it.
+    Write beside the target, then ``os.replace``, which is atomic within a
+    filesystem: readers see either the old file or the new one.
+    """
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps([r.model_dump() for r in results], indent=2, sort_keys=True) + "\n")
+    payload = json.dumps([r.model_dump() for r in results], indent=2, sort_keys=True) + "\n"
+    staging = out.with_name(out.name + ".writing")
+    staging.write_text(payload)
+    os.replace(staging, out)
 
 
 def read_results(path: Path) -> list[CellResult]:

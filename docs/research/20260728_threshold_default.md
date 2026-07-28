@@ -28,13 +28,22 @@ is the deliverable; changing a default is a separate PR.*
 **54 cells** — 9 loadable benchmarks × 2 $0 scorers × seeds 0/1/2 — every number
 graded on a corpus-disjoint held-out split.
 
-- **(a) The derived cut beats `0.5` almost everywhere.** 45 cells improve, 7 tie
-  exactly (the race declined, so the threshold did not move), **2 lose**. The two
-  losses are both `tiny_fixture` + `rapidfuzz`, whose held-out corpus is **3
-  records containing 1 gold pair** — an F1 that can only be `0.0` or `1.0`. On
-  the **8 real benchmarks the derived cut never loses at any seed for either
-  scorer**, and the wins are not marginal: +0.42 (dblp_acm/rapidfuzz), +0.66
-  (dblp_acm/cosine), +0.82 (febrl_person/cosine), +0.89 (fodors_zagat/cosine).
+- **(a) `fit(derive_threshold=True)` beats `0.5` almost everywhere.** 45 cells
+  improve, 7 tie exactly (the race declined, so the threshold did not move),
+  **2 lose**. The two losses are both `tiny_fixture` + `rapidfuzz`, whose
+  held-out corpus is **3 records containing 1 gold pair** — an F1 that can only
+  be `0.0` or `1.0`. On the **8 real benchmarks the shipped outcome never loses
+  at any seed for either scorer**, and the wins are not marginal: +0.42
+  (dblp_acm/rapidfuzz), +0.66 (dblp_acm/cosine), +0.82 (febrl_person/cosine),
+  +0.89 (fodors_zagat/cosine).
+
+  **These are outcomes of the whole `fit` seam — derive *then* race — not of the
+  derived cut alone**, and the difference is the entire point of (b). Scored on
+  its own, the raw Youden candidate is better in 45 cells, tied in 1, and
+  **worse in 8** — six of them on real benchmarks (`dblp_scholar`/`rapidfuzz`
+  ×3, `wdc_computers`/`rapidfuzz` ×3). Those six appear above as ties only
+  because the race refused them. A derive-and-apply implementation would have
+  shipped all six as regressions.
 - **(b) The race earns its seat.** It declined 7 times, and in **6 of those 7 the
   derived cut really was worse held-out** (the 7th was an exact tie, which the
   tie-keeps-incumbent rule handles). It has never once declined a cut that would
@@ -92,11 +101,20 @@ k-NN candidate graph over a real corpus is essentially *one* component, so there
 is nothing to split. See §4; the harness records what that split *would* have
 held out in every cell, so this is data rather than a claim.
 
-`split=` does **not** affect the race — `_select_threshold` selects on `train`
-and never reads `valid`; the argument only changes what `fit` *reports*. So
-`split=None` gives the race exactly the label set a user would give it, and
-grading on the disjoint corpus is a *stronger* held-out estimate than the one
-`fit` would have printed.
+**Selection never reads `valid`** — `_select_threshold` scores both candidate
+cuts on `train` only. But `split=` is not therefore inert: `resolver.py:1276`
+builds `aligned` *before* selection, so a nonempty `valid` set removes those
+pairs from `train` and the cut is then derived from a smaller sample. `split=`
+changes *which pairs the race sees*, not *which side it grades on*. (An earlier
+draft of this section claimed `split=` "only changes what `fit` reports". That is
+true only in the degenerate case where `valid` comes back empty — which, per §4,
+is 26 of 27 rows here, so it happened to hold for every number in this study. It
+is not true in general, and the distinction matters for anyone reading this as
+guidance rather than as a description of this run.)
+
+Passing `split=None` therefore gives the race the *whole* label set — exactly
+what a user handing over their labels would give it — and grading on the disjoint
+corpus is a *stronger* held-out estimate than the one `fit` would have printed.
 
 ### Choices that make this the strong form of the test
 
@@ -227,10 +245,24 @@ gold pairs; a corpus with one is the smallest thing it will still report.)
 | race declined → threshold unmoved, Δ exactly 0 | **7** | dblp_scholar/rapidfuzz ×3, wdc_computers/rapidfuzz ×3, tiny_fixture/rapidfuzz seed 2 |
 | derived cut kept **and** worse held-out | **2** | tiny_fixture/rapidfuzz seeds 0–1 (1 gold pair) |
 
+Read that table as the **race's** record, not the derived cut's. The same 54
+cells scored on the raw candidate alone — what a derive-and-apply implementation
+would have shipped — are **45 better, 1 tied, 8 worse**; the 7 "unmoved" rows are
+6 losses the race caught plus that 1 tie. Both framings are in the artifact
+(`derived_f1_blocked` vs `kept_f1_blocked`); this study reports the race's
+because the race is what `fit` actually does.
+
 **Seed stability.** No benchmark×scorer flips its `kept` verdict across seeds
 except `tiny_fixture`/`rapidfuzz` (derived, derived, declined) — and that is the
-1-gold-pair fixture again. Derived cuts are stable to ~±0.005 between seeds
-(e.g. dblp_acm/rapidfuzz 0.6952 / 0.6917 / 0.6954).
+1-gold-pair fixture again. The *cut itself* is less stable than the verdict, and
+the spread depends on the scorer: across the three seeds the largest range is
+`walmart_amazon`/`rapidfuzz` at **0.0384** (0.5206 / 0.5538 / 0.5590), then
+`abt_buy`/`rapidfuzz` at 0.0205; every `embedding_cosine` cell sits at ≤0.0067,
+with `dblp_acm`/`rapidfuzz` the tightest heuristic case at 0.0037 (0.6917 /
+0.6952 / 0.6954). So "the derived cut is reproducible to ~±0.005" holds for the
+cosine family and for some string cells, but **not** as a general claim — a
+single benchmark's three seeds can disagree by ~0.04, which matters if anyone
+were to lift one derived number and hard-code it.
 
 ### 2.2 Was the race right when it declined?
 

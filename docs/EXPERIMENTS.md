@@ -449,11 +449,14 @@ longer resolves at a constant nobody measured.
 
 **Measured, so you can decide whether to switch it on.** Across the whole
 9-benchmark portfolio × 2 $0 scorers × 3 seeds (54 cells, every number graded on
-a corpus-disjoint held-out split), the derived cut **improves 45 cells, ties 7
-(the race declined, so nothing moved), and loses 2** — both on the 12-record
-`tiny_fixture`, whose held-out corpus holds a single gold pair. On the 8 real
-benchmarks it never loses at any seed for either scorer; the wins run from
-+0.0011 to **+0.8887** pair-F1. The race declined 7 times and was right all 7.
+a corpus-disjoint held-out split), `fit(derive_threshold=True)` **improves 45
+cells, ties 7 (the race declined, so nothing moved), and loses 2** — both on the
+12-record `tiny_fixture`, whose held-out corpus holds a single gold pair. On the
+8 real benchmarks the shipped outcome never loses at any seed for either scorer;
+the wins run from +0.0011 to **+0.8887** pair-F1. Those are outcomes of *derive
+then race*: the raw Youden candidate alone is 45 better / 1 tied / **8 worse**,
+and the race declined 7 times and was right all 7 — catching 6 real-benchmark
+regressions that a plain derive-and-apply would have shipped.
 Full per-benchmark table, the caveats, and what deriving does *not* fix:
 [`docs/research/20260728_threshold_default.md`](research/20260728_threshold_default.md).
 
@@ -461,9 +464,10 @@ Full per-benchmark table, the caveats, and what deriving does *not* fix:
 > study also found that `align_pairs`' entity-disjoint split — which assigns
 > whole union-find components — holds out **zero** pairs in 26 of 27
 > (benchmark, seed) rows when the labels are a blocked-candidate dump, because a
-> k-NN candidate graph is essentially one component. `split=` never affects the
-> derived cut (selection runs on `train`), only what `FitReport` reports. Check
-> `fit_report_.n_valid` before quoting a `held_out_f1`.
+> k-NN candidate graph is essentially one component. Selection itself runs on
+> `train` and never reads `valid` — but `split=` is not inert either: pairs moved
+> into `valid` leave `train`, so a nonempty split derives the cut from a smaller
+> sample. Check `fit_report_.n_valid` before quoting a `held_out_f1`.
 
 **It derives, then races — it does not just apply.** A derived cut is not
 automatically a better cut. Youden's J maximizes `tpr - fpr`, which is flat
