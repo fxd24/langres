@@ -1200,6 +1200,67 @@ def _assert_prompt_is_live(base: Any, prompts: Sequence[str | None]) -> None:
             )
 
 
+def _substitute_backbone(spec: ModelSpec, base: Any, st_model: Any, backbone: Any) -> None:
+    """Put the correctly loaded weights where sentence-transformers will actually call them.
+
+    **Assigning to ``transformer.auto_model`` does not work, and fails silently.**
+    In sentence-transformers 5.6.0 ``auto_model`` is a *property* over a
+    registered child module named ``model``. ``nn.Module.__setattr__`` therefore
+    does not replace that child: it registers a SECOND one under the name
+    ``auto_model``, which nothing calls. Measured — the first version of this
+    function did exactly that, and:
+
+    - the encoded vectors were **bit-identical** before and after the
+      substitution (``max|after - before| == 0``), i.e. the random weights were
+      still the ones running;
+    - the model's parameter count **doubled**, to 708,967,936 for a 354,483,968
+      checkpoint, because both backbones were registered;
+    - and the resulting rows looked *fine*: the randomly initialised network
+      scored ``0.9911`` candidate recall on ``fodors_zagat``. A random 350M
+      transformer is a random feature map, and on a saturated near-duplicate
+      benchmark that is enough. Nothing about the row said "this is noise".
+
+    So the substitution is done by locating the registered CHILD that is the
+    current backbone and replacing that, and it is then verified by encoding —
+    a guard that cannot observe the failure it exists to catch is not a guard.
+    """
+    transformer = st_model[0]
+    before = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+
+    current = transformer.auto_model
+    child_name = next(
+        (name for name, module in transformer.named_children() if module is current), None
+    )
+    if child_name is None:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: cannot find the registered child module holding the backbone, so "
+            f"there is nowhere to put the correctly loaded weights."
+        )
+
+    backbone.to(st_model.device)
+    backbone.eval()
+    setattr(transformer, child_name, backbone)
+
+    if transformer.auto_model is not backbone:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: assigning the backbone to {child_name!r} did not take effect."
+        )
+    after = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+    if after.shape == before.shape and float(np.abs(after - before).max()) == 0.0:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: substituting the backbone changed the encoded vector by exactly 0, "
+            f"so the replaced module is not the one being called. The randomly initialised "
+            f"weights would still be the ones measured."
+        )
+    logger.info(
+        "%s: substituted the correctly loaded backbone from %s into child %r "
+        "(AutoModel randomises every weight for this checkpoint)",
+        spec.name,
+        spec.backbone_auto_class,
+        child_name,
+    )
+
+
 def _build_embedder(
     spec: ModelSpec,
     cache_dir: Path,
@@ -1232,16 +1293,7 @@ def _build_embedder(
     backbone = _preflight_backbone(spec)
     st_model = base._get_model()
     if backbone is not None:
-        transformer = st_model[0]
-        backbone.to(st_model.device)
-        backbone.eval()
-        transformer.auto_model = backbone
-        logger.info(
-            "%s: substituted the correctly loaded backbone from %s "
-            "(AutoModel randomises every weight for this checkpoint)",
-            spec.name,
-            spec.backbone_auto_class,
-        )
+        _substitute_backbone(spec, base, st_model, backbone)
     _assert_declared_architecture(spec, st_model[0].auto_model)
     _assert_prompt_is_live(base, prompts)
     # The cache namespace carries the dtype: half-precision vectors are DIFFERENT

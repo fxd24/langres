@@ -1911,6 +1911,99 @@ class TestPreflightBackbone:
         assert LADDER._preflight_backbone(LADDER.ModelSpec("intfloat/e5-base-v2")) is None
 
 
+class _PropertyBackedTransformer:
+    """A sentence-transformers ``Transformer`` as it actually is in 5.6.0.
+
+    ``auto_model`` is a PROPERTY over a registered child named ``model``, so
+    ``transformer.auto_model = x`` does not replace the child that runs.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self.model = model
+
+    @property
+    def auto_model(self) -> Any:
+        return self.model
+
+    def named_children(self) -> Any:
+        return iter([("model", self.model)])
+
+
+class _FakeBackbone:
+    def __init__(self, signature: float) -> None:
+        self.signature = signature
+
+    def to(self, device: Any) -> "_FakeBackbone":
+        return self
+
+    def eval(self) -> "_FakeBackbone":
+        return self
+
+
+class _SwapAwareEmbedder:
+    """Encodes whatever backbone the transformer currently holds."""
+
+    def __init__(self, transformer: Any) -> None:
+        self._transformer = transformer
+
+    def encode(self, texts: Any, prompt: str | None = None) -> np.ndarray:
+        return np.array([[self._transformer.auto_model.signature]] * len(texts))
+
+
+class _FakeSTModel:
+    """A ``SentenceTransformer`` stand-in: indexable, with a device."""
+
+    def __init__(self, transformer: Any) -> None:
+        self._transformer = transformer
+        self.device = "cpu"
+
+    def __getitem__(self, index: int) -> Any:
+        return self._transformer
+
+
+class TestSubstituteBackbone:
+    """The fix for a silent failure was itself silently ineffective. Measured."""
+
+    def test_the_registered_child_is_replaced_not_the_property(self) -> None:
+        transformer = _PropertyBackedTransformer(_FakeBackbone(1.0))
+        base = _SwapAwareEmbedder(transformer)
+        backbone = _FakeBackbone(2.0)
+
+        LADDER._substitute_backbone(
+            LADDER.ModelSpec("x"), base, _FakeSTModel(transformer), backbone
+        )
+
+        # Assigning to `auto_model` would have left `model` in place; this asserts
+        # the CHILD moved, which is the thing the forward pass calls.
+        assert transformer.model is backbone
+        assert transformer.auto_model is backbone
+
+    def test_a_substitution_that_changes_no_vector_is_refused(self) -> None:
+        """The exact failure that shipped: bit-identical vectors after the swap."""
+        transformer = _PropertyBackedTransformer(_FakeBackbone(1.0))
+        base = _SwapAwareEmbedder(transformer)
+        # Same signature => encoding is unchanged => the swap did nothing that runs.
+        backbone = _FakeBackbone(1.0)
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="exactly 0"):
+            LADDER._substitute_backbone(
+                LADDER.ModelSpec("x"), base, _FakeSTModel(transformer), backbone
+            )
+
+    def test_a_backbone_held_by_no_registered_child_is_refused(self) -> None:
+        transformer = SimpleNamespace(
+            auto_model=_FakeBackbone(1.0), named_children=lambda: iter([])
+        )
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="registered child"):
+            LADDER._substitute_backbone(
+                LADDER.ModelSpec("x"),
+                _SwapAwareEmbedder(transformer),
+                _FakeSTModel(transformer),
+                _FakeBackbone(2.0),
+            )
+
+
 class _ConstantEmbedder:
     """Returns the same vector whatever the prompt -- the shipped-bug signature."""
 
