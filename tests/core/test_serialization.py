@@ -8,10 +8,13 @@ Covers:
 
 from pathlib import Path
 
+import pytest
+
 from langres.core.serialization import (
     ARTIFACT_VERSION,
     CLASSIC_ARTIFACT_VERSION,
     ArtifactManifest,
+    ArtifactSource,
     ComponentSpec,
     OpSpec,
     SerializableState,
@@ -134,3 +137,40 @@ class TestSerializableStateProtocol:
             pass
 
         assert not isinstance(_Light(), SerializableState)
+
+
+class TestArtifactSourceProvenance:
+    """Where an artifact came from, typed -- and pinned when it came from the Hub.
+
+    `ArtifactSource` is core's transport-neutral provenance record, so it carries
+    the pin rule itself rather than delegating it to `langres.hub`. A Hub source
+    identified by a branch or tag would silently mean different weights later; only
+    an immutable 40-character commit SHA is accepted.
+    """
+
+    def test_a_local_source_needs_no_revision(self) -> None:
+        source = ArtifactSource(kind="local", location="/models/resolver")
+        assert source.resolved_revision is None
+
+    def test_location_must_be_non_empty(self) -> None:
+        with pytest.raises(ValueError, match="location must be non-empty"):
+            ArtifactSource(kind="local", location="   ")
+
+    def test_a_hub_source_pinned_to_a_commit_sha_is_accepted(self) -> None:
+        sha = "a" * 40
+        source = ArtifactSource(kind="hub", location="org/model", resolved_revision=sha)
+        assert source.resolved_revision == sha
+
+    @pytest.mark.parametrize(
+        "revision",
+        [
+            None,  # unpinned entirely
+            "main",  # a moving branch
+            "v1.0.0",  # a tag, which can be re-pointed
+            "a" * 39,  # a truncated SHA
+            "g" * 40,  # right length, not hex
+        ],
+    )
+    def test_a_hub_source_without_an_immutable_sha_is_refused(self, revision: str | None) -> None:
+        with pytest.raises(ValueError, match="immutable 40-character commit SHA"):
+            ArtifactSource(kind="hub", location="org/model", resolved_revision=revision)

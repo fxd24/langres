@@ -7,7 +7,12 @@ lives in the ``langres.metrics`` package. This shim keeps the old
 repoints callers.
 """
 
-from langres.metrics.debugging import (
+# `# pragma: no cover`, as on every other W2 shim (see core/harvest.py): a
+# re-export owns no contract. `langres.metrics.debugging` is itself inside the
+# `langres.core` contract coverage gate, so measuring this redirect would book a
+# miss against code already covered at its real home. Goes away with this file
+# in the W2 sweep.
+from langres.metrics.debugging import (  # pragma: no cover
     CandidateStats,
     ClusterStats,
     ErrorExample,
@@ -15,7 +20,7 @@ from langres.metrics.debugging import (
     ScoreStats,
 )
 
-__all__ = [
+__all__ = [  # pragma: no cover
     "CandidateStats",
     "ClusterStats",
     "ErrorExample",
