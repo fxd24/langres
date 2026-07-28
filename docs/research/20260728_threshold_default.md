@@ -75,6 +75,24 @@ grading on the disjoint corpus is a *stronger* held-out estimate than the one
 - **Seeds 0, 1, 2**, reported per cell — never averaged. An average hides the one
   cell that motivated the race.
 
+### What this does *not* cover
+
+- **`weighted_average` was not raced.** The two $0 scorers here are `rapidfuzz`
+  (a heuristic string family) and `embedding_cosine` (a cosine family) — the two
+  score families the six defaults sit on. But `FuzzyString`'s matcher is
+  literally `WeightedAverageMatcher`, i.e. the third $0 method
+  (`weighted_average`), not `rapidfuzz`. The two score the *same* fields with the
+  same weights (`methods.py` builds both off `StringComparator.from_schema`) and
+  both carry `score_type="heuristic"`, so `rapidfuzz` is a close stand-in — but
+  it is a stand-in, and the arm covering `FuzzyString`'s exact matcher is
+  missing. Re-run with `--methods weighted_average` to close it.
+- **No paid method.** `VectorLLMCascade` and `RetrieveLLM`/`RetrieveRerankLLM`
+  also default to `0.5`, on an LLM-derived score family the method registry
+  already defaults to `0.7`. Nothing here measures them; that is a paid run.
+- **Every benchmark in the registry is *linkage*.** There is no registered dedup
+  benchmark (see `20260727_portfolio_annotation.md`), so none of this speaks to
+  single-source deduplication.
+
 ---
 
 ## 2. The result
