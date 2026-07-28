@@ -95,6 +95,80 @@ grading on the disjoint corpus is a *stronger* held-out estimate than the one
 
 ---
 
-## 5. The six hard-coded `0.5`s
+## 5. The six hard-coded `0.5`s — a proposal, not a change
 
-<!-- CONSTANT -->
+### 5.1 It is not six sites, it is fourteen
+
+`grep -rn "threshold.*= 0\.5" src/langres` finds the same decision cut, spelled as
+the same literal, at **fourteen** independent places — and every one of them means
+"a pair whose score reaches this is a match":
+
+| where | sites | what it defaults |
+|---|---|---|
+| `architectures/retrieval.py` | 4 | `Retrieve`, `RetrieveRerank`, `RetrieveLLM`, `RetrieveRerankLLM` |
+| `architectures/fuzzy_string.py` | 1 | `FuzzyString` |
+| `architectures/vector_llm_cascade.py` | 1 | `VectorLLMCascade` |
+| `core/clusterer.py` | 1 | `Clusterer(threshold=0.5)` |
+| `core/matchers/rapidfuzz.py` | 1 | `RapidfuzzMatcher` |
+| `core/matchers/embedding_score.py` | 1 | `EmbeddingScoreMatcher` |
+| `core/method_registry.py` | 3 | `MethodSpec.default_threshold` field default + `"string"` + `"embedding"` |
+| `curation/labelers.py` | 2 | the fake labeler's cut, the LLM teacher's cut |
+| `report/eval_report.py` | 2 | the tearsheet's operating point |
+
+`architectures/reranker.py` is the instructive exception: `Reranker.for_schema`
+takes `threshold: float` with **no default at all**. One architecture in the same
+package already treats "we do not know your score scale" as "you must tell us".
+
+### 5.2 What the measurement says about the value
+
+The optimum is not one number, and it is not near `0.5`:
+
+<!-- DERIVED RANGE -->
+
+That is not noise between benchmarks — it is a **score-family** effect, and the
+codebase already knows it. `MethodSpec.default_threshold` exists precisely because
+"score scales differ per family, so each method carries its own sane default"
+(the E12 comment), and the four LLM specs already override to `0.7`. The six
+architectures bypass that seam entirely and re-declare `0.5` by hand — including
+`RetrieveLLM` / `RetrieveRerankLLM`, whose `ThresholdSelect` sits *after* a
+`Parse()` of an LLM response, i.e. on the very score family the registry says
+should default to `0.7`.
+
+### 5.3 The proposal
+
+**Yes, name it — but name it for what it is, and do not stop there.**
+
+1. **One constant, one meaning.** Add a stdlib-only leaf constant beside
+   `predicted_match` (`core/models.py` — the one place that answers "is this pair
+   a match"), e.g.:
+
+   ```python
+   #: The no-information match cut: the midpoint of a [0, 1] score, used when
+   #: nothing has been measured. NOT a calibrated value — see
+   #: docs/research/20260728_threshold_default.md, where the measured optimum is
+   #: 0.62–0.70 for rapidfuzz and 0.83–0.96 for cosine on every benchmark tested.
+   #: Derive yours: fit(pairs=..., derive_threshold=True).
+   DEFAULT_MATCH_THRESHOLD = 0.5
+   ```
+
+   Then have the six architectures, `Clusterer`, the two ranker matchers and
+   `MethodSpec.default_threshold` reference it. The win is not DRY — it is that
+   the caveat gets stated **once, where the value lives**, instead of fourteen
+   times or (as today) nowhere.
+
+2. **Do not sweep in what is not a match cut by the same authority.** The
+   `report/eval_report.py` pair is a *display* operating point and the
+   `curation/labelers.py` pair belongs to the labeling loop; they are the same
+   concept but a different owner, and collapsing them into one import would tie
+   the report and curation packages to a core constant for no benefit. Leave
+   them, with a comment pointing at the constant.
+
+3. **The constant is the floor, not the fix.** The data says the real defect is
+   that *one* number serves two score families. The seam for per-family defaults
+   already exists (`MethodSpec.default_threshold`); the architectures just do not
+   use it. Routing them through it — so a cosine-scored `Retrieve` and a
+   heuristic-scored `FuzzyString` do not start from the same cut — is a bigger,
+   better change than the constant, and belongs in its own PR with its own
+   measurement.
+
+All three are proposals. This PR changes no default and no behavior.
