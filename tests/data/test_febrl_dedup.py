@@ -270,3 +270,37 @@ def test_dedupe_is_evaluable_end_to_end_with_cluster_metrics() -> None:
     # score: on multi-record clusters they diverge (that is the dedup signal).
     assert result.pair is not None
     assert 0.0 <= result.pair.f1 <= 1.0
+
+
+@pytest.mark.slow
+def test_the_dedupe_front_door_itself_scores_on_this_benchmark() -> None:
+    """``ERModel.dedupe`` — the literal verb — not just the harness's ``resolve``.
+
+    ``run_methods`` above goes through ``resolver.resolve``. This closes the gap
+    to the documented front door: ``dedupe()`` on the benchmark's own held-out
+    split, scored with BCubed against the gold partition. It is the claim the
+    benchmark exists to support, so it is asserted rather than assumed.
+    """
+    from langres.core.resolver import Resolver
+    from langres.data.benchmark import complete_partition
+    from langres.metrics.metrics import calculate_bcubed_metrics
+
+    benchmark = FebrlDedupBenchmark()
+    corpus, gold_clusters, _pairs = benchmark.load()
+    _train, test, _train_clusters, test_clusters = benchmark.split(corpus, gold_clusters, seed=0)
+
+    model = Resolver.from_schema(FebrlDedupSchema, matcher="string", threshold=0.6)
+    model.blocker = build_dedup_blocker(benchmark.blocking_k)
+    result = model.dedupe([record.model_dump() for record in test])
+
+    # A DedupeResult is a list[set[str]] that also reports what produced it.
+    assert result.backbone is None, "the $0 string path must report no weighted backbone"
+    assert result.threshold == 0.6
+
+    predicted = complete_partition(list(result), [record.id for record in test])
+    scores = calculate_bcubed_metrics(predicted, test_clusters)
+    floor = calculate_bcubed_metrics([{r.id} for r in test], test_clusters)
+    assert scores["f1"] > floor["f1"] + 0.3, (
+        f"dedupe() BCubed F1 {scores['f1']:.4f} must clear the all-singletons "
+        f"floor {floor['f1']:.4f} by a wide margin"
+    )
