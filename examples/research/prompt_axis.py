@@ -68,12 +68,16 @@ K_VALUES: tuple[int, ...] = (5, 10, 20, 50)
 HEADLINE_K = 20
 SEED = 0
 
+#: The four benchmarks the committed study measured. `walmart_amazon` was in this
+#: default but was never run, so the documented command did not reproduce the
+#: committed artifact -- it silently added a fifth, unmeasured benchmark and
+#: rewrote the report. A default sweep must reproduce the study it ships with.
+#: (Found by automated review on PR #252.)
 BENCHMARKS: tuple[str, ...] = (
     "fodors_zagat",
     "abt_buy",
     "amazon_google",
     "wdc_computers",
-    "walmart_amazon",
 )
 
 # --------------------------------------------------------------------------
@@ -112,7 +116,7 @@ PROMPT_SOURCES: dict[str, str] = {
     ),
     "Qwen/Qwen3-Embedding-0.6B": (
         "config_sentence_transformers.json (snapshot "
-        "c54f2e6e80b2d7b7de06f51cec4959f6b3e03418): prompts = {'query': 'Instruct: "
+        "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3): prompts = {'query': 'Instruct: "
         "Given a web search query, retrieve relevant passages that answer the "
         "query\\nQuery:', 'document': ''} -- the document prompt is literally empty. "
         "Model card L129 gives the template f'Instruct: {task_description}\\nQuery:"
@@ -123,7 +127,7 @@ PROMPT_SOURCES: dict[str, str] = {
     ),
     "sentence-transformers/all-MiniLM-L6-v2": (
         "config_sentence_transformers.json (snapshot "
-        "c9745ed1d9f207416be6d2e6f8de32d1f16199bf) registers no usable prompts. "
+        "1110a243fdf4706b3f48f1d95db1a4f5529b4d41) registers no usable prompts. "
         "Not instruction-trained -- included as the CONTROL: whatever a generic "
         "instruction does here is what it does to a model that was never taught to "
         "read one."
@@ -191,6 +195,10 @@ class ModelSpec:
     name: str
     license: str
     osi_approved: bool
+    #: The immutable commit these numbers were measured on. Enforced at load time
+    #: by `_resolve_checkpoint_revision`, and folded into the cache namespace so a
+    #: partition can never outlive the weights that wrote it.
+    revision: str
     extra_arms: tuple[Recipe, ...] = ()
     dtype: str | None = None
     batch_size: int = 64
@@ -204,12 +212,14 @@ class ModelSpec:
 MODELS: tuple[ModelSpec, ...] = (
     ModelSpec(
         name="sentence-transformers/all-MiniLM-L6-v2",
+        revision="1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
         license="apache-2.0",
         osi_approved=True,
         note="Control: not instruction-trained, ships no prompts.",
     ),
     ModelSpec(
         name="BAAI/bge-base-en-v1.5",
+        revision="a5beb1e3e68b9ab74eb54cfd186867f64f240e1a",
         license="mit",
         osi_approved=True,
         extra_arms=(
@@ -233,6 +243,7 @@ MODELS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         name="intfloat/e5-base-v2",
+        revision="f52bf8ec8c7124536f0efb74aca902b2995e5bcd",
         license="mit",
         osi_approved=True,
         extra_arms=(
@@ -256,6 +267,7 @@ MODELS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         name="google/embeddinggemma-300m",
+        revision="57c266a740f537b4dc058e1b0cda161fd15afa75",
         license="gemma (NOT OSI-approved; use-restricted)",
         osi_approved=False,
         extra_arms=(
@@ -294,6 +306,7 @@ MODELS: tuple[ModelSpec, ...] = (
     ),
     ModelSpec(
         name="Qwen/Qwen3-Embedding-0.6B",
+        revision="97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
         license="apache-2.0",
         osi_approved=True,
         dtype="float16",
@@ -572,6 +585,7 @@ def _build_embedder(
 
     from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
 
+    revision = _resolve_checkpoint_revision(spec)
     kwargs: dict[str, Any] = {}
     if document_prompt:
         kwargs = {"prompts": {"document": document_prompt}, "prompt_name": "document"}
@@ -583,10 +597,49 @@ def _build_embedder(
         **kwargs,
     )
     digest = hashlib.blake2b((document_prompt or "").encode(), digest_size=8).hexdigest()
-    namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}__doc{digest}"
+    # The revision belongs in the namespace, not just in a log line: it is what
+    # makes the partition key IMMUTABLE. Keyed only on the mutable repo name, a
+    # cache that outlived a checkpoint update kept hitting, and no prompt-reach
+    # guard could see it -- those guards compare arms against each other, so
+    # uniformly stale vectors look perfectly consistent. (Found by automated
+    # review on PR #252.)
+    namespace = (
+        f"{spec.name.replace('/', '__')}__{revision[:12]}__{spec.dtype or 'default'}__doc{digest}"
+    )
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
     _assert_cache_matches_checkpoint(base, cached, texts)
     return cached
+
+
+def _resolve_checkpoint_revision(spec: ModelSpec) -> str:
+    """The commit the repo name actually resolves to, refused if it is not the pinned one.
+
+    The harness loads every model by its *mutable* repo name, so "which weights
+    ran" was not pinned by anything: a cold re-run after an upstream update would
+    silently measure different weights under the same ``model`` value, and
+    ``--resume`` would merge the two into one table.
+
+    That is not hypothetical here. Two ``Qwen3-Embedding-0.6B`` snapshots and
+    three ``all-MiniLM-L6-v2`` snapshots are present in this machine's HF cache,
+    and for both models ``refs/main`` resolves to a *different* commit than the
+    one this study originally cited. (Both Qwen3 snapshots ship byte-identical
+    ``config_sentence_transformers.json`` prompts and the resolved MiniLM
+    revision still registers no prompts, so the measurements and the documented
+    formats stand -- but nothing in the harness had established that.)
+
+    (Found by automated review on PR #252.)
+    """
+    from huggingface_hub import snapshot_download
+
+    resolved = Path(snapshot_download(spec.name, local_files_only=True)).name
+    if resolved != spec.revision:
+        raise RuntimeError(
+            f"{spec.name} resolves to revision {resolved}, but this study is pinned to "
+            f"{spec.revision}. The published numbers describe the pinned weights. Either "
+            f"fetch the pinned revision or update ModelSpec.revision AND re-run the sweep "
+            f"-- do not publish a table whose rows were produced by weights it does not name."
+        )
+    return resolved
 
 
 def _assert_cache_matches_checkpoint(base: Any, cached: Any, texts: Sequence[str]) -> None:
@@ -778,7 +831,15 @@ def evaluate_model_on_benchmark(
             yield arm_rows
 
         # Drop this document prompt's checkpoint before loading the next one.
-        del embedder, index, doc_vectors
+        # `blocker` MUST be in this list: it is bound in the innermost loop and
+        # leaks out of it (Python loop variables outlive the loop), and it holds
+        # `index` -> the cached embedder -> the loaded model. Deleting only the
+        # three names below left the checkpoint reachable through `blocker`, so
+        # the next group loaded a second model before this one was collected --
+        # the exact OOM the grouping exists to prevent. A fix that does not
+        # release the last reference is not a fix. (Found by automated review on
+        # PR #252, on the first round's own fix.)
+        del embedder, index, doc_vectors, blocker
 
 
 # --------------------------------------------------------------------------
@@ -797,6 +858,11 @@ def merge_rows(existing: Iterable[Row], fresh: Iterable[Row]) -> list[Row]:
     merged = {(row.model, row.benchmark, row.arm, row.k): row for row in existing}
     merged.update({(row.model, row.benchmark, row.arm, row.k): row for row in fresh})
     return sorted(merged.values(), key=lambda r: (r.model, r.benchmark, r.arm, r.k))
+
+
+def _drop_cell(rows: Iterable[Row], spec: ModelSpec, benchmark: str) -> list[Row]:
+    """Every row except this (model, benchmark) cell's, which is about to be recomputed."""
+    return [r for r in rows if not (r.model == spec.name and r.benchmark == benchmark)]
 
 
 def write_rows(rows: Sequence[Row], path: Path) -> None:
@@ -980,6 +1046,14 @@ def main() -> int:
             ):
                 logger.info("skipping %s | %s -- already complete", spec.name, benchmark)
                 continue
+            # Drop this cell's previous rows BEFORE the first arm lands. Merging
+            # fresh arms into stale ones leaves a mixed cell if the run dies
+            # part-way, and `--resume` then sees every (arm, k) key present and
+            # skips it -- publishing a table whose arms came from two different
+            # runs while reporting the cell complete. Clearing first makes a
+            # partial cell *look* partial, which is what `--resume` needs to see.
+            # (Found by automated review on PR #252.)
+            write_rows(_drop_cell(read_rows(args.rows), spec, benchmark), args.rows)
             for arm_rows in evaluate_model_on_benchmark(
                 spec,
                 benchmark,

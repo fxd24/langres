@@ -48,10 +48,12 @@ intervals are paired bootstraps resampled **by gold cluster**.
    Take the checkpoint's
    retrieval prompt; do not author a better one. (§4.2 has the three tiers.)
 4. **The effect is strongly model-specific**, which is why nothing here is
-   averaged. On `wdc_computers`, the *identical* `er_in_official_template` arm is
-   **−0.1589** for EmbeddingGemma and **+0.0388** for Qwen3 — a spread of
-   **0.1977** across two models on one benchmark with one prompt. A
-   non-instruction-trained control gained nothing anywhere.
+   averaged. The clean demonstration is `er_symmetric`, the one arm that really
+   is **one identical string on both sides for every model**
+   (`ER_INSTRUCTION`): on `wdc_computers` it runs from **−0.1038** (e5) to
+   **+0.0004** (EmbeddingGemma) — a spread of **0.1041** from a single prompt
+   held fixed across five checkpoints. A non-instruction-trained control gained
+   nothing anywhere.
 
 **The operating rule: drive the sides the checkpoint was trained on.** *Not*
 "always drive both halves" — that sounds sensible and is wrong. For bge and Qwen3
@@ -74,8 +76,19 @@ another silently measures the wrong thing.
 | `intfloat/e5-base-v2` | `query: ` | `passage: ` | model card `README.md` (snapshot `f52bf8ec…`) L2631: *"Each input text should start with `query: ` or `passage: `"*; FAQ 1 L2687: *"Yes, this is how the model is trained, otherwise you will see a performance degradation."* L2690: `query: `/`passage: ` for **asymmetric** tasks; L2692: `query: ` **on both sides** for **symmetric** tasks. Ships **no** `config_sentence_transformers.json`, so the card is the only source. |
 | `BAAI/bge-base-en-v1.5` | `Represent this sentence for searching relevant passages: ` | **none, explicitly** | model card `README.md` (snapshot `a5beb1e3…`) Model List L2679 gives the string verbatim; note [1] L2692: *"In all cases, **no instruction** needs to be added to passages."* L2738-2740 adds that v1.5 was tuned to work **without** it, and L2744: *"The best method to decide whether to add instructions for queries is choosing the setting that achieves better performance on your task."* Its `config_sentence_transformers.json` registers **no prompts at all**. |
 | `google/embeddinggemma-300m` | `task: {task description} \| query: ` (default `search result`) | `title: {title \| "none"} \| text: ` | `config_sentence_transformers.json` (snapshot `57c266a7…`) `prompts` map, cross-checked against the card's §Prompt Instructions L344 and task table L366-416. Also registers symmetric templates: `STS`/`PairClassification` → `task: sentence similarity \| query: `, `Clustering` → `task: clustering \| query: `. |
-| `Qwen/Qwen3-Embedding-0.6B` | `Instruct: {task description}\nQuery:` | `""` — **literally the empty string** | `config_sentence_transformers.json` (snapshot `c54f2e6e…`): `{"query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:", "document": ""}`. Card L129 gives the template, L138 *"No need to add instruction for retrieval documents"*, L54 *"using instructions typically yields an improvement of 1% to 5% … we recommend that developers create tailored instructions specific to their tasks."* |
-| `sentence-transformers/all-MiniLM-L6-v2` | — | — | `config_sentence_transformers.json` (snapshot `c9745ed1…`) registers no usable prompts. **Control**: not instruction-trained. |
+| `Qwen/Qwen3-Embedding-0.6B` | `Instruct: {task description}\nQuery:` | `""` — **literally the empty string** | `config_sentence_transformers.json` (snapshot `97b0c614…`): `{"query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:", "document": ""}`. Card L129 gives the template, L138 *"No need to add instruction for retrieval documents"*, L54 *"using instructions typically yields an improvement of 1% to 5% … we recommend that developers create tailored instructions specific to their tasks."* |
+| `sentence-transformers/all-MiniLM-L6-v2` | — | — | `config_sentence_transformers.json` (snapshot `1110a243…`) registers no usable prompts. **Control**: not instruction-trained. |
+
+> **The two hashes above were corrected after review.** Earlier drafts cited
+> `c54f2e6e…` for Qwen3 and `c9745ed1…` for MiniLM. Both repos have several
+> snapshots in this machine's HF cache, and `refs/main` — what an unpinned
+> `SentenceTransformer("org/name")` actually loads — resolves to
+> `97b0c614…` and `1110a243…` respectively. The substance survives the
+> correction, which was checked rather than assumed: the two Qwen3 snapshots
+> ship **byte-identical** `config_sentence_transformers.json` prompts, and the
+> resolved MiniLM revision still registers no prompts. The harness now **pins**
+> each revision and refuses to run against a different one, so a citation and
+> the weights that produced the numbers cannot drift apart again.
 
 Note how much they disagree. bge and Qwen3 prescribe a **query-only** recipe —
 for them, an unprefixed document side *is* the documented recipe, not a
@@ -102,6 +115,21 @@ into), and for the two models with a real instruction *slot*
 (`er_in_official_template`), the ER task description dropped into the
 checkpoint's own template shape — exactly what Qwen3's card tells developers to
 do.
+
+> **`er_symmetric` is the only cross-model-identical arm; read comparisons
+> accordingly.** It sends one byte-identical string down both sides for all five
+> checkpoints, so a difference between models under it is attributable to the
+> model. `er_in_official_template` is deliberately **not** one prompt — it is
+> each checkpoint's *own* template with our task text substituted, so Gemma
+> drives `task: entity resolution | query: ` on **both** sides while Qwen3
+> drives `Instruct: …\nQuery:` on the **query side only**, documents bare. That
+> is the right way to run the arm (each model gets its own documented recipe
+> shape) but it means a Gemma-vs-Qwen3 gap under that label confounds model,
+> wording and side placement, and cannot on its own establish a model effect.
+> An earlier draft of this document called those two arms "identical" and quoted
+> their gap as the model-specificity evidence; that claim has been withdrawn and
+> replaced with the `er_symmetric` spread above. (Caught by automated review on
+> PR #252.)
 
 ---
 
