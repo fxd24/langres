@@ -1,0 +1,498 @@
+"""Reproduce *published* embedding-blocking numbers with langres's own components.
+
+langres has never reproduced anyone else's result. This script does exactly one
+thing: it re-runs the candidate-set protocol that DeepBlocker (PVLDB 2021) and
+UniBlocker (arXiv:2404.14831) describe, on langres's shipped benchmark corpora,
+through langres's own :class:`SentenceTransformerEmbedder` and
+:class:`FAISSIndex`, and writes the measured numbers next to the published ones.
+
+**The deliverable is confidence, not a good-looking number.** A gap that is
+explained is a success; a match obtained by tuning is a failure. Nothing here is
+tuned: the serialization is langres's shipped ``concat_comparable_fields``, the
+models are named on the command line, and no threshold or ``k`` is fitted.
+
+The published protocol (verified against the papers' own arithmetic -- see
+``docs/research/20260728_external_reproduction_reference.json``)::
+
+    C = union over a in A of topK(a -> B)      so |C| = K * |A|
+    PC = |C & G| / |G|                          (pair completeness, aka recall)
+    PQ = |C & G| / |C|                          (pair quality, aka precision)
+    mAP = sum_k (PC_k - PC_{k-1}) * PQ_k
+
+Two things about this differ from ``langres.optimize.score_blocking`` and are
+the whole reason this script exists rather than a call to that function:
+
+1. **Direction.** ``score_blocking`` builds a symmetric kNN over the pooled
+   corpus and then drops same-source pairs. The papers index table B and query
+   with table A only. Those are different candidate sets at the same ``k``.
+2. **Gold set.** ``score_blocking`` scores against the *transitive closure* of
+   the gold clusters (``Benchmark.load()``'s third return), which on a
+   many-to-many benchmark is much larger than the raw positive list -- 13,763 vs
+   5,347 pairs on ``dblp_scholar``. The papers score against the raw positive
+   list. This script uses the raw list and reports both counts.
+
+Run::
+
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python \\
+        examples/research/external_reproduction.py
+
+    # one benchmark / one model
+    ... external_reproduction.py --benchmarks abt_buy --models all-mpnet-base-v2
+
+    # re-render the markdown from existing rows, measuring nothing
+    ... external_reproduction.py --render-only
+
+$0: no paid API and no key. Not offline -- the first run of a checkpoint
+downloads it from the Hugging Face Hub.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RESEARCH_DIR = REPO_ROOT / "docs" / "research"
+REFERENCE_PATH = RESEARCH_DIR / "20260728_external_reproduction_reference.json"
+ROWS_PATH = RESEARCH_DIR / "20260728_external_reproduction_rows.jsonl"
+REPORT_PATH = RESEARCH_DIR / "20260728_external_reproduction.md"
+CACHE_DIR = REPO_ROOT / "tmp" / "external_reproduction_cache"
+
+#: Largest ``k`` we retrieve. 150 because DeepBlocker's Table 6 uses K=150 on
+#: DBLP-Google; UniBlocker caps its own budget at 100 and we report both.
+K_MAX = 150
+#: UniBlocker's comparison budget (Section 4.2).
+UNIBLOCKER_K_CAP = 100
+#: UniBlocker's pair-completeness threshold (Section 4.2).
+PC_THRESHOLD = 0.90
+
+#: Metric revision. Bump when the measurement changes meaning; every row records
+#: its own value so a stale row can never be silently mixed into a fresh table.
+METRIC_REVISION = 1
+
+
+@dataclass(frozen=True)
+class BenchSpec:
+    """How to load one benchmark and which side is the papers' table A.
+
+    ``a_source`` is the value of ``record.source`` for the query table. Getting
+    this backwards silently changes |C| and the whole comparison, so
+    ``expect_a``/``expect_b`` are asserted at load time rather than trusted.
+    """
+
+    module: str
+    loader: str
+    a_source: str
+    expect_a: int
+    expect_b: int
+
+
+BENCHMARKS: dict[str, BenchSpec] = {
+    # A-side is the table the papers query with; sizes are asserted on load.
+    "fodors_zagat": BenchSpec("langres.data.er_benchmarks", "load_fodors_zagat", "fodors", 533, 331),
+    "abt_buy": BenchSpec("langres.data.abt_buy", "load_abt_buy", "abt", 1081, 1092),
+    "amazon_google": BenchSpec(
+        "langres.data.amazon_google", "load_amazon_google", "amazon", 1363, 3226
+    ),
+    "dblp_acm": BenchSpec("langres.data.dblp_acm", "load_dblp_acm", "a", 2616, 2294),
+    "dblp_scholar": BenchSpec("langres.data.dblp_scholar", "load_dblp_scholar", "a", 2616, 64263),
+    "walmart_amazon": BenchSpec(
+        "langres.data.walmart_amazon", "load_walmart_amazon", "a", 2554, 22074
+    ),
+    "wdc_computers": BenchSpec("langres.data.wdc_computers", "load_wdc_computers", "a", 2204, 2443),
+    "febrl_person": BenchSpec("langres.data.febrl_person", "load_febrl_person", "a", 500, 500),
+}
+
+#: Default models. ``all-mpnet-base-v2`` is the checkpoint UniBlocker's
+#: "STransformer" baseline is built on (see the reference file's
+#: ``stransformer_identity``, which flags that identity as an inference).
+#: ``all-MiniLM-L6-v2`` is langres's own default embedder, so it answers the
+#: separate question "does what langres ships out of the box reach that bar".
+DEFAULT_MODELS = ("sentence-transformers/all-mpnet-base-v2", "all-MiniLM-L6-v2")
+
+
+def _load(spec: BenchSpec) -> tuple[list[Any], list[Any], set[frozenset[str]], list[set[str]]]:
+    """Load one benchmark, split into (A, B) and return the RAW gold pairs.
+
+    Returns ``(records_a, records_b, raw_gold_pairs, gold_clusters)``.
+
+    ``raw_gold_pairs`` is the pooled ``label == 1`` list, i.e. the papers' ``G``.
+    It is deliberately NOT the transitive closure that ``Benchmark.load()``
+    returns -- see the module docstring.
+    """
+    import importlib
+
+    module = importlib.import_module(spec.module)
+    loaded = getattr(module, spec.loader)()
+
+    if len(loaded) == 3:
+        corpus, clusters, raw_gold = loaded
+    else:
+        # Fodors-Zagat's loader returns (corpus, clusters) only: its ground truth
+        # is the perfectMapping file, which is already exactly the 2-element
+        # clusters, so raw == closure and we can derive it.
+        corpus, clusters = loaded
+        raw_gold = {frozenset(c) for c in clusters if len(c) == 2}
+
+    records_a = [r for r in corpus if str(getattr(r, "source")) == spec.a_source]
+    records_b = [r for r in corpus if str(getattr(r, "source")) != spec.a_source]
+
+    if len(records_a) != spec.expect_a or len(records_b) != spec.expect_b:
+        raise AssertionError(
+            f"table sizes moved: got A={len(records_a)} B={len(records_b)}, "
+            f"expected A={spec.expect_a} B={spec.expect_b}. The A/B assignment or "
+            f"the shipped data changed; every |C| = k*|A| comparison below would "
+            f"be measuring something other than the published protocol."
+        )
+    return records_a, records_b, raw_gold, clusters
+
+
+def _closure_size(clusters: Sequence[set[str]]) -> int:
+    """Number of pairs in the transitive closure of the gold clusters."""
+    return sum(len(c) * (len(c) - 1) // 2 for c in clusters if len(c) >= 2)
+
+
+def _build_embedder(model_name: str, cache_dir: Path) -> Any:
+    """langres's own sentence-transformer embedder behind a disk cache.
+
+    The cache namespace is prefixed so it can never collide with the embedder
+    ladder's namespaces, whose canary-pinning protocol this script does not
+    implement. A fresh namespace under ``tmp/`` is written by this run only.
+    """
+    from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
+
+    base = SentenceTransformerEmbedder(model_name, normalize_embeddings=True)
+    namespace = "extrepro__" + model_name.replace("/", "__")
+    return DiskCachedEmbedder(embedder=base, cache_dir=cache_dir, namespace=namespace)
+
+
+def measure(
+    benchmark: str,
+    model_name: str,
+    *,
+    cache_dir: Path,
+    k_max: int = K_MAX,
+) -> dict[str, Any]:
+    """Run the published protocol for one (benchmark, model) cell.
+
+    Returns a JSON-serializable row. ``pc``/``pq`` are 1-indexed conceptually but
+    stored 0-indexed: ``pc[0]`` is PC at k=1.
+    """
+    from langres.core.blockers.vector import concat_comparable_fields
+    from langres.core.comparators import StringComparator
+    from langres.core.indexes.vector_index import FAISSIndex
+
+    spec = BENCHMARKS[benchmark]
+    records_a, records_b, raw_gold, clusters = _load(spec)
+
+    texts_a = [concat_comparable_fields(r) for r in records_a]
+    texts_b = [concat_comparable_fields(r) for r in records_b]
+
+    started = time.perf_counter()
+    embedder = _build_embedder(model_name, cache_dir)
+    index = FAISSIndex(embedder=embedder, metric="cosine")
+    index.create_index(texts_b)
+    build_seconds = time.perf_counter() - started
+
+    search_started = time.perf_counter()
+    k_eff = min(k_max, len(records_b))
+    _distances, neighbours = index.search(texts_a, k_eff)
+    search_seconds = time.perf_counter() - search_started
+
+    a_pos = {str(r.id): i for i, r in enumerate(records_a)}
+    b_pos = {str(r.id): j for j, r in enumerate(records_b)}
+
+    # rank_of[i][j] = position of B-record j in A-record i's neighbour list.
+    rank_of: list[dict[int, int]] = [
+        {int(col): rank for rank, col in enumerate(row) if col >= 0} for row in neighbours
+    ]
+
+    # A gold pair is in C_k iff its B-side is within its A-side's top-k. Gold
+    # pairs whose endpoints are not one-per-side are counted as unreachable
+    # rather than dropped: the papers' G is cross-source by construction, and
+    # silently shrinking the denominator would inflate PC.
+    ranks: list[int | None] = []
+    non_cross = 0
+    for pair in raw_gold:
+        left, right = sorted(pair)
+        i = a_pos.get(left, a_pos.get(right))
+        j = b_pos.get(right, b_pos.get(left))
+        if i is None or j is None:
+            non_cross += 1
+            ranks.append(None)
+            continue
+        ranks.append(rank_of[i].get(j))
+
+    gold_n = len(raw_gold)
+    hits = np.zeros(k_eff, dtype=np.int64)
+    for rank in ranks:
+        if rank is not None and rank < k_eff:
+            hits[rank] += 1
+    cumulative = np.cumsum(hits)
+
+    pc = (cumulative / gold_n).tolist()
+    pq = [
+        float(cumulative[k - 1]) / float(k * len(records_a)) for k in range(1, k_eff + 1)
+    ]
+
+    def _map_at(cap: int) -> float:
+        cap = min(cap, k_eff)
+        total = 0.0
+        previous = 0.0
+        for k in range(1, cap + 1):
+            total += (pc[k - 1] - previous) * pq[k - 1]
+            previous = pc[k - 1]
+        return total
+
+    def _k_at(threshold: float, cap: int) -> int | None:
+        cap = min(cap, k_eff)
+        for k in range(1, cap + 1):
+            if pc[k - 1] >= threshold:
+                return k
+        return None
+
+    k90 = _k_at(PC_THRESHOLD, UNIBLOCKER_K_CAP)
+
+    return {
+        "metric_revision": METRIC_REVISION,
+        "benchmark": benchmark,
+        "model": model_name,
+        "n_a": len(records_a),
+        "n_b": len(records_b),
+        "gold_raw": gold_n,
+        "gold_closure": _closure_size(clusters),
+        "gold_non_cross_source": non_cross,
+        "k_max": k_eff,
+        "pc": pc,
+        "pq": pq,
+        "map_at_100": _map_at(UNIBLOCKER_K_CAP),
+        "k_at_pc90": k90,
+        "pc_at_k90": pc[k90 - 1] if k90 else None,
+        "pq_at_k90": pq[k90 - 1] if k90 else None,
+        "index_build_seconds": round(build_seconds, 1),
+        "search_seconds": round(search_seconds, 1),
+        "serialization": "concat_comparable_fields",
+        "serialization_fields": [
+            s.name for s in StringComparator.from_schema(type(records_a[0])).feature_specs
+        ],
+        "serialization_sample_a": texts_a[0][:200],
+        "serialization_sample_b": texts_b[0][:200],
+    }
+
+
+# --------------------------------------------------------------------------
+# Rendering
+# --------------------------------------------------------------------------
+
+#: Maps langres benchmark names to the names the papers use.
+PAPER_NAMES = {
+    "fodors_zagat": {"uniblocker": "fodors-zagats_homo"},
+    "abt_buy": {"uniblocker": "abt-buy_homo", "deepblocker": "Abt-Buy"},
+    "amazon_google": {"uniblocker": "amazon-google", "deepblocker": "Amazon-Google1"},
+    "dblp_acm": {"uniblocker": "dblp-acm", "deepblocker": "DBLP-ACM1"},
+    "dblp_scholar": {"uniblocker": "dblp-scholar", "deepblocker": "DBLP-Google1"},
+    "walmart_amazon": {"uniblocker": "walmart-amazon_homo", "deepblocker": "Walmart-Amazon1"},
+    "wdc_computers": {},
+    "febrl_person": {},
+}
+
+
+def _load_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+    return rows
+
+
+def _write_row(path: Path, row: dict[str, Any]) -> None:
+    """Append a row, replacing any earlier row for the same cell."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = (row["benchmark"], row["model"], row["metric_revision"])
+    kept = [
+        r
+        for r in _load_rows(path)
+        if (r["benchmark"], r["model"], r["metric_revision"]) != key
+    ]
+    kept.append(row)
+    kept.sort(key=lambda r: (r["benchmark"], r["model"]))
+    path.write_text("\n".join(json.dumps(r, sort_keys=True) for r in kept) + "\n")
+
+
+def _fmt(value: float | None, digits: int = 2) -> str:
+    return "-" if value is None else f"{value:.{digits}f}"
+
+
+def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
+    """Render the comparison tables. Measures nothing."""
+    uni = reference["papers"]["uniblocker"]["table_3"]
+    uni_pos = reference["papers"]["uniblocker"]["table_2_datasets"]
+    deep_rows = {
+        r["dataset"]: r for r in reference["papers"]["deepblocker"]["table_6_best_dl"]["rows"]
+    }
+    deep_sets = reference["papers"]["deepblocker"]["table_4_datasets"]
+
+    out: list[str] = []
+    add = out.append
+
+    add("<!-- Generated by examples/research/external_reproduction.py. -->")
+    add("<!-- Re-render with `--render-only`; it measures nothing. -->")
+    add("")
+    add("## A. UniBlocker protocol: smallest k reaching PC >= 90%")
+    add("")
+    add(
+        "Protocol: `C = union over a in A of topK(a -> B)`, k capped at 100, "
+        "`PC = |C & G| / |G|`, `PQ = |C & G| / |C|`, "
+        "`mAP = sum_k (PC_k - PC_{k-1}) PQ_k`. "
+        "`G` is the raw positive list, not the transitive closure."
+    )
+    add("")
+    add(
+        "| benchmark | model | our |G| | paper |G| | our k@PC90 | our PC | our PQ | our mAP | "
+        "STransformer k | PC | PQ | mAP |"
+    )
+    add("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for row in rows:
+        name = PAPER_NAMES.get(row["benchmark"], {}).get("uniblocker")
+        ref = uni["STransformer"].get(name) if name else None
+        pos = uni_pos.get(name, {}).get("pos") if name else None
+        add(
+            f"| `{row['benchmark']}` | `{row['model']}` | {row['gold_raw']:,} | "
+            f"{pos if pos else '-'} | "
+            f"{row['k_at_pc90'] if row['k_at_pc90'] else '>100'} | "
+            f"{_fmt((row['pc_at_k90'] or 0) * 100)} | {_fmt((row['pq_at_k90'] or 0) * 100)} | "
+            f"{_fmt(row['map_at_100'] * 100)} | "
+            f"{ref['k'] if ref else '-'} | {_fmt(ref['pc']) if ref else '-'} | "
+            f"{_fmt(ref['pq']) if ref else '-'} | {_fmt(ref['map']) if ref else '-'} |"
+        )
+    add("")
+    add("## B. DeepBlocker Table 6: pair completeness at their published k")
+    add("")
+    add(
+        "Their `DL` column is a per-dataset **trained** Autoencoder/Hybrid over fastText, "
+        "not a zero-shot sentence encoder, so a gap here is first of all a method gap."
+    )
+    add("")
+    add("| benchmark | model | their k | their |C| | our |C| | their recall | our PC |")
+    add("|---|---|---:|---:|---:|---:|---:|")
+    for row in rows:
+        name = PAPER_NAMES.get(row["benchmark"], {}).get("deepblocker")
+        ref = deep_rows.get(name) if name else None
+        if ref is None:
+            continue
+        k = int(ref["k"])
+        ours = row["pc"][k - 1] * 100 if k <= row["k_max"] else None
+        add(
+            f"| `{row['benchmark']}` | `{row['model']}` | {k} | {ref['cand']} | "
+            f"{k * row['n_a']:,} | {_fmt(ref['recall_pct'], 1)} | {_fmt(ours)} |"
+        )
+    add("")
+    add("## C. Gold-set sizes: ours vs theirs")
+    add("")
+    add(
+        "`raw` is the pooled `label == 1` list that this script scores against; "
+        "`closure` is the transitive closure that `Benchmark.load()` returns and "
+        "`score_blocking` scores against."
+    )
+    add("")
+    add("| benchmark | our |A| | our |B| | our raw |G| | our closure |G| | DeepBlocker #Matches | UniBlocker #Pos |")
+    add("|---|---:|---:|---:|---:|---:|---:|")
+    seen: set[str] = set()
+    for row in rows:
+        if row["benchmark"] in seen:
+            continue
+        seen.add(row["benchmark"])
+        names = PAPER_NAMES.get(row["benchmark"], {})
+        db = deep_sets.get(names.get("deepblocker", ""), {}).get("matches")
+        ub = uni_pos.get(names.get("uniblocker", ""), {}).get("pos")
+        add(
+            f"| `{row['benchmark']}` | {row['n_a']:,} | {row['n_b']:,} | {row['gold_raw']:,} | "
+            f"{row['gold_closure']:,} | {db if db else '-'} | {ub if ub else '-'} |"
+        )
+    add("")
+    add("## D. Full PC curves (PC % at each k)")
+    add("")
+    ks = [1, 2, 3, 5, 8, 10, 13, 20, 27, 50, 77, 90, 100, 150]
+    add("| benchmark | model | " + " | ".join(f"k={k}" for k in ks) + " |")
+    add("|---|---|" + "---:|" * len(ks))
+    for row in rows:
+        cells = [
+            _fmt(row["pc"][k - 1] * 100, 1) if k <= row["k_max"] else "-" for k in ks
+        ]
+        add(f"| `{row['benchmark']}` | `{row['model']}` | " + " | ".join(cells) + " |")
+    add("")
+    add("## E. Serialization actually used")
+    add("")
+    add("| benchmark | fields joined | first A record (truncated) |")
+    add("|---|---|---|")
+    seen.clear()
+    for row in rows:
+        if row["benchmark"] in seen:
+            continue
+        seen.add(row["benchmark"])
+        fields = ", ".join(f"`{f}`" for f in row["serialization_fields"])
+        sample = row["serialization_sample_a"].replace("|", "\\|")[:110]
+        add(f"| `{row['benchmark']}` | {fields} | {sample} |")
+    add("")
+    return "\n".join(out)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--benchmarks", nargs="*", default=list(BENCHMARKS))
+    parser.add_argument("--models", nargs="*", default=list(DEFAULT_MODELS))
+    parser.add_argument("--k-max", type=int, default=K_MAX)
+    parser.add_argument("--cache-dir", type=Path, default=CACHE_DIR)
+    parser.add_argument("--rows", type=Path, default=ROWS_PATH)
+    parser.add_argument(
+        "--render-only",
+        action="store_true",
+        help="Re-render the tables from existing rows, measuring nothing.",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if not args.render_only:
+        for benchmark in args.benchmarks:
+            if benchmark not in BENCHMARKS:
+                raise SystemExit(f"unknown benchmark: {benchmark}")
+            for model in args.models:
+                logger.info("measuring %s x %s", benchmark, model)
+                row = measure(
+                    benchmark, model, cache_dir=args.cache_dir, k_max=args.k_max
+                )
+                _write_row(args.rows, row)
+                logger.info(
+                    "%s x %s: k@PC90=%s PC=%.4f mAP=%.4f",
+                    benchmark,
+                    model,
+                    row["k_at_pc90"],
+                    row["pc_at_k90"] or 0.0,
+                    row["map_at_100"],
+                )
+
+    rows = _load_rows(args.rows)
+    reference = json.loads(REFERENCE_PATH.read_text())
+    tables = render(rows, reference)
+    tables_path = RESEARCH_DIR / "20260728_external_reproduction_tables.md"
+    tables_path.write_text(tables)
+    logger.info("wrote %s (%d rows)", tables_path, len(rows))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
