@@ -232,13 +232,18 @@ One set of embeddings, three recalls, one thing changed at a time. `paper` is di
 1. **Does the harness compute the literature's quantity? Yes, and this part is
    unconditional** — it is arithmetic on candidate sets, which needs no assumption
    about anyone's gold pairs.
-2. **Do we reproduce their recall? Every such comparison here lands within
-   0.7–1.5 pp, but all of them are conditional on an assumption we cannot verify:**
+2. **Do we reproduce their recall? Mostly, not uniformly, and never
+   unconditionally.** Two rows land within 0.7–1.5 pp (`dblp_scholar` +0.72,
+   `dblp_acm` +1.48). One is 5.4 pp off in our favour and unexplained
+   (`fodors_zagat`). The three product benchmarks are 4–7 pp apart as raw points
+   and only *overlap* once the gold-set interval is applied — which is not the same
+   as agreeing. **And all of it is conditional on an assumption we cannot verify:**
    that our gold pairs correspond to theirs. Neither paper publishes a pair list.
 
 The second answer is the one a reader wants and the weaker one. Read it as *"our
-numbers are where theirs are, if the two ground truths are the same ground truth"* —
-not as a settled reproduction.
+numbers are where theirs are on two benchmarks, reachable on three more, and
+unexplained on one — if the two ground truths are the same ground truth"*, not as a
+settled reproduction.
 
 ### What is unconditional
 
@@ -312,9 +317,11 @@ equal count is not an identical pair set, and a narrow interval is narrow only u
 the same assumption that produced it. What survives unconditionally is the
 candidate-set arithmetic and the PQ formula check, not any PC comparison.
 
-`fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
-theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
-It is *their* column that looks odd rather than ours: UniBlocker's own table reports
+`fodors_zagat` is the one genuine outlier. Its gold *count* is identical to theirs
+(112), so a size difference cannot explain the residual — but the same caveat applies
+here as everywhere: an equal count is not an identical pair set, and a different 112
+pairs would give a different recall, so "not a denominator effect" is as far as this
+goes. It is *their* column that looks odd rather than ours: UniBlocker's own table reports
 DeepBlocker at **100.00**,
 Sudowoodo at **99.11** and UniBlocker at **100.00**, with STransformer alone at
 **93.75**. We measure **100.00** (`all-MiniLM-L6-v2`) and **99.11 / PQ 20.83**
@@ -377,12 +384,22 @@ swapping the raw positive list for the transitive closure costs **-15.4 pp**; sw
 directional for symmetric retrieval then *adds* **+0.6 pp**. So essentially the entire
 gap is the **gold-set definition**, not the retrieval.
 
-That reframes an existing number. langres's published 0.81 on `amazon_google` and the
-literature's ~0.90 at comparable budgets are **the same blocker measured two ways** —
-langres's is the stricter one, because a transitive closure over gold clusters manufactures
-intra-source pairs that a cross-source candidate set structurally cannot contain. The
-ladder already documents this as its "reachable ceiling"; what is new here is the
-measurement that the ceiling accounts for the whole distance to the published literature.
+**Be precise about what that ablation does and does not show.** It is entirely
+langres-internal: one set of *our* embeddings, scored under two of *our* protocols. It
+establishes that **our own** 0.81 and **our own** 95.80 are the same blocker measured
+two ways, and that the gold-set definition is what separates them —
+`score_blocking`'s is the stricter one, because a transitive closure over gold clusters
+manufactures intra-source pairs that a cross-source candidate set structurally cannot
+contain. The ladder already documents this as its "reachable ceiling"; what is new is
+the measurement of how much of it the closure accounts for.
+
+It does **not** show that the literature's ~0.90 is that same blocker. Reaching their
+number would additionally need the checkpoint identity (inferred), the gold-pair
+correspondence (unverified) and the serialization to line up — and on
+`amazon_google` the serialization demonstrably does not: three fields to
+UniBlocker's four (Section E). The honest statement is that the closure explains the
+whole gap **between our two protocols**, and is a *sufficient-looking* explanation for
+the distance to the literature, not a demonstrated one.
 
 ### What could still be wrong
 
@@ -432,12 +449,14 @@ formula is theirs to 2 dp, and the internal `score_blocking` crosscheck reproduc
 embedder ladder digit-for-digit. A wrong split, a wrong metric or a wrong candidate-set
 convention could not survive those checks.
 
-It licenses saying, **with the assumption stated**: our recall sits 0.7–1.5 pp from the
-published values wherever a comparison is possible, and four of six published values
-for the same checkpoint are reachable from what we measured. Every one of those
-statements is conditional on our gold pairs corresponding to theirs — an assumption
-argued from provenance and **verified nowhere**, on any benchmark, including the ones
-whose counts match.
+It licenses saying, **with the assumption stated and the spread stated**: on
+`dblp_scholar` and `dblp_acm` our recall sits 0.7–1.5 pp from the published value, and
+four of six published values for the same checkpoint are reachable from what we
+measured. It does not license generalising that 0.7–1.5 pp to the other four —
+`fodors_zagat` is 5.4 pp away and the product rows are 4–7 pp away as points, reaching
+"consistent" only through the interval. Every one of these statements is conditional on
+our gold pairs corresponding to theirs — an assumption argued from provenance and
+**verified nowhere**, on any benchmark, including the ones whose counts match.
 
 It does **not** license calling this a settled reproduction of anyone's recall, nor
 quoting the `abt_buy` / `amazon_google` / `walmart_amazon` numbers as beating anyone,

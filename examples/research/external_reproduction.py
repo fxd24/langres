@@ -213,17 +213,18 @@ def _build_embedder(model_name: str, cache_dir: Path) -> tuple[Any, str | None]:
         logger.warning(
             "%s is not in MODEL_REVISIONS, so this run is NOT revision-pinned and "
             "may not reproduce: whatever the Hub's `main` points at today is what "
-            "gets loaded. Add its commit to MODEL_REVISIONS to pin it.",
+            "gets loaded. Caching is DISABLED for it -- a shared namespace keyed on "
+            "the name alone would serve the previous checkpoint's vectors after "
+            "`main` moves, which is worse than paying to re-encode. Add its commit "
+            "to MODEL_REVISIONS to get both the pin and the cache.",
             model_name,
         )
-        ref: str | ModelRef = model_name
-        suffix = "unpinned"
-    else:
-        ref = ModelRef(base=model_name, kind="hf", revision=revision)
-        suffix = revision[:12]
+        return SentenceTransformerEmbedder(model_name, normalize_embeddings=True), None
 
-    base = SentenceTransformerEmbedder(ref, normalize_embeddings=True)
-    namespace = "extrepro__" + model_name.replace("/", "__") + "__" + suffix
+    base = SentenceTransformerEmbedder(
+        ModelRef(base=model_name, kind="hf", revision=revision), normalize_embeddings=True
+    )
+    namespace = "extrepro__" + model_name.replace("/", "__") + "__" + revision[:12]
     cached = DiskCachedEmbedder(embedder=base, cache_dir=cache_dir, namespace=namespace)
     return cached, revision
 
@@ -530,13 +531,18 @@ VERDICT = """
 1. **Does the harness compute the literature's quantity? Yes, and this part is
    unconditional** — it is arithmetic on candidate sets, which needs no assumption
    about anyone's gold pairs.
-2. **Do we reproduce their recall? Every such comparison here lands within
-   0.7–1.5 pp, but all of them are conditional on an assumption we cannot verify:**
+2. **Do we reproduce their recall? Mostly, not uniformly, and never
+   unconditionally.** Two rows land within 0.7–1.5 pp (`dblp_scholar` +0.72,
+   `dblp_acm` +1.48). One is 5.4 pp off in our favour and unexplained
+   (`fodors_zagat`). The three product benchmarks are 4–7 pp apart as raw points
+   and only *overlap* once the gold-set interval is applied — which is not the same
+   as agreeing. **And all of it is conditional on an assumption we cannot verify:**
    that our gold pairs correspond to theirs. Neither paper publishes a pair list.
 
 The second answer is the one a reader wants and the weaker one. Read it as *"our
-numbers are where theirs are, if the two ground truths are the same ground truth"* —
-not as a settled reproduction.
+numbers are where theirs are on two benchmarks, reachable on three more, and
+unexplained on one — if the two ground truths are the same ground truth"*, not as a
+settled reproduction.
 
 ### What is unconditional
 
@@ -610,9 +616,11 @@ equal count is not an identical pair set, and a narrow interval is narrow only u
 the same assumption that produced it. What survives unconditionally is the
 candidate-set arithmetic and the PQ formula check, not any PC comparison.
 
-`fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
-theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
-It is *their* column that looks odd rather than ours: UniBlocker's own table reports
+`fodors_zagat` is the one genuine outlier. Its gold *count* is identical to theirs
+(112), so a size difference cannot explain the residual — but the same caveat applies
+here as everywhere: an equal count is not an identical pair set, and a different 112
+pairs would give a different recall, so "not a denominator effect" is as far as this
+goes. It is *their* column that looks odd rather than ours: UniBlocker's own table reports
 DeepBlocker at **100.00**,
 Sudowoodo at **99.11** and UniBlocker at **100.00**, with STransformer alone at
 **93.75**. We measure **100.00** (`all-MiniLM-L6-v2`) and **99.11 / PQ 20.83**
@@ -675,12 +683,22 @@ swapping the raw positive list for the transitive closure costs **-15.4 pp**; sw
 directional for symmetric retrieval then *adds* **+0.6 pp**. So essentially the entire
 gap is the **gold-set definition**, not the retrieval.
 
-That reframes an existing number. langres's published 0.81 on `amazon_google` and the
-literature's ~0.90 at comparable budgets are **the same blocker measured two ways** —
-langres's is the stricter one, because a transitive closure over gold clusters manufactures
-intra-source pairs that a cross-source candidate set structurally cannot contain. The
-ladder already documents this as its "reachable ceiling"; what is new here is the
-measurement that the ceiling accounts for the whole distance to the published literature.
+**Be precise about what that ablation does and does not show.** It is entirely
+langres-internal: one set of *our* embeddings, scored under two of *our* protocols. It
+establishes that **our own** 0.81 and **our own** 95.80 are the same blocker measured
+two ways, and that the gold-set definition is what separates them —
+`score_blocking`'s is the stricter one, because a transitive closure over gold clusters
+manufactures intra-source pairs that a cross-source candidate set structurally cannot
+contain. The ladder already documents this as its "reachable ceiling"; what is new is
+the measurement of how much of it the closure accounts for.
+
+It does **not** show that the literature's ~0.90 is that same blocker. Reaching their
+number would additionally need the checkpoint identity (inferred), the gold-pair
+correspondence (unverified) and the serialization to line up — and on
+`amazon_google` the serialization demonstrably does not: three fields to
+UniBlocker's four (Section E). The honest statement is that the closure explains the
+whole gap **between our two protocols**, and is a *sufficient-looking* explanation for
+the distance to the literature, not a demonstrated one.
 
 ### What could still be wrong
 
@@ -730,12 +748,14 @@ formula is theirs to 2 dp, and the internal `score_blocking` crosscheck reproduc
 embedder ladder digit-for-digit. A wrong split, a wrong metric or a wrong candidate-set
 convention could not survive those checks.
 
-It licenses saying, **with the assumption stated**: our recall sits 0.7–1.5 pp from the
-published values wherever a comparison is possible, and four of six published values
-for the same checkpoint are reachable from what we measured. Every one of those
-statements is conditional on our gold pairs corresponding to theirs — an assumption
-argued from provenance and **verified nowhere**, on any benchmark, including the ones
-whose counts match.
+It licenses saying, **with the assumption stated and the spread stated**: on
+`dblp_scholar` and `dblp_acm` our recall sits 0.7–1.5 pp from the published value, and
+four of six published values for the same checkpoint are reachable from what we
+measured. It does not license generalising that 0.7–1.5 pp to the other four —
+`fodors_zagat` is 5.4 pp away and the product rows are 4–7 pp away as points, reaching
+"consistent" only through the interval. Every one of these statements is conditional on
+our gold pairs corresponding to theirs — an assumption argued from provenance and
+**verified nowhere**, on any benchmark, including the ones whose counts match.
 
 It does **not** license calling this a settled reproduction of anyone's recall, nor
 quoting the `abt_buy` / `amazon_google` / `walmart_amazon` numbers as beating anyone,
@@ -790,20 +810,107 @@ def _current_revision_only(rows: Sequence[dict[str, Any]], label: str) -> list[d
     return keep
 
 
+def _select_generation(rows: Sequence[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+    """Pick one checkpoint generation per cell, after filtering the metric revision.
+
+    Rows are additive across checkpoint pins (see :func:`_write_row`), so a cell can
+    hold more than one generation and a table must not show both. Preference order
+    within a cell: the row measured on the model's current pin, else the single row
+    that is there. A cell holding several *non-current* generations is **dropped**
+    rather than guessed at -- picking one silently is the failure this exists to
+    prevent, and dropping it makes the verdict gate downgrade the render honestly.
+
+    A row with no ``model_revision`` predates the field. It is accepted as the
+    fallback rather than discarded: the tracked artifact is exactly that shape.
+    """
+    keep = _current_revision_only(rows, label)
+    by_cell: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in keep:
+        by_cell.setdefault((row["benchmark"], row["model"]), []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    for (benchmark, model), group in sorted(by_cell.items()):
+        if len(group) == 1:
+            selected.append(group[0])
+            continue
+        pinned = [r for r in group if r.get("model_revision") == MODEL_REVISIONS.get(model)]
+        legacy = [r for r in group if r.get("model_revision") is None]
+        chosen = pinned or legacy
+        if len(chosen) != 1:
+            logger.warning(
+                "%s: %s x %s holds %d generations and none is the current pin -- "
+                "dropping the cell rather than picking one: %s",
+                label,
+                benchmark,
+                model,
+                len(group),
+                sorted(str(r.get("model_revision")) for r in group),
+            )
+            continue
+        logger.info(
+            "%s: %s x %s holds %d generations; rendering revision %s",
+            label,
+            benchmark,
+            model,
+            len(group),
+            chosen[0].get("model_revision"),
+        )
+        selected.append(chosen[0])
+    return selected
+
+
 def _write_row(path: Path, row: dict[str, Any]) -> None:
     """Append a row, replacing any earlier row for the same cell."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    key = (row["benchmark"], row["model"], row["metric_revision"])
-    kept = [
-        r for r in _load_rows(path) if (r["benchmark"], r["model"], r["metric_revision"]) != key
-    ]
+
+    # The checkpoint revision is part of what makes two rows the same experiment --
+    # it already is in the cache namespace and the crosscheck admission rule, and a
+    # key that omits it would let a re-pin silently destroy the previous
+    # checkpoint's measurement. Rows are additive per generation; render picks one.
+    def _key(r: dict[str, Any]) -> tuple[Any, ...]:
+        return (r["benchmark"], r["model"], r.get("model_revision"), r["metric_revision"])
+
+    key = _key(row)
+    kept = [r for r in _load_rows(path) if _key(r) != key]
     kept.append(row)
-    kept.sort(key=lambda r: (r["benchmark"], r["model"]))
+    kept.sort(key=lambda r: (r["benchmark"], r["model"], str(r.get("model_revision"))))
     path.write_text("\n".join(json.dumps(r, sort_keys=True) for r in kept) + "\n")
 
 
 def _fmt(value: float | None, digits: int = 2) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
+
+
+#: The crosscheck cells :data:`VERDICT` cites by name. "Some check survived" is not
+#: the same as "the checks the prose talks about survived".
+VERDICT_CROSSCHECKS = ("abt_buy", "amazon_google")
+
+#: Every figure :data:`VERDICT` states as a measurement of ours, as
+#: ``(benchmark, model, k, field, percent)``. Checked against the rendered rows
+#: before the prose is emitted, so a re-pin that moves a number downgrades the
+#: report instead of letting fixed text assert a value nobody re-read.
+_MPNET = "sentence-transformers/all-mpnet-base-v2"
+VERDICT_CLAIMS: tuple[tuple[str, str, int, str, float], ...] = (
+    ("dblp_scholar", _MPNET, 150, "pc", 98.82),
+    ("dblp_acm", _MPNET, 1, "pc", 96.76),
+    ("dblp_acm", _MPNET, 1, "pq", 82.11),
+    ("fodors_zagat", _MPNET, 2, "pc", 99.11),
+    ("fodors_zagat", _MPNET, 1, "pq", 20.83),
+    ("fodors_zagat", "all-MiniLM-L6-v2", 2, "pc", 100.00),
+)
+
+
+def _claim_holds(
+    rows: Sequence[dict[str, Any]], benchmark: str, model: str, k: int, field: str, value: float
+) -> bool:
+    """Is a figure quoted in :data:`VERDICT` still what the rows say (to 2 dp)?"""
+    for row in rows:
+        if row["benchmark"] == benchmark and row["model"] == model:
+            series = row[field]
+            if k > len(series):
+                return False
+            return bool(abs(series[k - 1] * 100 - value) < 0.005)
+    return False
 
 
 def _searched_to(row: dict[str, Any]) -> str:
@@ -1119,14 +1226,25 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
     #
     # Cell presence alone is not enough: re-measuring one cell with `--k-max 20`
     # leaves every key in place while destroying the k=150 number the prose quotes.
-    # So a cell counts only if it was searched to the full canonical depth, and the
-    # crosscheck Section F the verdict cites must have survived admission too.
+    # So a cell counts only if it was searched to the full canonical depth, the
+    # SPECIFIC crosschecks the prose cites survived admission, and -- because a new
+    # checkpoint pin can move the measurements without moving any key -- the actual
+    # figures VERDICT quotes still hold. Prose that asserts numbers it did not read
+    # is the same decoupled-gate shape this file keeps guarding against.
     present = {
         (r["benchmark"], r["model"]) for r in rows if int(r["k_max"]) >= min(K_MAX, int(r["n_b"]))
     }
     missing = {(b, m) for b in BENCHMARKS for m in DEFAULT_MODELS} - present
-    if not checks:
-        missing = missing | {("<crosscheck>", "Section F")}
+    missing |= {
+        ("<crosscheck>", f"{b} k=20")
+        for b in VERDICT_CROSSCHECKS
+        if not any(c["benchmark"] == b and c["k"] == 20 for c in checks)
+    }
+    missing |= {
+        ("<quoted value>", f"{b} x {m} @k={k}: {value:.2f}")
+        for b, m, k, field, value in VERDICT_CLAIMS
+        if not _claim_holds(rows, b, m, k, field, value)
+    }
     if missing:
         logger.warning(
             "incomplete render (%d canonical input(s) absent or measured at a reduced "
@@ -1267,7 +1385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     row["map_at_100"],
                 )
 
-    rows = _current_revision_only(_load_rows(args.rows), str(args.rows))
+    rows = _select_generation(_load_rows(args.rows), str(args.rows))
     if not rows:
         raise SystemExit(
             f"no rows at metric revision {METRIC_REVISION} in {args.rows}; "

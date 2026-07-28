@@ -175,6 +175,84 @@ def test_k_at_pc90_reports_the_depth_actually_searched(harness: ModuleType) -> N
     assert harness._searched_to({"k_max": 20}) == ">20"
 
 
+def test_every_number_the_verdict_quotes_is_checked_against_the_rows(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """The registry must describe the committed rows, or it gates nothing."""
+    for benchmark, model, k, field, value in harness.VERDICT_CLAIMS:
+        assert harness._claim_holds(rows, benchmark, model, k, field, value), (
+            f"{benchmark} x {model} @k={k} {field} is no longer {value}"
+        )
+
+
+def test_a_moved_measurement_drops_the_verdict(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """A re-pin that shifts a quoted number must not leave the prose asserting it."""
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+    moved = [
+        dict(r, pc=[p * 0.5 for p in r["pc"]])
+        if (r["benchmark"], r["model"]) == ("dblp_scholar", harness._MPNET)
+        else r
+        for r in rows
+    ]
+
+    rendered = harness.render(moved, reference)
+
+    assert "this is a **partial** render" in rendered
+    assert "98.82" not in rendered
+
+
+def test_the_named_crosschecks_are_required_not_just_any(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """The verdict cites abt_buy and amazon_google by name, so dblp_acm alone is not enough."""
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+    checks = json.loads(harness.CROSSCHECK_PATH.read_text())
+    assert {c["benchmark"] for c in checks} >= set(harness.VERDICT_CROSSCHECKS)
+
+    # Drop the two named cells from the rendered rows: admission then keeps only the
+    # dblp_acm check, which is a surviving check but not a cited one.
+    without = [r for r in rows if (r["benchmark"], r["model"]) != ("abt_buy", harness._MPNET)]
+
+    rendered = harness.render(without, reference)
+
+    assert "this is a **partial** render" in rendered
+
+
+def test_a_cell_with_two_unpinned_generations_is_dropped_not_guessed(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """Rows are additive across pins, so render must choose deliberately."""
+    one = rows[0]
+    ambiguous = [dict(one, model_revision="a" * 40), dict(one, model_revision="b" * 40)]
+
+    selected = harness._select_generation(ambiguous, "probe")
+
+    assert selected == []
+
+
+def test_the_current_pin_wins_over_a_legacy_row(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    one = next(r for r in rows if r["model"] in harness.MODEL_REVISIONS)
+    pin = harness.MODEL_REVISIONS[one["model"]]
+    legacy = dict(one)
+    pinned = dict(one, model_revision=pin)
+
+    selected = harness._select_generation([legacy, pinned], "probe")
+
+    assert selected == [pinned]
+
+
+def test_an_unpinned_model_is_not_disk_cached(harness: ModuleType, tmp_path: Path) -> None:
+    """A namespace keyed on the name alone would outlive the weights it holds."""
+    embedder, revision = harness._build_embedder("hf-internal-testing/tiny-random-gpt2", tmp_path)
+
+    assert revision is None
+    assert type(embedder).__name__ == "SentenceTransformerEmbedder"
+
+
 def test_committed_crosscheck_cells_are_unique(harness: ModuleType) -> None:
     """The merge keys on this tuple, so a duplicate would mean silent cell loss."""
     checks = json.loads(harness.CROSSCHECK_PATH.read_text())
