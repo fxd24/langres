@@ -20,9 +20,15 @@ Environment variables required:
     LANGFUSE_SECRET_KEY: Langfuse secret API key (optional)
 
 Performance:
-    - First run: ~2-3 minutes (async LLM scoring with rate limiting)
-    - Subsequent runs: ~30 seconds (cached embeddings and judgments)
-    - Speedup: 12.5x faster than sequential LLM calls
+    - First run: bounded by the 250 RPM rate limit -- about 12 minutes at the
+      default MAX_CANDIDATES=3000 (3000 / 250 RPM), plus embedding time.
+    - Subsequent runs: much faster (cached embeddings and judgments).
+
+    The async path overlaps request latency instead of waiting for each
+    response in turn. It does not raise the ceiling: throughput is capped by
+    rpm_limit either way, so raise that (to your provider's real quota) before
+    expecting concurrency to buy anything. No speedup ratio is quoted because
+    none has been measured here.
 """
 
 import asyncio
@@ -301,11 +307,15 @@ def main() -> None:
         start_time = time.time()
 
         if has_async:
-            # Use async batch processing (12.5x speedup)
+            # Async overlaps request latency; the 250 RPM limiter is still the
+            # ceiling, so that -- not max_concurrent -- sets the ETA below.
             logger.info(
                 "Scoring pairs with async LLM (max_concurrent=50, rate limits: 250 RPM, 250K TPM)..."
             )
-            estimated_time_min = len(candidates) / (250 / 60)  # 250 RPM = 4.17 req/sec
+            # candidates / 250 requests-per-MINUTE is already in minutes. The
+            # previous form divided by (250/60), i.e. by requests-per-SECOND,
+            # which yields seconds while being reported as minutes (60x under).
+            estimated_time_min = len(candidates) / 250
             logger.info(
                 f"Scoring {len(candidates)} filtered candidates (estimated: {estimated_time_min:.1f} minutes)..."
             )
@@ -352,7 +362,9 @@ def main() -> None:
         else:
             # Fallback to sequential processing
             logger.info("Scoring pairs with LLM sequentially (this will take ~15-20 minutes)...")
-            logger.info("Consider implementing forward_async() for 12.5x speedup")
+            logger.info(
+                "Consider forward_async() to overlap request latency (still capped by rpm_limit)"
+            )
 
             judgements = []
             with tqdm(total=len(candidates), desc="LLM scoring") as pbar:

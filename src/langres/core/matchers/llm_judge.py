@@ -948,9 +948,19 @@ class LLMMatcher(Matcher[SchemaT]):
             - Results are returned in the same order as input candidates
 
         Performance:
-            - Sequential forward(): ~4 requests/second (250 RPM / 60s)
-            - Async forward_async(): ~50 requests/second with max_concurrent=50
-            - Speedup: ~12.5x for typical workloads
+            The benefit is overlapping request *latency*: ``forward`` waits for
+            each response before sending the next, so its rate is bounded by
+            per-call round-trip time, while this method keeps up to
+            ``max_concurrent`` requests in flight.
+
+            No speedup ratio is quoted here because none has been measured. The
+            achievable factor depends on ``rpm_limit``/``max_concurrent``, the
+            provider's own limits, and per-call latency. Note that the rate
+            limiter is the binding ceiling: at the defaults
+            (``max_concurrent=50``, ``rpm_limit=250``) throughput cannot exceed
+            250 requests/minute regardless of concurrency. Raise ``rpm_limit``
+            (and ``tpm_limit``) to your provider's actual quota before expecting
+            concurrency to buy anything.
 
         Warning:
             This method materializes all results in memory. For very large
