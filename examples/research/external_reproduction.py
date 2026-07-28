@@ -654,6 +654,39 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         sample = row["serialization_sample_a"].replace("|", "\\|")[:110]
         add(f"| `{row['benchmark']}` | {fields} | {sample} |")
     add("")
+
+    crosscheck_path = RESEARCH_DIR / "20260728_external_reproduction_crosscheck.json"
+    if crosscheck_path.exists():
+        checks = json.loads(crosscheck_path.read_text())
+        add("## F. Where the published protocol and `score_blocking` diverge")
+        add("")
+        add(
+            "One set of embeddings, three recalls, one thing changed at a time. "
+            "`paper` is directional `A -> B` scored against the raw positive list. "
+            "`+closure gold` keeps that candidate set and swaps in the transitive "
+            "closure. `score_blocking` additionally swaps directional retrieval for "
+            "the symmetric pooled kNN with same-source pairs dropped. The last column "
+            "is the whole difference between what a paper would print and what "
+            "`score_blocking` prints for the same model at the same k."
+        )
+        add("")
+        add(
+            "| benchmark | model | k | paper protocol | + closure gold | "
+            "`score_blocking` shape | total delta |"
+        )
+        add("|---|---|---:|---:|---:|---:|---:|")
+        for c in checks:
+            delta = (c["langres_score_blocking"] - c["paper"]) * 100
+            add(
+                f"| `{c['benchmark']}` | `{c['model']}` | {c['k']} | "
+                f"{_fmt(c['paper'] * 100)} | {_fmt(c['paper_direction_closure_gold'] * 100)} | "
+                f"{_fmt(c['langres_score_blocking'] * 100)} | {delta:+.2f} |"
+            )
+        add("")
+
+    if VERDICT.strip():
+        add(VERDICT.strip())
+        add("")
     return "\n".join(out)
 
 
