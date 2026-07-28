@@ -619,6 +619,73 @@ def write_reference(path: Path, store: dict[str, RecallByRecord]) -> None:
     path.write_text(json.dumps(payload, indent=0, sort_keys=True) + "\n")
 
 
+#: Text encoded once per model per run to prove the warm cache still belongs to
+#: the checkpoint that is loaded now. Content is irrelevant — only that it is
+#: fixed forever, so the entry written on the first run is the one compared
+#: against on every later one.
+_CANARY_TEXT = "langres embedder-ladder cache canary"
+
+#: How far a cached canary vector may sit from a freshly encoded one before the
+#: cache is declared stale. Generous on purpose: run-to-run float noise (device,
+#: batch composition, BLAS version) is ~1e-6 on normalized vectors, while a
+#: different checkpoint moves them by order 1e-1. Anything between those is not
+#: a case worth guessing about — it is a case worth stopping on.
+_CANARY_TOLERANCE = 1e-4
+
+
+class StaleEmbeddingCacheError(RuntimeError):
+    """The cached vectors were produced by a different checkpoint than the loaded one."""
+
+
+def _assert_cache_matches_checkpoint(
+    base: Any, cached: Any, namespace: str, cache_dir: Path
+) -> None:
+    """Stop the run if the warm cache no longer agrees with the loaded checkpoint.
+
+    The namespace is keyed on model name + dtype, **not** on a Hub revision. So
+    if a checkpoint is re-uploaded under the same name, the namespace still hits:
+    the run would read the NEW checkpoint's ``parameter_count``/``embedding_dim``
+    while reusing the OLD checkpoint's vectors, and publish a row mixing the two.
+
+    Putting the revision in the namespace would close that — and invalidate every
+    cached vector in the ladder to do it. This closes it without re-encoding
+    anything: encode one fixed canary through the cache (served from disk on a
+    warm run) and through the base embedder (always fresh), and compare. They can
+    only disagree if the cached vectors came from something the loaded model no
+    longer is.
+
+    That is deliberately a *stronger* check than a revision pin rather than a
+    cheaper one. A revision pin answers "is this the same Hub commit"; this
+    answers "does this checkpoint still produce these vectors", which is the
+    property the measurements actually depend on. It therefore also catches
+    drift a revision cannot see — a sentence-transformers upgrade that changes
+    pooling, a tokenizer fix, a different dtype path on a new device.
+
+    Raises:
+        StaleEmbeddingCacheError: Naming the namespace file to delete. Deliberately
+            fatal rather than a warning: the failure it guards against is one that
+            publishes a plausible number, and a warning scrolls past.
+    """
+    import numpy as np
+
+    from_cache = np.asarray(cached.encode([_CANARY_TEXT])[0], dtype=np.float64)
+    fresh = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+
+    if from_cache.shape != fresh.shape:
+        drift: float = float("inf")
+    else:
+        drift = float(np.abs(from_cache - fresh).max())
+
+    if drift > _CANARY_TOLERANCE:
+        raise StaleEmbeddingCacheError(
+            f"the embedding cache for namespace {namespace!r} was written by a "
+            f"different checkpoint than the one loaded now (canary vectors differ "
+            f"by {drift:.3g} > {_CANARY_TOLERANCE:g}). Every cached vector in it is "
+            f"suspect, so continuing would publish rows mixing two checkpoints. "
+            f"Delete {cache_dir / f'{namespace}.db'} and re-measure this model."
+        )
+
+
 def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_size: int) -> Any:
     """A disk-cached embedder for ``spec``.
 
@@ -639,17 +706,16 @@ def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_
     # vectors, and reusing a float32 cache entry for a float16 run would silently
     # publish a number the run never computed.
     #
-    # It does NOT carry a Hub revision, and that is a known sharp edge. If a
-    # checkpoint is re-uploaded under the same name, this namespace still hits:
-    # the run reads the NEW checkpoint's parameter_count/embedding_dim while
-    # reusing the OLD checkpoint's vectors, and the row it publishes mixes the
-    # two with nothing to reveal it. Delete a model's namespace before
-    # re-measuring after an upstream re-upload. Adding the revision here would
-    # invalidate every cached vector and force a full re-measure of the ladder,
-    # so it is deliberately deferred until the hazard actually bites -- the
-    # report says the same thing in "How to reproduce these numbers".
+    # It does NOT carry a Hub revision. Adding one would invalidate every cached
+    # vector in the ladder, so the re-upload hazard is caught by measurement
+    # instead: `_assert_cache_matches_checkpoint` re-encodes one fixed canary and
+    # stops the run if the warm cache disagrees with the loaded model. That needs
+    # no revision, costs one short encode, and catches drift a revision cannot
+    # see (a pooling change, a tokenizer fix, a different dtype path).
     namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
-    return base, DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
+    cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
+    _assert_cache_matches_checkpoint(base, cached, namespace, cache_dir)
+    return base, cached
 
 
 def _registered_prompts(base_embedder: Any) -> list[str]:
@@ -1295,19 +1361,22 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "can always be traced to the row that produced it.\n"
     )
     out.append(
-        "\n> **Checkpoints are pinned by name only, and that has a sharp edge.** The "
-        "rows record `parameter_count` and `embedding_dim`, **not** a Hub revision, "
-        "and the embedding cache is namespaced on model name + dtype "
-        "(`embedder_ladder.py::_build_embedder`) — also not a revision. So if an "
-        "upstream checkpoint is re-uploaded under the same name and the cache is "
-        "warm, a re-run reads the **new** checkpoint's metadata while reusing the "
-        "**old** checkpoint's vectors, and publishes a row that mixes the two. That "
-        "is worse than a legitimately different number, because nothing in the row "
-        "reveals it. **After any upstream re-upload, delete that model's cache "
-        "namespace before re-measuring.** The namespace deliberately still omits the "
-        "revision: adding it would invalidate every cached vector and force a full "
-        "re-measure of the whole ladder, for a hazard that has not occurred — but it "
-        "is the right fix the first time it does.\n"
+        "\n> **Checkpoints are pinned by name only, and the cache is checked rather "
+        "than trusted.** The rows record `parameter_count` and `embedding_dim`, "
+        "**not** a Hub revision, and the embedding cache is namespaced on model name "
+        "+ dtype (`embedder_ladder.py::_build_embedder`) — also not a revision. Left "
+        "there, an upstream re-upload under the same name would let a warm re-run "
+        "read the **new** checkpoint's metadata while reusing the **old** "
+        "checkpoint's vectors and publish a row mixing the two, with nothing in the "
+        "row revealing it. So every run re-encodes one fixed canary string and "
+        "compares it to the cached entry "
+        "(`embedder_ladder.py::_assert_cache_matches_checkpoint`); a mismatch aborts "
+        "the run and names the namespace file to delete. Putting the revision in the "
+        "namespace instead would invalidate every cached vector to close the same "
+        "hazard, and would still only answer *is this the same Hub commit* — the "
+        "canary answers *does this checkpoint still produce these vectors*, which is "
+        "what the measurements depend on, and so also catches a pooling change, a "
+        "tokenizer fix, or a different dtype path.\n"
     )
     out.append(
         "\nRequires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS "

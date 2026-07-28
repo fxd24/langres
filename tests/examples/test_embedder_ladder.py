@@ -16,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).parents[2]
 LADDER_PATH = ROOT / "examples" / "research" / "embedder_ladder.py"
@@ -218,6 +219,80 @@ class TestDocumentSidePrefix:
 
         assert embedder.seen[0] == texts
         assert index._corpus_texts == texts
+
+
+class _SwappableEmbedder:
+    """A $0 embedder whose vectors change when ``weights`` is reassigned.
+
+    Stands in for a checkpoint re-uploaded under the same Hub name: same object
+    identity, same namespace, different numbers out.
+    """
+
+    embedding_dim = 4
+
+    def __init__(self, weights: float = 1.0) -> None:
+        self.weights = weights
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        rendered = [(prompt or "") + text for text in texts]
+        return np.array(
+            [[self.weights * (len(t) + i) for i in range(4)] for t in rendered], dtype=np.float32
+        )
+
+
+class TestStaleCacheCanary:
+    """The cache namespace omits the Hub revision; this is what covers that.
+
+    A namespace keyed on model name + dtype still hits after an upstream
+    re-upload, so a warm re-run would read the NEW checkpoint's metadata while
+    serving the OLD checkpoint's vectors — publishing a row that mixes two
+    checkpoints with nothing in the row to reveal it.
+    """
+
+    def _cached(self, embedder: Any, tmp_path: Path) -> Any:
+        from langres.core.embeddings import DiskCachedEmbedder
+
+        return DiskCachedEmbedder(embedder, cache_dir=tmp_path, namespace="canary_ns")
+
+    def test_a_cold_cache_agrees_with_the_checkpoint(self, tmp_path: Path) -> None:
+        """Control: the check must not fire on the ordinary first run."""
+        embedder = _SwappableEmbedder()
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+    def test_a_warm_cache_from_the_same_checkpoint_still_agrees(self, tmp_path: Path) -> None:
+        """Control: a *warm* cache must stay silent, or the check is unusable.
+
+        Without this, a check that simply always raised on a populated cache
+        would pass the test below and fail every real re-run.
+        """
+        embedder = _SwappableEmbedder()
+        cached = self._cached(embedder, tmp_path)
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+    def test_a_re_uploaded_checkpoint_aborts_the_run(self, tmp_path: Path) -> None:
+        """The failure this exists to catch, actually caught."""
+        embedder = _SwappableEmbedder(weights=1.0)
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+        embedder.weights = 2.0  # the same name now serves different weights
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
+        # The message has to be actionable on its own: whoever hits this is
+        # mid-sweep and needs the path, not a description of the hazard.
+        assert "canary_ns.db" in str(excinfo.value)
 
 
 class TestPersistence:
