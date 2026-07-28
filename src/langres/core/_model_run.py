@@ -1052,12 +1052,37 @@ class ModelRun(ModelState):
         :class:`~langres.core.op_adapters.ClustererStage` clustering over the
         survivors, per ``docs/THEORY.md``'s Select-π vs equivalence-π split).
         The output is whatever the (zeroed) equivalence clusterer returns over
-        the selected edges: the base connected-components
-        :class:`~langres.core.clusterer.Clusterer` emits only multi-record
-        clusters (an isolated record never enters the graph), whereas a pivot
-        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` can
-        leave a singleton behind -- a record with a qualifying edge whose only
-        neighbours an earlier pivot already claimed.
+        the selected edges. **For judgements with DISTINCT ids, both shipped
+        clusterers return the same shape** -- multi-record clusters only, an
+        unmerged record simply absent. Two caveats, both real:
+
+        * **Self-pairs break the tie, in the base clusterer's favour.** A
+          ``left_id == right_id`` judgement that clears the threshold makes the
+          base Clusterer call ``nx.add_edge(x, x)``, and networkx returns ``{x}``
+          -- a one-node component -- whereas
+          :class:`~langres.core.clusterers.correlation.CorrelationClusterer`
+          skips self-pairs outright and emits nothing. Left as-is deliberately --
+          teaching the base clusterer to drop them is a behaviour change to the
+          DEFAULT path. Neither shipped blocker produces this input, so reaching
+          it takes duplicate ids or a custom blocker.
+        * **Nothing here enforces the shape.** It is a property of the two
+          shipped implementations, not an invariant of this method: a custom
+          :class:`~langres.core.clusterer.Clusterer` subclass that emits a
+          one-node cluster has it passed straight through
+          (``ClustererStage.forward`` returns the clusterer's output unchanged,
+          and ``_cluster`` normalizes nothing).
+
+        The two shipped ones reach the distinct-id shape differently, which is
+        worth knowing when reading either one's source. The base
+        connected-components
+        :class:`~langres.core.clusterer.Clusterer` gets it for free -- an isolated
+        record never enters the graph. A pivot
+        :class:`~langres.core.clusterers.correlation.CorrelationClusterer` has a
+        second way to strand a record -- one *with* a qualifying edge whose only
+        neighbours an earlier pivot already claimed -- which forms a one-node
+        ``{node}`` cluster mid-algorithm, so it drops those explicitly rather than
+        handing a caller who swapped the clusterer a different output shape for
+        the same meaning.
 
         Args:
             records: Raw records (dicts) in a stable list order.

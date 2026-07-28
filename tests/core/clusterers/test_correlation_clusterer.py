@@ -15,12 +15,16 @@ cluster's pivot is never pulled in by transitivity alone -- this is what makes
 it merge-resistant relative to the base ``Clusterer``.
 """
 
+import random
+
 import pytest
 
 from langres.core.clusterer import Clusterer
 from langres.core.clusterers.correlation import CorrelationClusterer
 from langres.core.models import PairwiseJudgement
 from langres.core.registry import get_component
+from langres.data.benchmark import complete_partition
+from langres.metrics.metrics import evaluate_clustering
 
 
 def _j(left: str, right: str, score: float) -> PairwiseJudgement:
@@ -54,7 +58,9 @@ def test_correlation_clusterer_resists_chain_over_merge() -> None:
     clusterer = CorrelationClusterer(threshold=0.8)
     clusters = clusterer.cluster(judgements)
 
-    assert clusters == [{"A", "B"}, {"C"}]
+    # C is stranded, so it is absent -- NOT emitted as a {"C"} singleton. Same
+    # output shape as the base Clusterer; see the singleton-contract tests below.
+    assert clusters == [{"A", "B"}]
 
 
 def test_correlation_clusterer_still_merges_a_fully_connected_triangle() -> None:
@@ -271,3 +277,181 @@ def test_negative_decision_and_abstain_are_excluded_from_edges() -> None:
     ]
     adjacency = CorrelationClusterer(threshold=0.5)._build_adjacency(judgements)
     assert adjacency == {}
+
+
+# ---------------------------------------------------------------------------
+# The singleton contract: a drop-in must not change the output SHAPE
+#
+# The pivot loop can form a one-node {node} cluster -- a record WITH a
+# qualifying edge whose neighbours an earlier pivot already claimed. The base
+# Clusterer cannot produce that (an unmerged record never enters its graph) and
+# the documented dedupe() contract returns multi-record clusters only. So the
+# pivot clusterer drops them, and these tests pin that: the class docstring
+# claimed "no singleton clusters" long before the code actually did it.
+# ---------------------------------------------------------------------------
+
+
+class _SingletonEmittingCorrelationClusterer(CorrelationClusterer):
+    """The PRE-FIX pivot loop, kept verbatim as the "before" side of a comparison.
+
+    Identical to :meth:`CorrelationClusterer.cluster` except that it appends every
+    cluster, including the one-node ones. Without this, the metric-neutrality
+    tests below would compare the new behaviour against itself and could never
+    fail -- the shape of gate this repo has been bitten by before.
+    """
+
+    def cluster(self, judgements):  # type: ignore[no-untyped-def]
+        adjacency = self._build_adjacency(judgements)
+        remaining = set(adjacency)
+        clusters: list[set[str]] = []
+        for node in sorted(adjacency, key=lambda n: self._pivot_priority(n, adjacency)):
+            if node not in remaining:
+                continue
+            cluster = {node} | (set(adjacency[node]) & remaining)
+            remaining -= cluster
+            clusters.append(cluster)
+        return clusters
+
+
+#: The reproduction that proved the old docstring wrong. A is the first pivot
+#: (ties break by node id) and claims B and D; C's only neighbour B is gone, so
+#: the pre-fix loop emitted {"C"}.
+_STRANDING_JUDGEMENTS = [_j("A", "B", 0.9), _j("B", "C", 0.9), _j("A", "D", 0.6)]
+_ALL_IDS = ["A", "B", "C", "D"]
+
+
+def test_the_pre_fix_loop_really_did_emit_a_singleton() -> None:
+    """Pins the bug itself: without the drop, C comes back as a {"C"} cluster.
+
+    If this ever stops emitting the singleton, the comparison tests below have
+    silently become no-ops and must be re-derived rather than trusted.
+    """
+    before = _SingletonEmittingCorrelationClusterer(threshold=0.5)
+    assert before.cluster(_STRANDING_JUDGEMENTS) == [{"A", "B", "D"}, {"C"}]
+
+
+def test_stranded_record_is_absent_not_a_singleton() -> None:
+    """The shipped clusterer drops it -- same shape the base Clusterer produces."""
+    clusters = CorrelationClusterer(threshold=0.5).cluster(_STRANDING_JUDGEMENTS)
+
+    assert clusters == [{"A", "B", "D"}]
+    assert all(len(cluster) > 1 for cluster in clusters)
+
+
+def test_base_clusterer_never_emits_a_size_one_cluster_on_this_input() -> None:
+    """The shape the pivot clusterer is being held to, asserted on the base."""
+    clusters = Clusterer(threshold=0.5).cluster(_STRANDING_JUDGEMENTS)
+
+    assert all(len(cluster) > 1 for cluster in clusters)
+
+
+def test_a_self_pair_is_the_one_input_where_the_two_shapes_still_differ() -> None:
+    """The documented exception, pinned -- and the base clusterer is the odd one out.
+
+    An accepted ``left_id == right_id`` judgement reaches ``nx.add_edge(x, x)``,
+    so the base Clusterer returns a ``{x}`` singleton; ``CorrelationClusterer``
+    skips self-pairs in ``_build_adjacency`` and returns nothing.
+
+    Neither shipped blocker emits a self-pair (``AllPairsBlocker`` pairs only
+    ``i < j``; ``VectorBlocker._neighbor_columns`` drops the anchor by identity),
+    so this is a contract difference reachable via duplicate ids or a custom
+    blocker -- not something a default pipeline hands you. This test is what
+    makes the divergence a documented fact rather than a claim in prose.
+
+    Deliberately not "fixed": teaching the base clusterer to drop self-pairs
+    would change the DEFAULT path's behaviour. Pinned here so the asymmetry stays
+    a documented, deliberate exception rather than quietly becoming a surprise.
+    """
+    self_pair = [_j("X", "X", 0.99)]
+
+    assert Clusterer(threshold=0.5).cluster(self_pair) == [{"X"}]
+    assert CorrelationClusterer(threshold=0.5).cluster(self_pair) == []
+
+
+def _random_judgements(rng: random.Random, n_ids: int, n_edges: int) -> list[PairwiseJudgement]:
+    ids = [f"r{i}" for i in range(n_ids)]
+    out = []
+    for _ in range(n_edges):
+        left, right = rng.sample(ids, 2)
+        out.append(_j(left, right, rng.random()))
+    return out
+
+
+def test_dropping_singletons_does_not_move_any_measured_number() -> None:
+    """The completed partitions are IDENTICAL, so every metric over them is too.
+
+    This is why the portfolio numbers quoted in ``CorrelationClusterer``'s
+    docstring (``docs/research/20260727_closure_diagnostic.md``: better BCubed F1
+    at 36 of 45 scored grid points, tied 9, worse 0) survive this change rather
+    than needing a re-run. The harness scores
+    ``complete_partition(clusters, all_ids)``, which restores every id not in a
+    predicted cluster as its own singleton -- so a singleton the clusterer drops
+    is put straight back before anything is measured.
+
+    Checked over a randomized battery, not one hand-picked graph, and compared
+    against the pre-fix loop above so the assertion has a way to fail.
+    """
+    rng = random.Random(20260727)
+    before = _SingletonEmittingCorrelationClusterer(threshold=0.5)
+    after = CorrelationClusterer(threshold=0.5)
+    saw_a_dropped_singleton = False
+
+    for _ in range(200):
+        n_ids = rng.randint(2, 12)
+        judgements = _random_judgements(rng, n_ids, rng.randint(1, 18))
+        all_ids = [f"r{i}" for i in range(n_ids)]
+
+        old = before.cluster(judgements)
+        new = after.cluster(judgements)
+        if len(old) != len(new):
+            saw_a_dropped_singleton = True
+
+        # Set-of-frozensets: the completed partitions differ at most in ORDER
+        # (a restored singleton is appended last), and every metric here is
+        # order-independent over the cluster list.
+        assert {frozenset(c) for c in complete_partition(old, all_ids)} == {
+            frozenset(c) for c in complete_partition(new, all_ids)
+        }
+
+    assert saw_a_dropped_singleton, "battery never hit the case under test"
+
+
+def test_bcubed_and_pairwise_are_unchanged_on_the_stranding_case() -> None:
+    """The metric-level statement of the same fact, on the known-stranding input."""
+    gold = [{"A", "B"}, {"C", "D"}]
+    before = _SingletonEmittingCorrelationClusterer(threshold=0.5).cluster(_STRANDING_JUDGEMENTS)
+    after = CorrelationClusterer(threshold=0.5).cluster(_STRANDING_JUDGEMENTS)
+
+    assert before != after  # the inputs to the metric really do differ
+
+    assert evaluate_clustering(complete_partition(before, _ALL_IDS), gold) == evaluate_clustering(
+        complete_partition(after, _ALL_IDS), gold
+    )
+
+
+def test_rejected_pairs_inside_clusters_is_unchanged_by_the_drop() -> None:
+    """The other diagnostic column: a one-node cluster can hold no pair at all.
+
+    ``rejected-inside`` counts pairs whose two ids share an output cluster, so a
+    size-1 cluster contributes zero by construction and dropping it cannot move
+    the count. Asserted rather than argued.
+    """
+    rng = random.Random(4242)
+    before = _SingletonEmittingCorrelationClusterer(threshold=0.5)
+    after = CorrelationClusterer(threshold=0.5)
+
+    def in_cluster_pairs(clusters: list[set[str]]) -> set[frozenset[str]]:
+        return {
+            frozenset((left, right))
+            for cluster in clusters
+            for left in cluster
+            for right in cluster
+            if left != right
+        }
+
+    for _ in range(100):
+        n_ids = rng.randint(2, 12)
+        judgements = _random_judgements(rng, n_ids, rng.randint(1, 18))
+        assert in_cluster_pairs(before.cluster(judgements)) == in_cluster_pairs(
+            after.cluster(judgements)
+        )

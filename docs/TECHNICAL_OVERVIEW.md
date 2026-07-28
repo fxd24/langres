@@ -1111,14 +1111,94 @@ its pivot order, `CorrelationClusterer` uses the judgement's `score`, falling ba
 to `confidence`, then a unit `1.0` — so a bare "Yes" decision (no score) is still a
 full-strength edge, never a silent zero that would drop the merge.
 
-**Not the default.** Benchmarked head-to-head against the base `Clusterer` on
-Fodors-Zagat + Amazon-Google (same blocking + judge pipeline, only the
-clusterer differs): a wash on Fodors-Zagat (+0.0006 BCubed F1), a clear win
-on Amazon-Google (+0.0324 BCubed F1, +0.0715 precision at −0.016 recall) —
-see `examples/research/w1_blocking_algebra_output.md` for the full tables and the
-default-flip decision (kept opt-in; recommended for harder/messier
-entity-resolution problems, not flipped globally on a single hard-dataset
-win).
+**Same output shape as the base `Clusterer`.** Every returned cluster holds at
+least two ids. Two situations collapse to that one convention, and both mean
+"this record merged with nothing": a record with no qualifying edge never enters
+the adjacency map (identical to the base `Clusterer`, whose graph an unmerged
+record never enters), and a record *with* a qualifying edge whose neighbours an
+earlier pivot already claimed forms a one-node cluster mid-algorithm, which is
+dropped. That keeps the `dedupe()` contract above — the multi-record clusters,
+singletons left out — true for either clusterer, so for judgements with distinct
+ids opting in changes your *partition* without changing your output *shape*.
+
+Two honest caveats. **Self-pairs are the one input where the two still differ,
+and there the base clusterer is the odd one out**: a `left_id == right_id`
+judgement clearing the threshold becomes `nx.add_edge(x, x)`, so the base
+`Clusterer` returns a `{x}` singleton while `CorrelationClusterer` skips
+self-pairs and returns nothing. It is left alone on purpose, since changing it
+would alter the default path's behaviour. Note that neither shipped blocker
+produces this input — `AllPairsBlocker` pairs only positions `i < j`, and
+`VectorBlocker` drops the anchor's self-match by identity to avoid exactly this —
+so it takes duplicate ids or a custom blocker to reach. And the
+shape is a property of these two implementations, **not** an invariant the model
+enforces: a custom `Clusterer` subclass that emits singletons has them passed
+through unchanged.
+
+#### How to opt in
+
+Pass it to the `clusterer=` of an architecture that exposes one — `FuzzyString`,
+`VectorLLMCascade`, and the four retrieval recipes (`Retrieve`, `RetrieveLLM`,
+`RetrieveRerank`, `RetrieveRerankLLM`) — or set the `clusterer` slot on a
+`Resolver`/`ERModel` directly. **`Reranker` is the exception**: it hardcodes its
+cluster stage, so passing `clusterer=` there is a `TypeError`, not an opt-in.
+
+```python
+from langres.architectures import FuzzyString
+from langres.core.clusterers import CorrelationClusterer
+
+result = FuzzyString(threshold=0.55, clusterer=CorrelationClusterer()).dedupe(records)
+```
+
+`clusterer=` selects the **algorithm** only. The clusterer is rebuilt at the
+model's own `threshold`, so a threshold set on the object you pass is ignored and
+`threshold=` remains the single match cut (the value `DedupeResult.threshold`
+reports). Swapping the clusterer does not mint a new architecture — that result
+is still a `FuzzyString`.
+
+**Recommended, and still not the default.** The default is unchanged; that is a
+deliberate product decision, not an absence of evidence. Measured over 9
+benchmarks against the default transitive-closure `Clusterer` on the identical
+judgement set (`docs/research/20260727_closure_diagnostic.md`; the earlier
+2-dataset study is at `examples/research/w1_blocking_algebra_output.md`):
+
+| | result |
+|---|---|
+| BCubed F1 vs closure, over 54 grid points | **higher at 36 of the 45 scored**, tied at 9, lower at **0** |
+| the other 9 grid points | **unscorable** — closure's giant component was too large to score, which is itself the result |
+| judged-and-*rejected* pairs inside an output cluster, tuned point | **3,776 → 676** across the portfolio (5.6×; per benchmark, 3.0×–7.4×) |
+| worst single benchmark for closure | `amazon_google` contributes **944** of that 3,776 — and those 944 are **39.8% of every pair sharing one of its own output clusters** (pivot: 128, 14.8%) |
+
+**What this was measured on.** One **$0 scorer** (`rapidfuzz`) and **one split
+seed** (0). The diagnostic says a matcher with a different error profile — a
+decider LLM in particular — "could move the numbers", and that the *ordering*
+surviving is "a hypothesis, not a measurement". The chaining mechanism is
+structural and scorer-independent; these magnitudes are not, so do not read them
+as a measurement of a paid LLM pipeline. Those runs also **predate the singleton
+drop described above**, so a re-run could report different cluster *counts* for
+pivot — but none of the numbers in this table can move, since a size-1 cluster
+contributes zero pairs and the harness restores unlisted ids via
+`complete_partition` before scoring.
+
+The 3,776 is the **portfolio** total, not one dataset's; the 39.8% is a rate over
+`amazon_google`'s in-cluster pairs, not a share of the 3,776. The largest effect is
+not at the tuned point at all: one grid step below it closure collapses into a
+giant component (on `walmart_amazon` at t = 0.50, 6,798 of the 7,386-record split
+in a single cluster) while pivot degrades smoothly. **Closure's quality is a
+cliff; pivot's is a slope** — which matters most when the threshold was guessed
+rather than derived from labels.
+
+**What it does not do.** It mitigates *chaining*; it does **not** consume
+negative evidence. Rejected edges are discarded before pivoting, exactly as the
+base `Clusterer` discards them — so a pair your matcher was paid to reject can
+still land inside one cluster, just far less often. Pricing negatives into the
+objective is a different clusterer (`docs/THEORY.md` §7), not this one.
+
+**On the citation.** The pivot order here is *deterministic* (highest incident
+score first, ties by node id), not the uniformly random pivot of
+Ailon–Charikar–Newman. Their 3-approximation bound is a property of that
+randomization and does **not** transfer to this implementation. The determinism
+is deliberate — reproducible without a seed — it is simply not an approximation
+guarantee.
 
 ## 10. Self-tuning: the autoresearch loop (`langres.optimize`)
 
