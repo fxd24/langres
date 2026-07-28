@@ -96,6 +96,7 @@ import argparse  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import time  # noqa: E402
+from collections.abc import Iterator  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Protocol, cast  # noqa: E402
 
@@ -348,21 +349,25 @@ def run_cell(
 
 def run_benchmark(
     name: str, *, methods: tuple[str, ...], seeds: tuple[int, ...]
-) -> list[CellResult]:
+) -> Iterator[CellResult]:
     """Run every (method, seed) cell for one registered benchmark.
+
+    Yields rather than returns so that a cell raising midway does not take the
+    cells already measured down with it: on ``dblp_scholar`` a cell costs ~7
+    minutes, and a returned list would be lost entirely if seed 2 failed after
+    seeds 0 and 1 succeeded. The caller persists each cell as it arrives.
 
     Args:
         name: Registry name (must be ``loadable``).
         methods: $0 method names.
         seeds: Corpus-split seeds.
 
-    Returns:
-        One :class:`CellResult` per (method, seed) that completed.
+    Yields:
+        One :class:`CellResult` per (method, seed), as each completes.
     """
     bench = cast(_StudyBenchmark, get_benchmark(name))
     corpus, gold_clusters, gold_pairs = bench.load()
 
-    results: list[CellResult] = []
     for method in methods:
         for seed in seeds:
             result = run_cell(
@@ -374,7 +379,6 @@ def run_benchmark(
                 gold_clusters=gold_clusters,
                 gold_pairs=gold_pairs,
             )
-            results.append(result)
             print(
                 f"       {method} seed={seed}: "
                 f"incumbent {result.incumbent_threshold:.2f} "
@@ -384,7 +388,7 @@ def run_benchmark(
                 f"Δ={result.delta_f1_blocked:+.4f} ({result.seconds:.1f}s)",
                 flush=True,
             )
-    return results
+            yield result
 
 
 def to_markdown(results: list[CellResult]) -> str:
@@ -582,14 +586,22 @@ def main() -> None:
         )
     out: Path = args.out if args.out is not None else CANONICAL_OUT
 
+    # Durability and publication are deliberately two different files. Cells are
+    # persisted to the scratch path as they land (the large datasets take minutes
+    # each; a crash must not throw away what is already measured), but ``out`` --
+    # the TRACKED artifact the write-up cites -- is only written once the whole
+    # sweep has succeeded. Writing partial results straight to ``out`` is the same
+    # hazard the --fast/--only guard above refuses: a subset silently replacing
+    # the portfolio, indistinguishable afterwards from a complete run.
+    scratch = out.with_name(out.name + ".partial")
     results: list[CellResult] = []
     failures: list[str] = []
     for name in select_benchmarks(fast=args.fast, only=args.only):
         print(f"[run] {name}: {' '.join(args.methods)} ($0 spend) ...", flush=True)
         try:
-            results.extend(
-                run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds))
-            )
+            for result in run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds)):
+                results.append(result)
+                write_results(results, scratch)
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
             # ``exception`` (not ``error``): a benchmark that drops out is absent
             # from both the table and the tracked JSON, so the traceback in the
@@ -598,16 +610,20 @@ def main() -> None:
             print(f"[fail] {name}: {type(exc).__name__}: {exc}", flush=True)
             failures.append(f"{name} ({type(exc).__name__})")
             continue
-        # Persist after EVERY benchmark: the large datasets take minutes and a
-        # crash on the last one must not throw away the ones already measured.
-        write_results(results, out)
 
     print()
     print_tables(results)
     print()
-    print(f"[out] {out}")
     if failures:
+        # Non-zero, and ``out`` untouched: an incomplete sweep must not look like
+        # a complete one to either a human or a CI step.
         print(f"[fail] {len(failures)} benchmark(s) did not complete: {', '.join(failures)}")
+        print(f"[partial] {len(results)} cell(s) kept at {scratch}; {out} NOT updated")
+        raise SystemExit(1)
+
+    write_results(results, out)
+    scratch.unlink(missing_ok=True)
+    print(f"[out] {out} ({len(results)} cells)")
 
 
 if __name__ == "__main__":

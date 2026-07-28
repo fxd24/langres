@@ -486,9 +486,11 @@ should default to `0.7`.
 
    ```python
    #: The no-information match cut: the midpoint of a [0, 1] score, used when
-   #: nothing has been measured. NOT a calibrated value — see
-   #: docs/research/20260728_threshold_default.md, where the measured optimum is
-   #: 0.62–0.70 for rapidfuzz and 0.83–0.96 for cosine on every benchmark tested.
+   #: nothing has been measured. NOT a calibrated value, and NOT one number that
+   #: fits every score family — across 9 benchmarks the derived cut ranged over
+   #: 0.81–0.95 for embedding cosine but 0.17–0.70 for rapidfuzz, so no single
+   #: constant is right for both (and none is right for rapidfuzz alone).
+   #: Measurements: docs/research/20260728_threshold_default.md §5.2.
    #: Derive yours: fit(pairs=..., derive_threshold=True).
    DEFAULT_MATCH_THRESHOLD = 0.5
    ```
