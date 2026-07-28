@@ -25,8 +25,10 @@ is the deliverable; changing a default is a separate PR.*
 
 ## 0. TL;DR
 
-**54 cells** — 9 loadable benchmarks × 2 $0 scorers × seeds 0/1/2 — every number
-graded on a corpus-disjoint held-out split.
+**54 cells** — the 9 benchmarks loadable on 2026-07-28 × 2 $0 scorers × seeds
+0/1/2 — every number graded on a corpus-disjoint held-out split. All nine are
+`task="linkage"`; the portfolio's first `task="dedup"` entry landed after this
+ran (see §1).
 
 - **(a) `fit(derive_threshold=True)` beats `0.5` almost everywhere.** 45 cells
   improve, 7 tie exactly (the race declined, so the threshold did not move),
@@ -82,8 +84,15 @@ graded on a corpus-disjoint held-out split.
 
 ## 1. Method
 
-For every registered, **loadable** benchmark (9 of the 10 entries; `opensanctions`
-is external-only and never vendored), for two $0 scorers and three seeds:
+For every registered, **loadable** benchmark **as the registry stood on
+2026-07-28** (9 of the 10 entries then registered; `opensanctions` is
+external-only and never vendored), for two $0 scorers and three seeds:
+
+> **The portfolio has grown since.** `febrl_dedup` (PR #248) landed after this
+> sweep ran, so it is **not** among the 54 cells — and it is the registry's only
+> `task="dedup"` entry, so nothing here speaks to deduplication. Re-running the
+> harness today sweeps the larger portfolio and produces more cells than the
+> committed artifact; that is expected, not a mismatch.
 
 1. Split the corpus with the benchmark's own `Benchmark.split(seed=…)` —
    `stratified_corpus_split`, which assigns **whole gold clusters** to one side,
