@@ -15,6 +15,36 @@ intervals are paired bootstraps resampled **by gold cluster**.
 
 ---
 
+## The answer, in four lines
+
+1. **Yes, instructions help — but only the checkpoint's own *retrieval* prefix.**
+   EmbeddingGemma's documented Retrieval pair is the only arm in the sweep that is
+   positive and clear of zero on all three unsaturated benchmarks
+   (`wdc_computers` recall `0.7786 → 0.8128`). bge's documented query instruction
+   is worth **+0.1224** recall on the same benchmark.
+2. **"Documented" is NOT sufficient — this is the trap.** Gemma's `clustering`
+   template is every bit as official as its retrieval one and costs **−0.3183**
+   recall on `wdc_computers`. Anyone skimming for "use the official prompt" will
+   take away the wrong instruction. You must use the checkpoint's *retrieval*
+   template, and you must verify it on your data.
+3. **Writing a better English instruction does not work.** Our ER-specific
+   sentence — a strictly more accurate description of blocking than "retrieve
+   passages answering a query" — costs up to **−0.1038** on e5 and **−0.1589**
+   when dropped into Gemma's own template shape. The lever is the *trained*
+   prefix, not better prose.
+4. **The effect is strongly model-specific**, which is why nothing here is
+   averaged. The same instruction is +0.0474 on one model and −0.0701 on another
+   for the same benchmark. A non-instruction-trained control gained nothing
+   anywhere.
+
+**The operating rule: drive the sides the checkpoint was trained on.** *Not*
+"always drive both halves" — that sounds sensible and is wrong. For bge and Qwen3
+the documented recipe is **query-side only, document side deliberately bare**, and
+for bge that one-sided recipe produces the largest gain measured here. §4.4 has
+the numbers.
+
+---
+
 ## 1. What each model's own documentation prescribes
 
 Every string below was read from the checkpoint as its author published it — the
@@ -120,9 +150,22 @@ Full per-model × per-benchmark tables with all four `k` values are in
 across models** — the whole question was whether the effect is model-specific,
 and it emphatically is.
 
+### A note on the saturated benchmark, because it earned its keep
+
 `fodors_zagat` is **saturated**: every model reaches recall `1.0000` at `k=20`
-with no prompt at all, so it can only detect harm, never benefit. It is a
-control, not evidence. (It did detect harm once — see Gemma's `clustering` arm.)
+with no prompt at all, so it can only ever detect *harm*, never benefit. The
+usual move is to drop such a benchmark from a portfolio as signal-free.
+
+That would have been a mistake here. Of the 25 arms measured against it, exactly
+one moved it — Gemma's documented `clustering` template, `1.0000 → 0.9375`
+[−0.1161, −0.0268] — and that is the same arm that turned out to be catastrophic
+(**−0.3183**) on `wdc_computers`. The saturated benchmark acted as a clean
+**harm detector**: silence from it means "this arm is not catastrophic", and its
+one non-zero reading flagged the single worst configuration in the sweep.
+
+Generalisable: keep saturated benchmarks in a portfolio as harm detectors. They
+carry no ranking information, but a regression that breaks a benchmark nothing
+else could break is worth catching, and their silence is cheap.
 
 ### 4.1 The headline: the checkpoint's own *retrieval* prefix is the lever
 
