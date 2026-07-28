@@ -474,27 +474,33 @@ PC is *expected* and is not evidence of anything.
 VERDICT = """
 ## G. Verdict
 
-**Yes, on the benchmarks where the comparison is actually clean — and the ones where
-it is not are exactly the ones where our gold set is smaller than theirs.**
+**Yes. On every benchmark where our ground truth matches a paper's, we land within
+0.7–1.5 pp of the published value for the same candidate budget — with one outlier we
+cannot explain, on which we instead match three *other* methods in the same table.**
 
-### The three benchmarks that settle it
+### The two benchmarks that settle it
 
-A comparison is clean only when our gold set matches the paper's. On three of them it
-effectively does, and those carry the whole verdict:
+A PC comparison is clean only when our gold set matches the paper's, which rules out
+the three product benchmarks. Two remain, and they carry the verdict:
 
-- **`dblp_scholar` vs DeepBlocker Table 6 (DBLP-Google1).** Every quantity lines up
-  before any measurement: |A| = 2,616, |B| = 64,263, gold = 5,347 pairs — *identical*
-  to their Table 4 `#Matches` — and at their K = 150 our candidate set is 150 x 2,616
-  = 392,400 against their printed `392.4k`. Same tables, same gold, same budget, same
-  metric. This is the strongest datapoint here, and it is a **near-hit against a
-  trained blocker using an untrained one**.
+- **`dblp_scholar` vs DeepBlocker Table 6 (DBLP-Google1)** — the strongest datapoint
+  here. Every quantity lines up before any measurement: |A| = 2,616, |B| = 64,263,
+  gold = 5,347 pairs — *identical* to their Table 4 `#Matches` — and at their K = 150
+  our candidate set is 150 x 2,616 = 392,400 against their printed `392.4k`. Same
+  tables, same gold, same budget, same metric. We measure **98.82%** against their
+  published **98.1%**: a 0.72 pp difference, with an *untrained* embedder against
+  their *trained* Autoencoder.
 - **`dblp_acm` vs UniBlocker Table 3, STransformer column.** Our gold is 2,220 against
   their 2,224 (-0.18%), and the STransformer column is the same checkpoint we ran. At
-  their k = 1 we land slightly *above* their printed PC and PQ.
-- **`fodors_zagat` vs UniBlocker Table 3.** Gold identical at 112 pairs. Our PQ at
-  k = 1 reproduces their printed PQ **to the digit**. That is arithmetic rather than
-  luck — it pins |A| = 533 and confirms `PQ = hits / (k * |A|)` — which is precisely
-  why it is good evidence about the *harness* rather than about the model.
+  their k = 1 we measure **96.76 / PQ 82.11** against their **95.28 / 81.00** — 1.48 pp
+  and 1.11 pp above, on a bound only 4 pairs wide.
+
+**`fodors_zagat` proves the protocol but not the model.** Its gold set is identical
+(112 pairs) and our PQ at k=1 reproduces UniBlocker's printed PQ **to the digit**
+(20.83 and 21.01). That is arithmetic rather than luck — it pins |A| = 533 and confirms
+`PQ = hits / (k * |A|)` — so it is strong evidence the *harness* computes their
+quantity. It is not evidence about the model, because our PC there sits 5.4 pp above
+their STransformer row (see below).
 
 ### The like-for-like test: 4 of 6 published values land inside our bound
 
@@ -516,8 +522,10 @@ measured". For the same checkpoint:
 Four are consistent outright. `dblp_acm` misses by 1.3 pp on a bound only 4 pairs wide
 — that is a real but small residual, not a category error.
 
-`fodors_zagat` is the one genuine outlier, and it is *their* column that is odd, not
-ours: on that benchmark UniBlocker's own table reports DeepBlocker at **100.00**,
+`fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
+theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
+It is *their* column that looks odd rather than ours: UniBlocker's own table reports
+DeepBlocker at **100.00**,
 Sudowoodo at **99.11** and UniBlocker at **100.00**, with STransformer alone at
 **93.75**. We measure **100.00** (`all-MiniLM-L6-v2`) and **99.11 / PQ 20.83**
 (`all-mpnet-base-v2`) — landing on their *other three* rows rather than their
@@ -606,9 +614,10 @@ measurement that the ceiling accounts for the whole distance to the published li
 
 It licenses saying: **langres's blocking harness measures the same quantity the
 blocking literature measures.** Four of six published values for the same checkpoint
-are reachable from what we measured; the fifth misses by 1.3 pp; on the two benchmarks
-where the gold set is identical to a paper's we land 0.72–1.32 pp from their published
-recall at their exact candidate budget. Nothing in these results is consistent with a
+are reachable from what we measured; `dblp_acm` misses by 1.3 pp; and on
+`dblp_scholar` — where our gold set is *exactly* DeepBlocker's 5,347 pairs and our
+candidate set is *exactly* their 392,400 — we land 0.72 pp from their published recall.
+Nothing in these results is consistent with a
 semantic bug in the harness — a wrong split, a wrong pair set or a wrong metric would
 not produce agreement at this resolution across six benchmarks and two protocols.
 
