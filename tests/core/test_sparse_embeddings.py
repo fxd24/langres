@@ -7,7 +7,6 @@ import pytest
 from langres.core.embeddings import (
     FakeSparseEmbedder,
     FastEmbedSparseEmbedder,
-    SparseEmbeddingProvider,
 )
 
 logger = logging.getLogger(__name__)

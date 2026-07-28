@@ -87,7 +87,7 @@ def _wrongly_merged_pairs(
 
 def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
     """A-D: in-process save/load round-trip, accuracy, over-merge, provenance."""
-    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core import Clusterer, Resolver
     from langres.core.blockers import AllPairsBlocker
     from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
@@ -140,7 +140,7 @@ def test_resolver_roundtrip_in_process(tmp_path: Path) -> None:
 
 def test_resolver_roundtrip_fresh_process(tmp_path: Path) -> None:
     """E: reload in a fresh subprocess to catch registry/import side-effects."""
-    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core import Clusterer, Resolver
     from langres.core.blockers import AllPairsBlocker
     from langres.core.matchers import WeightedAverageMatcher
     from langres.core.models import CompanySchema
@@ -440,7 +440,7 @@ def test_resolver_load_warns_on_langres_version_skew(
 
 def _vector_resolver() -> "object":
     """Build a Resolver over a VectorBlocker + FAISSIndex (FakeEmbedder, fast)."""
-    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core import Clusterer, Resolver
     from langres.core.blockers import VectorBlocker
     from langres.core.embeddings import FakeEmbedder
     from langres.core.indexes import FAISSIndex
@@ -519,7 +519,7 @@ def _composite_vector_resolver(op: str = "union") -> "object":
     "recall-first key + vector union" pattern documented in the blocking-algebra
     example and TECHNICAL_OVERVIEW.
     """
-    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core import Clusterer, Resolver
     from langres.core.blockers import CompositeBlocker, KeyBlocker, VectorBlocker
     from langres.core.embeddings import FakeEmbedder
     from langres.core.indexes import FAISSIndex
@@ -575,7 +575,7 @@ def test_resolver_builds_vector_index_nested_two_levels_deep_in_composite_blocke
     just one level -- a CompositeBlocker may itself wrap another CompositeBlocker
     (e.g. union of two intersections).
     """
-    from langres.core import Clusterer, Comparator, Resolver
+    from langres.core import Clusterer, Resolver
     from langres.core.blockers import CompositeBlocker, KeyBlocker, VectorBlocker
     from langres.core.embeddings import FakeEmbedder
     from langres.core.indexes import FAISSIndex
@@ -957,7 +957,6 @@ def test_resolver_round_trips_glinker_adapter_slot(tmp_path: Path) -> None:
     ``stream``/``forward``.
     """
     from langres.core import Clusterer, Resolver
-    from langres.core.blockers import AllPairsBlocker
     from langres.core.matchers import WeightedAverageMatcher
     from langres.core.adapters.glinker import GLinkerAdapter, GLinkerConfig
     from langres.core.feature import FeatureSpec

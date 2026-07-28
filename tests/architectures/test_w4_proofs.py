@@ -44,7 +44,7 @@ from pydantic import BaseModel
 
 from langres.architectures import FuzzyString, VectorLLMCascade
 from langres.core.matcher import Matcher
-from langres.core.models import ERCandidate, PairwiseJudgement
+from langres.core.models import PairwiseJudgement
 from langres.core.registry import model_type_name
 from langres.core.resolver import ERModel
 from langres.core.spend import BudgetExceeded

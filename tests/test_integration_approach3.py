@@ -8,7 +8,6 @@ This test validates the complete pipeline:
 """
 
 import logging
-import os
 from unittest.mock import Mock
 
 import pytest

@@ -27,7 +27,7 @@ from pydantic import (
 
 from langres._version import __version__ as LANGRES_VERSION
 from langres.core.model_ref import IN_PROCESS_KINDS, ModelRef, normalize_model_ref, to_config
-from langres.core.serialization import ArtifactManifest, ArtifactSource, ComponentSpec
+from langres.core.serialization import ArtifactManifest, ComponentSpec
 
 BUNDLE_VERSION = "1"
 BUNDLE_MANIFEST = "langres-artifact.json"

@@ -1396,20 +1396,6 @@ class TestBlockerEvaluationReportPlotting:
         assert report.summary["candidate_recall"] == original_recall
 
 
-"""Tests for BlockerEvaluationReport.to_markdown() recommendations feature."""
-
-import pytest
-
-from langres.core.reports import (
-    BlockerEvaluationReport,
-    CandidateMetrics,
-    RankingMetrics,
-    RankMetrics,
-    RecallCurveStats,
-    ScoreMetrics,
-)
-
-
 class TestBlockerEvaluationReportRecommendations:
     """Test BlockerEvaluationReport.to_markdown() recommendations feature."""
 

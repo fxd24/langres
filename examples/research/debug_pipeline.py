@@ -104,7 +104,7 @@ def main() -> None:
     print(f"True match mean: {score_stats.true_match_mean:.3f}")
     print(f"Non-match mean: {score_stats.non_match_mean:.3f}")
     print(f"Separation: {score_stats.separation:.3f}")
-    print(f"  ⚠️  Negative separation indicates poor calibration!")
+    print("  ⚠️  Negative separation indicates poor calibration!")
     print()
 
     # Step 3: Analyze clustering

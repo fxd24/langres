@@ -15,7 +15,6 @@ from qdrant_client.models import (
     Prefetch,
     ScoredPoint,
     SparseVector,
-    VectorParams,
 )
 
 from langres.core.embeddings import (

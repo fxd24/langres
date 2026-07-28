@@ -4,12 +4,10 @@ Tests the inspection capabilities of AllPairsBlocker, which generates
 all possible entity pairs (n*(n-1)/2 candidates).
 """
 
-import pytest
 from pydantic import BaseModel
 
 from langres.core.blockers.all_pairs import AllPairsBlocker
-from langres.core.models import CompanySchema, ERCandidate
-from langres.core.reports import CandidateInspectionReport
+from langres.core.models import CompanySchema
 
 
 class SimpleEntity(BaseModel):

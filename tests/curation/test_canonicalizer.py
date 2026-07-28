@@ -14,7 +14,6 @@ import pytest
 
 from langres.curation.canonicalizer import Canonicalizer
 from langres.curation.canonicalizer import (
-    CANONICALIZER_VERSION,
     DEFAULT_STRATEGY,
     FieldContext,
     _is_missing,

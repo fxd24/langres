@@ -49,7 +49,7 @@ from typing import Any
 import optuna
 from pydantic import BaseModel, Field
 
-from langres.clients import create_llm_client, create_wandb_tracker
+from langres.clients import create_llm_client
 from langres.clients.settings import Settings
 from langres.core.blockers.vector import VectorBlocker
 from langres.core.clusterer import Clusterer
