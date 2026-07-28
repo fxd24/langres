@@ -318,6 +318,57 @@ class TestStaleCacheCanary:
         assert "before this check existed" in str(excinfo.value)
         assert "canary_ns.db" in str(excinfo.value)
 
+    def test_the_refusal_is_not_bypassed_by_running_it_again(self, tmp_path: Path) -> None:
+        """A refused run must leave the namespace exactly as it found it.
+
+        The first draft asked "is the canary here?" by *encoding* it, which
+        answers the question by changing it: the refused run deposited a canary,
+        so the second run found one present and sailed through. A refusal you get
+        past by running it twice is not a refusal.
+        """
+        embedder = _SwappableEmbedder()
+        legacy = self._cached(embedder, tmp_path)
+        legacy.encode(["some corpus text"])
+        entries_before = LADDER._cache_entry_count(tmp_path / "canary_ns.db")
+
+        for _attempt in range(2):
+            with pytest.raises(LADDER.StaleEmbeddingCacheError):
+                LADDER._assert_cache_matches_checkpoint(
+                    embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+                )
+
+        assert LADDER._cache_entry_count(tmp_path / "canary_ns.db") == entries_before
+
+    def test_adopting_a_legacy_cache_vouches_once_and_keeps_checking(self, tmp_path: Path) -> None:
+        """``--trust-existing-cache`` is a one-time assertion, not an off switch.
+
+        The refusal above is retroactive: every namespace written before the
+        canary existed would demand a full re-measure of a cache the operator may
+        know is current. So adoption exists — but if it also disabled the check
+        from then on, it would be an off switch wearing a one-time label, and the
+        namespace would go unverified forever. This is the test that tells those
+        two apart.
+        """
+        embedder = _SwappableEmbedder(weights=1.0)
+        legacy = self._cached(embedder, tmp_path)
+        legacy.encode(["some corpus text"])
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, adopt_legacy=True
+        )
+
+        # Adoption pinned the canary, so a later run needs no flag...
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+        # ...and a checkpoint swap after adoption is still caught.
+        embedder.weights = 2.0
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
 
 class TestPersistence:
     def test_rerunning_a_model_replaces_its_rows_instead_of_appending(self) -> None:

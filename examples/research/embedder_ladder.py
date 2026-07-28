@@ -651,8 +651,33 @@ def _cache_entry_count(db_path: Path) -> int:
         return int(conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
 
 
+def _canary_is_cached(cached: Any, db_path: Path) -> bool:
+    """Is the canary already in ``db_path``, *without* putting it there?
+
+    Asking by encoding would answer the question by changing it: a legacy
+    namespace would gain a canary row on the very run that refuses it, and the
+    NEXT run would then find a canary present and pass — so re-running would
+    bypass the refusal. The refusal has to be idempotent, which means reading the
+    key rather than writing it.
+
+    Uses ``DiskCachedEmbedder._hash_text``, which is private, on purpose: the
+    whole point is to ask for *the exact key the cache would use*, including its
+    embedder discriminator. Re-deriving it here would be a second implementation
+    of the key, free to drift from the first — the failure mode this file keeps
+    arguing against.
+    """
+    import sqlite3
+
+    if not db_path.exists():
+        return False
+    key = cached._hash_text(_CANARY_TEXT)
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT 1 FROM embeddings WHERE text_hash = ?", (key,)).fetchone()
+    return row is not None
+
+
 def _assert_cache_matches_checkpoint(
-    base: Any, cached: Any, namespace: str, cache_dir: Path
+    base: Any, cached: Any, namespace: str, cache_dir: Path, *, adopt_legacy: bool = False
 ) -> None:
     """Stop the run if the warm cache no longer agrees with the loaded checkpoint.
 
@@ -684,6 +709,16 @@ def _assert_cache_matches_checkpoint(
     reintroduced one level up, so the entry count is read *before* the canary is
     written: a non-empty namespace with no canary in it is refused outright.
 
+    Args:
+        adopt_legacy: Vouch for an existing unverified namespace instead of
+            refusing it (``--trust-existing-cache``). This exists because the
+            refusal above is otherwise retroactive: every namespace written
+            before this check — 1.8 GB and hours of encoding, for the ladder as
+            it stands — has no canary and would demand a full re-measure of a
+            cache the operator knows is current. It vouches **once**: the canary
+            written during adoption pins the checkpoint, so the next run is
+            checked normally. It is a human assertion, and it is logged as one.
+
     Raises:
         StaleEmbeddingCacheError: Naming the namespace file to delete. Deliberately
             fatal rather than a warning: the failure it guards against is one that
@@ -694,21 +729,36 @@ def _assert_cache_matches_checkpoint(
     db_path = cache_dir / f"{namespace}.db"
     before = _cache_entry_count(db_path)
 
-    from_cache = np.asarray(cached.encode([_CANARY_TEXT])[0], dtype=np.float64)
-
-    # The canary was a MISS if encoding it added a row. On an empty namespace
-    # that is the ordinary first run; on a populated one it means the cache was
-    # written before this check existed and nothing in it has ever been verified.
-    if _cache_entry_count(db_path) > before and before > 0:
-        raise StaleEmbeddingCacheError(
-            f"the embedding cache for namespace {namespace!r} holds {before} vectors "
-            f"written before this check existed, so nothing in it has ever been "
-            f"verified against a checkpoint. It may predate an upstream re-upload, "
-            f"and a run using it would publish rows mixing two checkpoints. Delete "
-            f"{db_path} and re-measure this model; the cache it writes will be "
-            f"checked from its first run onward."
+    # Asked WITHOUT writing, so a refused run leaves the namespace exactly as it
+    # found it. Encoding first would answer the question by changing it: the
+    # refused run would deposit a canary, and the next run would find one present
+    # and sail through -- a refusal you get past by running it twice.
+    if before > 0 and not _canary_is_cached(cached, db_path):
+        if not adopt_legacy:
+            raise StaleEmbeddingCacheError(
+                f"the embedding cache for namespace {namespace!r} holds {before} vectors "
+                f"written before this check existed, so nothing in it has ever been "
+                f"verified against a checkpoint. It may predate an upstream re-upload, "
+                f"and a run using it would publish rows mixing two checkpoints. Delete "
+                f"{db_path} and re-measure this model; the cache it writes will be "
+                f"checked from its first run onward. If you know this cache was written "
+                f"by the checkpoint loaded now, pass --trust-existing-cache to adopt it "
+                f"-- that vouches for it once and pins the canary from then on."
+            )
+        # Adoption is a human assertion, so it is logged as one, and it PINS: the
+        # canary written here is what the next run compares against, so the flag
+        # vouches for a cache once rather than turning the check off.
+        cached.encode([_CANARY_TEXT])
+        logger.warning(
+            "--trust-existing-cache: adopting %d unverified vectors in namespace %r as "
+            "belonging to the checkpoint loaded now. Nothing verified this; you did. "
+            "Subsequent runs are checked against the canary written now.",
+            before,
+            namespace,
         )
+        return
 
+    from_cache = np.asarray(cached.encode([_CANARY_TEXT])[0], dtype=np.float64)
     fresh = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
 
     if from_cache.shape != fresh.shape:
@@ -726,7 +776,14 @@ def _assert_cache_matches_checkpoint(
         )
 
 
-def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_size: int) -> Any:
+def _build_embedder(
+    spec: ModelSpec,
+    cache_dir: Path,
+    device: str | None,
+    batch_size: int,
+    *,
+    adopt_legacy_cache: bool = False,
+) -> Any:
     """A disk-cached embedder for ``spec``.
 
     The cache is keyed on (text, prompt) and namespaced per model, which makes a
@@ -754,7 +811,9 @@ def _build_embedder(spec: ModelSpec, cache_dir: Path, device: str | None, batch_
     # see (a pooling change, a tokenizer fix, a different dtype path).
     namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
-    _assert_cache_matches_checkpoint(base, cached, namespace, cache_dir)
+    _assert_cache_matches_checkpoint(
+        base, cached, namespace, cache_dir, adopt_legacy=adopt_legacy_cache
+    )
     return base, cached
 
 
@@ -835,6 +894,7 @@ def evaluate_model_on_benchmark(
     device: str | None,
     batch_size: int,
     reference: dict[str, RecallByRecord] | None = None,
+    adopt_legacy_cache: bool = False,
 ) -> tuple[list[LadderRow], dict[str, RecallByRecord]]:
     """Measure one model on one benchmark.
 
@@ -868,7 +928,9 @@ def evaluate_model_on_benchmark(
         schema = type(corpus[0])
         records = [record.model_dump() for record in corpus]
 
-        base, embedder = _build_embedder(spec, cache_dir, device, batch_size)
+        base, embedder = _build_embedder(
+            spec, cache_dir, device, batch_size, adopt_legacy_cache=adopt_legacy_cache
+        )
 
         # Force the load HERE, before any arm runs, so a checkpoint that cannot
         # load at all is one failure row rather than one per arm.
@@ -1414,7 +1476,12 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "row revealing it. So every run re-encodes one fixed canary string and "
         "compares it to the cached entry "
         "(`embedder_ladder.py::_assert_cache_matches_checkpoint`); a mismatch aborts "
-        "the run and names the namespace file to delete. Putting the revision in the "
+        "the run and names the namespace file to delete. A namespace written *before* "
+        "that check existed carries no canary and has therefore never been verified "
+        "against anything, so it is refused rather than adopted silently — every "
+        "namespace behind this table is in that state. Pass `--trust-existing-cache` "
+        "to vouch for one: it pins the canary once, and every later run is checked "
+        "normally. Putting the revision in the "
         "namespace instead would invalidate every cached vector to close the same "
         "hazard, and would still only answer *is this the same Hub commit* — the "
         "canary answers *does this checkpoint still produce these vectors*, which is "
@@ -2073,6 +2140,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT_PATH)
     parser.add_argument("--reference", type=Path, default=DEFAULT_REFERENCE_PATH)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
+    parser.add_argument(
+        "--trust-existing-cache",
+        action="store_true",
+        help=(
+            "Adopt an existing cache namespace that has never been verified against "
+            "a checkpoint, instead of refusing it. Use only when you know the cache "
+            "was written by the checkpoint that is loaded now: it vouches once, then "
+            "the canary it pins is checked normally on every later run."
+        ),
+    )
     parser.add_argument("--device", default=None, help="torch device, e.g. mps / cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--headline-k", type=int, default=20)
@@ -2112,6 +2189,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 device=args.device,
                 batch_size=args.batch_size,
                 reference=reference,
+                adopt_legacy_cache=args.trust_existing_cache,
             )
             fresh.extend(rows)
             reference_updates.update(updates)
