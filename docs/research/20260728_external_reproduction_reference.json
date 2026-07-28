@@ -116,7 +116,7 @@
       "why_not_a_reproduction_target": [
         "Section 6.3: recall is measured 'with respect to the test sets of the datasets', i.e. the denominator is only the test-split positives (206 for A-B, 234 for A-G, 193 for W-A per their Table 1), not the full gold set. Every other paper here uses the full gold set.",
         "Their 'SBERT' row is a TRAINED blocker ('Using SBERT's framework we train a supervised nearest neighbour blocker'), not an off-the-shelf sentence encoder, so it is not the zero-shot baseline it looks like.",
-        "Their reported precision does not reconcile with |C| = k*|A| and a 206-pair test gold (k=5 on A-B would give ~3.8%, they print 36.2%), so we could not verify their precision column and do not quote it."
+        "We could not verify their precision column and do not quote it. Taken as |C & G|/|C| with |C| = k*|A| and a 206-pair test gold, k=5 on A-B would give ~3.8%, but they print 36.2%. A plausible reading (OUR HYPOTHESIS, not their words) is that they restrict the candidate set to pairs that appear in test.csv before computing precision: 206 positives against ~569 retained test pairs would give 36.2%. Either way the definition is not the PQ that DeepBlocker and UniBlocker use, so their precision is not comparable to ours."
       ],
       "table_1_datasets": {
         "_caption": "Table 1: Dataset statistics of the benchmarked datasets.",
