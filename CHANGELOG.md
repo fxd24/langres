@@ -2,6 +2,72 @@
 
 ## [Unreleased]
 
+### The default embedding model is now `intfloat/e5-base-v2`
+
+**This changes results, and it invalidates saved vector indexes.** Read the
+migration note below before upgrading if you have one on disk.
+
+`DEFAULT_EMBEDDING_MODEL` moves from `all-MiniLM-L6-v2` to `intfloat/e5-base-v2`
+(MIT). The embedder ladder (`docs/research/20260727_embedder_ladder.md`) measured
+it ahead of the incumbent on **3 of the 5** benchmarks and behind on **none** —
+mean per-record candidate recall at k=20, bootstrapped by gold cluster:
+
+| benchmark | Δ per-record recall | 95% CI | clusters |
+|---|---:|---|---:|
+| `wdc_computers` | **+0.1528** | [+0.1254, +0.1797] | 877 |
+| `abt_buy` | **+0.0324** | [+0.0216, +0.0451] | 1,012 |
+| `walmart_amazon` | **+0.0159** | [+0.0078, +0.0246] | 846 |
+| `amazon_google` | +0.0056 | [-0.0002, +0.0116] (spans 0) | 995 |
+| `fodors_zagat` | +0.0000 | [+0.0000, +0.0000] (exactly 0) | 112 |
+
+It is also a *cheaper* ceiling at that operating point, not just a higher one:
+candidates per unit recall fall on all five (`wdc_computers` 56,103 → 43,834;
+`abt_buy` 11,985 → 9,095).
+
+**What this is not.** It is a **blocking** result — candidate recall, not
+end-to-end F1 — and the field is the **7 of 14** ladder models with rows at
+`metric_revision` 1, so this is the best *measured* model, not a survey.
+`fodors_zagat` is saturated and settles nothing. The ladder's `index build (s)`
+column cannot be used to price the switch either: every `all-MiniLM-L6-v2` row
+read from the embedding cache (`enc 0`) while the e5 rows encoded for real, so
+those two columns measure different things. What is certain is that e5-base-v2
+is **109.5M parameters against 22.7M** and **768-dim against 384** — a bigger
+download, more memory, and slower encoding.
+
+**`google/embeddinggemma-300m` measured better overall and is deliberately not
+the default.** It ships under the Gemma Terms of Use, which is *not* OSI-approved
+and carries a prohibited-use policy that survives redistribution. langres is
+Apache-2.0; a default may not push terms onto users who never chose them. It
+stays a documented opt-in: `SentenceTransformerEmbedder("google/embeddinggemma-300m")`.
+
+**The new default ships with no prompt, on purpose.** E5's model card documents
+an asymmetric `"query: "` / `"passage: "` recipe, but the checkpoint registers no
+prompts (it ships no `config_sentence_transformers.json`) and **every number
+above was measured bare** — the ladder's `prompt_arm="none"`, with no
+`documented` arm for this model at all. Wiring the model-card prefixes in would
+ship a configuration nobody measured under the measured numbers' banner, so it is
+left off and pinned by test. Measure it in the ladder first if you want it.
+
+**Migration — if you have a saved vector index, it will not load.** The
+dimension changes 384 → 768, so an index built with the old default is
+incompatible with a freshly-constructed default embedder, and even at equal
+dimension the vectors would be from a different model. Either re-embed your
+corpus, or pin the old model explicitly and change nothing:
+
+```python
+from langres.core.embeddings import SentenceTransformerEmbedder
+
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")   # previous default
+```
+
+Affected defaults: `SentenceTransformerEmbedder()`,
+`Resolver.from_schema(..., matcher="embedding")`, `VectorLLMCascade(embedder=...)`,
+the `embedding` method's `default_model`, and `CascadeChainMatcher` — whose
+`embedding_model_name` was a fourth hard-coded copy of the old literal and now
+reads the shared constant. **Not** changed: the pinned `all-MiniLM-L6-v2` in the
+benchmark loaders under `langres.data` (they back published baselines) and in
+`SearchSpace` / `BlockerOptimizer` (explicitly enumerated search axes).
+
 ### The better clusterer is now reachable (`clusterer=` opt-in)
 
 `CorrelationClusterer` measured better than the default transitive-closure
