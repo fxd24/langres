@@ -643,6 +643,16 @@ def main() -> None:
     # knowingly -- rather than disappear silently. The ".partial" suffix, not an
     # ignore rule, is what stops it being mistaken for the finished artifact.
     scratch = out.with_name(out.name + ".partial")
+    # ...and that decision has to actually be forced. Re-running would otherwise
+    # truncate an existing checkpoint with this run's first cell, destroying the
+    # very cells the comment above promises to protect -- the whole point of the
+    # file being visible is lost if the next command silently overwrites it.
+    if scratch.exists():
+        parser.error(
+            f"{scratch} exists: an earlier sweep was interrupted and those cells are "
+            "its only copy. Read it, then move, commit or delete it (or pick a "
+            "different --out) before re-running."
+        )
     selected = select_benchmarks(fast=args.fast, only=args.only)
     expected_cells = len(selected) * len(args.methods) * len(args.seeds)
     results: list[CellResult] = []
