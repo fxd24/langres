@@ -1227,6 +1227,45 @@ class TestRecommendationSplitsOnLicence:
         assert "cannot tell them apart" in section
         assert "cannot rank them at all" not in section
 
+    def test_an_uncompared_challenger_does_not_pad_the_field(self) -> None:
+        """A model with no intervals is 'not compared', never '0 of 5'.
+
+        Zero wins has two causes -- beaten on every benchmark, or never
+        compared -- and they render identically unless the table says so. The
+        second silently enlarges the field a 'best candidate' is declared best
+        of, which is a stronger claim than the data supports.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=0.03,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.05,
+            ),
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                vs_reference_delta=None,
+                vs_reference_ci_low=None,
+                vs_reference_ci_high=None,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+        table = section.split("### Use-restricted")[0]
+
+        uncompared_row = next(line for line in table.splitlines() if "e5-base-v2" in line)
+        assert "not compared" in uncompared_row
+        assert "0 of" not in uncompared_row
+        # The winner is still named -- withholding the finding would be the
+        # opposite error -- but the claim is scoped to what was measured.
+        assert "**Best OSI-licensed candidate: `BAAI/bge-small-en-v1.5`**" in section
+        assert "Best of 1 of the 2 OSI models" in section
+
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
         """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
         section = self._section()

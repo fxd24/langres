@@ -1366,14 +1366,29 @@ def _render_recommendation(
         theoretical. Reading it as "the measurement cannot tell them apart" turns a
         missing number into a finding of equivalence. (Cross-model review.)
         """
-        return any(
-            r.model == model
-            and r.k == headline_k
-            and r.prompt_arm == "none"
-            and r.vs_reference_delta is not None
-            and r.vs_reference_ci_low is not None
-            and r.vs_reference_ci_high is not None
-            for r in ok
+        return comparable_count(model) > 0
+
+    def comparable_count(model: str) -> int:
+        """How many benchmarks ``model`` actually has an interval on.
+
+        The denominator matters as much as the numerator. "1 of 5" read off a
+        model with intervals on two benchmarks is not the same claim as "1 of 5"
+        from a model compared on all five, and ranking the two against each other
+        compares different experiments. (Cross-model review.)
+        """
+        return sum(
+            1
+            for benchmark in benchmarks
+            if any(
+                r.model == model
+                and r.benchmark == benchmark
+                and r.k == headline_k
+                and r.prompt_arm == "none"
+                and r.vs_reference_delta is not None
+                and r.vs_reference_ci_low is not None
+                and r.vs_reference_ci_high is not None
+                for r in ok
+            )
         )
 
     measured = sorted({row.model for row in ok})
@@ -1436,27 +1451,38 @@ def _render_recommendation(
         for name in osi:
             spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
             won = wins(name)
-            if won:
+            # The denominator is the benchmarks this model was COMPARED on, not
+            # every benchmark in the sweep. Printing "0 of 5" for a model with no
+            # intervals makes a missing experiment look like five losses -- the
+            # same row a genuinely beaten model gets.
+            comparable = comparable_count(name)
+            if not comparable:
+                out.append(f"| `{name}` | {spec.license} | not compared | — | — |\n")
+            elif won:
                 best = max(won, key=lambda r: r.vs_reference_delta or 0.0)
                 out.append(
-                    f"| `{name}` | {spec.license} | {len(won)} of {len(benchmarks)} | "
+                    f"| `{name}` | {spec.license} | {len(won)} of {comparable} | "
                     f"{best.vs_reference_delta:+.4f} | {best.benchmark} |\n"
                 )
             else:
-                out.append(f"| `{name}` | {spec.license} | 0 of {len(benchmarks)} | — | — |\n")
+                out.append(f"| `{name}` | {spec.license} | 0 of {comparable} | — | — |\n")
+        compared = [name for name in osi if has_comparison(name)]
         # Rank on wins first, then on the largest single win, then on the name so
         # the file is byte-stable across re-renders. A tie broken by name alone
         # would silently promote a model for being alphabetically early.
+        #
+        # Only COMPARED models are ranked. An uncompared model entering with zero
+        # wins is indistinguishable from one that lost every benchmark, so it
+        # would silently pad the field a "best candidate" is declared best of.
         ranked = [
             (
                 len(wins(name)),
                 max((r.vs_reference_delta or 0.0) for r in wins(name)) if wins(name) else 0.0,
                 name,
             )
-            for name in osi
+            for name in compared
         ]
-        best_count, _best_delta, best_name = max(ranked)
-        compared = [name for name in osi if has_comparison(name)]
+        best_count, _best_delta, best_name = max(ranked) if ranked else (0, 0.0, "")
         if not compared:
             out.append(
                 f"\n**No OSI-licensed challenger currently carries an interval against "
@@ -1486,13 +1512,26 @@ def _render_recommendation(
                 + "\n"
             )
         else:
+            best_comparable = comparable_count(best_name)
             out.append(
                 f"\n**Best OSI-licensed candidate: `{best_name}`**, ahead of "
-                f"`{REFERENCE_MODEL}` on {best_count} of {len(benchmarks)} benchmarks "
-                "with the interval clear of zero. Read it against the same model's "
-                "row in the table above before adopting it: a win on some benchmarks "
-                "and a loss on others is the normal shape here, and this column counts "
-                "only the wins.\n"
+                f"`{REFERENCE_MODEL}` on {best_count} of the {best_comparable} "
+                "benchmark(s) it was compared on, with the interval clear of zero. "
+                "Read it against the same model's row in the table above before "
+                "adopting it: a win on some benchmarks and a loss on others is the "
+                "normal shape here, and this column counts only the wins."
+                + (
+                    ""
+                    if len(compared) == len(osi) and best_comparable == len(benchmarks)
+                    else (
+                        f" **Best of {len(compared)} of the {len(osi)} OSI models**, on "
+                        f"{best_comparable} of the {len(benchmarks)} benchmarks — the "
+                        "rest carry no interval at this revision and were not in the "
+                        "running, so this is the best of what was measured, not of the "
+                        "field."
+                    )
+                )
+                + "\n"
             )
 
     out.append("\n### Use-restricted checkpoints — documented opt-in, never a silent default\n")
