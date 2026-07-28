@@ -85,7 +85,7 @@ jobs:
   #     for some ML paths, so a repo-wide number measured here would be wrong.
   #   - the `langres.core` CONTRACT floor IS enforced, at a lower early-warning
   #     97.5 -- see the long comment on that step below for why the fast-suite
-  #     number is a close proxy (measured: 0.18pp under the full suite).
+  #     number is a close proxy (measured: 0.33pp under the full suite).
   # The authoritative contract floor (98) still runs on `test-full`.
   test:
     if: github.event_name == 'pull_request'
@@ -157,12 +157,12 @@ jobs:
       # here for having been measured on less data.
       #
       # The observed gap is small, which is why 97.5 is close rather than
-      # slack. MEASURED on the same tree, 2026-07-28:
-      #   full suite (test-full)   98.05%
-      #   fast suite (this job)    97.87%
-      #   difference                0.18pp
-      # 97.5 is that 97.87 with the same conservative rounding-down the 98 floor
-      # gets, leaving ~0.37pp of working room.
+      # slack. MEASURED at 1b24a2a, 2026-07-28 -- both numbers on THIS tree:
+      #   full suite (test-full)   98.26%   local run, 9011 stmts / 98 miss
+      #   fast suite (this job)    97.93%   CI run 30317465537, same commit
+      #   difference                0.33pp
+      # 97.5 is that 97.93 with the same conservative rounding-down the 98 floor
+      # gets, leaving ~0.43pp of working room.
       #
       # This floor is a per-PR EARLY WARNING; `test-full`'s 98 remains the
       # authoritative contract floor. If this one fires, the contract slipped --
@@ -385,9 +385,11 @@ jobs:
       # declassify the number they no longer own. A re-export owns no contract,
       # and the module each one redirects to is itself inside this list.
       #
-      # HEADROOM, measured 2026-07-28 on the full suite: the include-list TOTAL is
-      # **98.05%** before this PR's headroom tests and higher after (see the PR that
-      # restored it). The floor gates this WHOLE include list, not `core/*` alone.
+      # HEADROOM, measured 2026-07-28 at 1b24a2a on the full suite: the include-list
+      # TOTAL is **98.26%** (9011 stmts / 98 miss) against the 98 floor. Neutralising
+      # the six W2 shim pragmas costs 0.10pp (98.16%, 9023 stmts) -- still clear of
+      # the floor, so the exclusions are NOT what carries this number. The floor
+      # gates this WHOLE include list, not `core/*` alone.
       #
       # HOW THIS GATE CAME TO BE RED FOR SIX DAYS, so the next reader does not
       # repeat the diagnosis: #229 merged ~2,000 lines into gated `core/` paths at

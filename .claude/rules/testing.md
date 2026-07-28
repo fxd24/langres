@@ -81,8 +81,8 @@ code. Verify as you go.** Read before writing tests or running the suite.
   the same include list (same denominator), so **full-suite coverage ≥ fast-suite
   coverage, always** — the per-PR gate can never demand what the authoritative one
   does not already meet. The observed gap is small, which is why 97.5 is close
-  rather than slack: measured on one tree, 2026-07-28, full suite **98.05%** vs
-  fast suite **97.87%** — **0.18pp**.
+  rather than slack: measured at `1b24a2a`, 2026-07-28, full suite **98.26%** vs
+  fast suite **97.93%** — **0.33pp**.
 - **Timings, measured 2026-07-28** (the previous "~10min" claim was stale by 4x and
   was the justification for keeping the contract gate off PRs entirely):
   `test-full` **~38–41 min**, the per-PR `test` job **~6 min**, the gate step
