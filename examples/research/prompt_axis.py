@@ -1319,7 +1319,7 @@ def render_report(rows: Sequence[Row]) -> str:
         "Every interval above is a separate 95% interval, and this sweep contains "
         f"{sum(1 for row in headline if row.arm != 'none')} of them. Read one at a "
         "time each controls its own error rate; read as a set -- which is how a "
-        "claim like *\"this recipe helps this checkpoint\"* is actually read -- they "
+        'claim like *"this recipe helps this checkpoint"* is actually read -- they '
         "do not. So each `(model, arm)` row of the tables above is treated as one "
         "**family** across benchmarks and corrected with **Holm's step-down** at "
         "family-wise α=0.05. Holm is uniformly at least as powerful as Bonferroni "

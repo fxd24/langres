@@ -487,9 +487,7 @@ def test_holm_withdraws_exactly_the_three_e5_documented_comparisons() -> None:
     rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
     verdicts = harness._multiplicity(rows)
     headline = [r for r in rows if r.k == harness.HEADLINE_K and r.arm != "none"]
-    excluded_zero = {
-        (r.model, r.arm, r.benchmark) for r in headline if not harness._spans_zero(r)
-    }
+    excluded_zero = {(r.model, r.arm, r.benchmark) for r in headline if not harness._spans_zero(r)}
     held = {key for key, (_, rejected) in verdicts.items() if rejected}
     assert len(excluded_zero) == 40
     assert len(held) == 37
