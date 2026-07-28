@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### `threshold=None` now means the score family's default, not a hard-coded `0.5`
+
+`MethodSpec.default_threshold` has existed since the v0.3 registry unification,
+declared per method and documented — and read by **nothing**. Six front doors
+hard-coded their own `0.5` instead, so the field could say one thing while the
+shipped behaviour said another and no test would notice.
+
+- **One place a family's cut is written down**:
+  `langres.core.score_type.DEFAULT_THRESHOLDS` (a read-only mapping over all
+  seven `ScoreType` values) plus `resolve_threshold(threshold, score_type)`, the
+  seam every `threshold: float | None = None` parameter now goes through. It
+  lives on the stdlib leaf, so it adds no import-graph edge.
+- **`MethodSpec` inherits from its own `score_type`.** Omitting
+  `default_threshold` fills it from the family; set it explicitly only to
+  *override*. Seven specs previously spelled out the same two literals, so a
+  change to a family's cut would have moved some and silently left the rest.
+  The resolved value for all 13 registered methods is unchanged.
+- **Wired at the front doors**: `FuzzyString`, `VectorLLMCascade`, the four
+  `architectures/retrieval.py` recipes, and `Reranker.for_schema`. An explicit
+  `threshold=` is returned untouched, including one that happens to equal the
+  default — that is not the same statement as omitting it.
+- **`Reranker.for_schema` no longer *requires* a threshold.** It cuts a score
+  built by `MatcherScore(WeightedAverageMatcher(feature_specs=<all>))` — the same
+  class, over the same feature set, as `FuzzyString`'s matcher — so demanding a
+  number here while `FuzzyString` defaulted was an inconsistency, not a safety
+  feature.
+- **Behaviour change (INFERRED, not measured): `VectorLLMCascade`'s
+  out-of-the-box cut moves `0.5` → `0.7`.** That is the value the registry has
+  declared for `prob_llm` all along; this change makes it *read* rather than
+  ignored. It is **not** a measured constant — sweeping the LLM families costs a
+  paid completion per score and is a separate study. Pass `threshold=0.5` for the
+  previous behaviour.
+
+### Three `threshold` parameters that silently did nothing now say so
+
+A knob that quietly ignores you is worse than no knob: users tune it, see nothing
+move, and blame the model. Each claim below was verified by running the code, and
+each is now pinned by a test rather than only a docstring.
+
+- **`RetrieveLLM` / `RetrieveRerankLLM` warn.** Their chain ends
+  `... -> Generate -> Parse -> ThresholdSelect`, `Parse` emits a `decision` with
+  `score=None`, and `predicted_match` gives a decision precedence over any score
+  — so the `ThresholdSelect` still drops `decision=False` rows and abstentions,
+  but its *number* cannot change any outcome. Verified: byte-identical clusters
+  at `threshold` 0.0 / 0.5 / 0.99, with `Retrieve` as a not-invariant control.
+  A `UserWarning` fires only on an *explicit* value; `None` expresses no
+  preference and stays silent. Warned rather than raised because the parameter is
+  on four public constructors and is swept by the experiment matrix.
+- **`RapidfuzzMatcher.threshold` is documented as inert.** It is range-checked,
+  stored, and never read — the matcher is a ranker, so the caller's cut decides.
+  `method_registry._build_rapidfuzz` passes no threshold at all, and there is no
+  `config`/`from_config` to round-trip one. Its docstring examples no longer
+  suggest otherwise, and a stale "compatibility with Optimizer" claim is gone
+  (there is no `Optimizer`; only `autoresearch.blocker_optimizer.BlockerOptimizer`).
+
 ### `dedupe()` finally has a benchmark (`febrl_dedup`)
 
 `BenchmarkTask` declared `Literal["linkage", "dedup"]`, but all ten registered
