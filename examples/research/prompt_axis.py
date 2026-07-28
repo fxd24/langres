@@ -41,6 +41,22 @@ Usage::
     uv run --env-file .env python examples/research/prompt_axis.py \\
         --models intfloat/e5-base-v2 --benchmarks abt_buy
 
+**``--env-file .env`` is load-bearing, and ``OMP_NUM_THREADS=1`` is the reason.**
+Without it this harness DEADLOCKS -- silently, at 0% CPU, with no error and no
+traceback -- when it loads ``embeddinggemma-300m`` after faiss is already
+imported. Measured: with faiss imported first, the Gemma load never returns
+(killed at 180s); with ``OMP_NUM_THREADS=1`` it returns in 1.6s; without faiss
+imported at all it returns in 1.3s either way. It is the faiss/torch duplicate
+OpenMP runtime conflict on macOS, and note that ``KMP_DUPLICATE_LIB_OK`` alone
+is **not** sufficient -- that suppresses the abort, not the deadlock. The
+earlier models (MiniLM, bge, e5) complete fine, so the hang looks like "stuck on
+Gemma" rather than an environment problem, which is what makes it expensive to
+diagnose. If ``.env`` is absent (e.g. in a fresh worktree), set the three
+variables explicitly instead::
+
+    KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false \\
+        uv run python examples/research/prompt_axis.py
+
 Zero paid API calls: every model runs locally.
 """
 

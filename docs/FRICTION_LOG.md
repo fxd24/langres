@@ -10,6 +10,36 @@ This document tracks technical issues encountered during development, their root
 
 **Remedy:** Set environment variables in `.env` to force single-threaded OpenMP mode: `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1`. The prek pre-push hook automatically loads these via `uv run --env-file .env pytest`. Minimal performance impact at POC scale (<10K entities).
 
+### The same conflict also presents as a silent **deadlock**, not only a segfault (2026-07-28)
+
+**Problem:** `examples/research/prompt_axis.py` hung for 3h16m at 0% CPU with no
+error, no traceback and no network activity, immediately after logging
+`Loading SentenceTransformer model from …/embeddinggemma-300m`. Three earlier
+models (MiniLM, bge, e5) had already completed 208 rows, so it looked like "a
+problem with Gemma" rather than an environment problem — which is what made it
+expensive to find.
+
+**Measured, not inferred:**
+
+| condition | Gemma load |
+|---|---|
+| no faiss imported (repo id *or* local snapshot path) | **1.3 s** |
+| faiss imported + index built, `KMP_DUPLICATE_LIB_OK=TRUE` only | **never returns** (killed at 180 s) |
+| same, plus `OMP_NUM_THREADS=1` | **1.6 s** |
+
+**Two traps worth naming:**
+
+1. **`KMP_DUPLICATE_LIB_OK` alone is not sufficient.** It suppresses the *abort*
+   (`OMP: Error #15`), not the *deadlock*. A run can therefore have the variable
+   set, produce no error whatsoever, and hang forever. `OMP_NUM_THREADS=1` is the
+   one that actually fixes it.
+2. **Dropping `--env-file .env` is not a cosmetic deviation.** A fresh git
+   worktree has **no `.env`** (it is gitignored), so `uv run --env-file .env`
+   fails outright there and the tempting move is to drop the flag and set
+   `KMP_DUPLICATE_LIB_OK` by hand — which is exactly the state above. In a
+   worktree, set the variables explicitly instead:
+   `KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false uv run python …`
+
 ---
 
 ## Wave 3 run-as-user DX numbers (2026-07-03)
