@@ -195,8 +195,10 @@ class TestCoherenceWarning:
 
         warnings = _blocker_warnings(caplog)
         assert len(warnings) == 1
-        assert "document-side prompt" in warnings[0]
         assert "prompt_name='document'" in warnings[0]
+        # States what is observably true (both sides carry the prefix) without
+        # asserting the recipe is asymmetric -- which the blocker cannot know.
+        assert "BOTH sides carry that prefix" in warnings[0]
         # The remedies are not interchangeable and the warning must not imply they
         # are: `VectorBlocker.stream()` forwards `query_prompt` to `search_all()`,
         # and `QdrantHybridIndex.search_all()` raises on any non-None prompt. A
@@ -305,6 +307,58 @@ class TestCoherenceWarning:
             )
 
         assert _blocker_warnings(caplog) == []
+
+    def test_a_custom_prompt_name_resolving_to_the_query_prefix_is_silent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The NAME cannot settle it; the resolved VALUE can.
+
+        An embedder may register a custom name whose prefix is identical to the
+        query one. Reusing the corpus vectors as queries is then exactly the
+        intended symmetric recipe, and warning would be an unmeasured quality
+        claim drawn from a string. (Cross-model review.)
+        """
+        embedder = _PrefixEmbedder(
+            prompt_name="symmetric",
+            prompts={"symmetric": QUERY_PROMPT, "query": QUERY_PROMPT},
+        )
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+        index.create_index(list(TEXTS))
+
+        with caplog.at_level(logging.WARNING, logger=BLOCKER_LOGGER):
+            VectorBlocker(
+                vector_index=index,
+                schema_factory=lambda record: record,
+                text_field_extractor=lambda entity: str(entity["name"]),
+                k_neighbors=3,
+            )
+
+        assert _blocker_warnings(caplog) == []
+
+    def test_a_custom_name_resolving_to_a_DIFFERENT_prefix_still_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Control: comparing values must not become "never warn".
+
+        If the resolved prefixes differ, the queries really do carry a prefix the
+        query side was not given, and that is the whole point of the check.
+        """
+        embedder = _PrefixEmbedder(
+            prompt_name="passage",
+            prompts={"passage": DOCUMENT_PROMPT, "query": QUERY_PROMPT},
+        )
+        index = FAISSIndex(embedder=embedder, metric="cosine")
+        index.create_index(list(TEXTS))
+
+        with caplog.at_level(logging.WARNING, logger=BLOCKER_LOGGER):
+            VectorBlocker(
+                vector_index=index,
+                schema_factory=lambda record: record,
+                text_field_extractor=lambda entity: str(entity["name"]),
+                k_neighbors=3,
+            )
+
+        assert len(_blocker_warnings(caplog)) == 1
 
     def test_the_symmetric_exemption_is_exactly_one_name(self) -> None:
         """Guard the premise: an exemption that widened would mute the warning.

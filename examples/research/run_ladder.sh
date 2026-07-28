@@ -32,6 +32,16 @@
 # Usage:
 #   bash examples/research/run_ladder.sh [PID_TO_WAIT_FOR]
 #
+# Environment:
+#   LADDER_MODELS                 space-separated subset to sweep
+#   LADDER_DEVICE                 pin a torch device (default: let ST choose)
+#   LADDER_TRUST_EXISTING_CACHE   forward --trust-existing-cache to the harness,
+#                                 vouching for an embedding cache that predates
+#                                 the integrity canary. An env var and not a flag
+#                                 because this script's only positional argument
+#                                 is a wait PID -- `--trust-existing-cache` passed
+#                                 here would be silently read as one.
+#
 # Run from the repository root.
 
 set -u -o pipefail
@@ -175,6 +185,7 @@ for model in "${MODELS[@]}"; do
   # LADDER_DEVICE only to override deliberately.
   uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
     --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
+    ${LADDER_TRUST_EXISTING_CACHE:+--trust-existing-cache} \
     > "$LOG_DIR/$safe.log" 2>&1
   code=$?
 
@@ -187,8 +198,10 @@ for model in "${MODELS[@]}"; do
   if [ $code -eq 3 ]; then
     log "$model: cache-integrity refusal (exit 3). NOT recording a failure row --"
     log "  the recorded rows are fine; the embedding cache is not. See $LOG_DIR/$safe.log."
-    log "  Delete that model's cache namespace and re-run, or pass"
-    log "  --trust-existing-cache if you know the cache matches the loaded checkpoint."
+    log "  Delete that model's cache namespace and re-run, or re-run this driver as"
+    log "  LADDER_TRUST_EXISTING_CACHE=1 $0 -- if you know the cache matches the"
+    log "  loaded checkpoint. (The driver takes no such flag: its only positional"
+    log "  argument is a wait PID, so --trust-existing-cache would be read as one.)"
     exit 3
   fi
 

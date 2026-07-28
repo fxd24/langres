@@ -12,7 +12,7 @@ The separation of embedding and indexing concerns enables:
 """
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -52,6 +52,37 @@ logger = logging.getLogger(__name__)
 #: ``SentenceTransformer.encode_query`` binds, so it is the name the library
 #: itself reserves for the query side. Any other name is unknowable from here.
 _QUERY_SIDE_PROMPT_NAMES = frozenset({"query"})
+
+
+def _binds_the_query_prefix(vector_index: Any, prompt_name: str) -> bool:
+    """Does the bound prompt resolve to the SAME prefix the query side would use?
+
+    The name alone cannot settle this, and the previous version of this check
+    pretended it could: it warned whenever ``prompt_name`` was not literally
+    ``"query"``, which asserts an asymmetric recipe -- and a quality conclusion
+    about it -- from a string nobody promised means anything. An embedder can
+    register ``document`` and ``query`` with identical prefixes, or use a
+    custom name symmetrically; reusing the corpus vectors as queries is then
+    exactly the intended configuration. (Cross-model review.)
+
+    So compare the resolved *values* where they are available, and fall back to
+    the name only when they are not. Duck-typed for the same reason as
+    :func:`_document_prompt_name`: ``VectorIndex`` is a structural protocol.
+    """
+    if prompt_name in _QUERY_SIDE_PROMPT_NAMES:
+        return True
+
+    embedder = getattr(vector_index, "embedder", None) or getattr(
+        vector_index, "dense_embedder", None
+    )
+    if getattr(embedder, "prompts", None) is None:
+        embedder = getattr(embedder, "embedder", embedder)
+    prompts = getattr(embedder, "prompts", None)
+    if not isinstance(prompts, Mapping):
+        return False
+
+    bound = prompts.get(prompt_name)
+    return any(bound == prompts.get(name) for name in _QUERY_SIDE_PROMPT_NAMES)
 
 
 def _document_prompt_name(vector_index: Any) -> str | None:
@@ -508,7 +539,7 @@ class VectorBlocker(Blocker[SchemaT]):
         if (
             document_prompt is not None
             and query_prompt is None
-            and document_prompt not in _QUERY_SIDE_PROMPT_NAMES
+            and not _binds_the_query_prefix(vector_index, document_prompt)
         ):
             # The two remedies are NOT interchangeable, and the order matters.
             # Dropping prompt_name works on every index. Adding query_prompt only
@@ -518,11 +549,13 @@ class VectorBlocker(Blocker[SchemaT]):
             # query_prompt would hand a hybrid user a remedy that converts a
             # running configuration into a crash. (Caught by cross-model review.)
             logger.warning(
-                "VectorBlocker: the index's embedder binds a document-side prompt "
-                "(prompt_name=%r) but this blocker sets no query_prompt. search_all() "
-                "then reuses the DOCUMENT-prompted corpus vectors as queries, so the "
-                "queries carry the document prefix -- which is not what an asymmetric "
-                "checkpoint documents, and is worse than prompting neither side. Drop "
+                "VectorBlocker: the index's embedder binds prompt_name=%r, which does "
+                "not resolve to the query-side prefix, and this blocker sets no "
+                "query_prompt. search_all() then reuses those corpus vectors as "
+                "queries, so BOTH sides carry that prefix. If the checkpoint documents "
+                "an asymmetric recipe that is not the recipe -- queries get the "
+                "document prefix. If you meant a symmetric one, it is already what you "
+                "have and you can ignore this. Drop "
                 "prompt_name from the embedder to run both sides bare (works with any "
                 "index); or, if your index re-encodes queries, pass the checkpoint's "
                 "query prefix as query_prompt=... -- FAISSIndex does, "

@@ -642,23 +642,39 @@ _CANARY_TOLERANCE = 1e-4
 #: cache is what is suspect. 3 because 1 is an uncaught exception and 2 is argparse.
 EXIT_CACHE_INTEGRITY = 3
 
+#: Sentinel for "every partition", distinct from ``None`` -- which is itself a
+#: real prompt value (the unprompted partition) and cannot double as "all".
+_ANY_PROMPT: Any = object()
+
 
 class StaleEmbeddingCacheError(RuntimeError):
     """The cached vectors were produced by a different checkpoint than the loaded one."""
 
 
-def _cache_entry_count(db_path: Path) -> int:
-    """How many vectors ``db_path`` already holds; 0 if it does not exist yet.
+def _cache_entry_count(db_path: Path, prompt: str | None = _ANY_PROMPT) -> int:
+    """How many vectors ``db_path`` holds; 0 if it does not exist yet.
 
     Read directly rather than via ``cache_info()``, which reports hit/miss
     *counters for this process* and is therefore 0 for a cache written last week.
+
+    Args:
+        prompt: Count only the rows written under this prompt. The cache stores
+            the prompt per row, and the key is ``(text, prompt)`` — so each prompt
+            is its own partition and has to be vouched for on its own. Defaults to
+            ``_ANY_PROMPT``, meaning every row regardless of partition.
     """
     import sqlite3
 
     if not db_path.exists():
         return 0
     with sqlite3.connect(db_path) as conn:
-        return int(conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
+        if prompt is _ANY_PROMPT:
+            return int(conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
+        # `IS` rather than `=`: SQL equality against NULL is NULL, never true, so
+        # `prompt = NULL` would count zero rows in the unprompted partition --
+        # the largest one -- and report every cache as empty.
+        row = conn.execute("SELECT COUNT(*) FROM embeddings WHERE prompt IS ?", (prompt,))
+        return int(row.fetchone()[0])
 
 
 def _canary_is_cached(cached: Any, db_path: Path, prompt: str | None = None) -> bool:
@@ -743,36 +759,6 @@ def _assert_cache_matches_checkpoint(
     import numpy as np
 
     db_path = cache_dir / f"{namespace}.db"
-    before = _cache_entry_count(db_path)
-
-    # Asked WITHOUT writing, so a refused run leaves the namespace exactly as it
-    # found it. Encoding first would answer the question by changing it: the
-    # refused run would deposit a canary, and the next run would find one present
-    # and sail through -- a refusal you get past by running it twice.
-    if before > 0 and not _canary_is_cached(cached, db_path):
-        if not adopt_legacy:
-            raise StaleEmbeddingCacheError(
-                f"the embedding cache for namespace {namespace!r} holds {before} vectors "
-                f"written before this check existed, so nothing in it has ever been "
-                f"verified against a checkpoint. It may predate an upstream re-upload, "
-                f"and a run using it would publish rows mixing two checkpoints. Delete "
-                f"{db_path} and re-measure this model; the cache it writes will be "
-                f"checked from its first run onward. If you know this cache was written "
-                f"by the checkpoint loaded now, pass --trust-existing-cache to adopt it "
-                f"-- that vouches for it once and pins the canary from then on."
-            )
-        # Adoption is a human assertion, so it is logged as one, and it PINS: the
-        # canary written here is what the next run compares against, so the flag
-        # vouches for a cache once rather than turning the check off.
-        cached.encode([_CANARY_TEXT])
-        logger.warning(
-            "--trust-existing-cache: adopting %d unverified vectors in namespace %r as "
-            "belonging to the checkpoint loaded now. Nothing verified this; you did. "
-            "Subsequent runs are checked against the canary written now.",
-            before,
-            namespace,
-        )
-        return
 
     # One partition per prompt, because the cache key is (text, prompt): an
     # unprompted canary says nothing about the prompt-keyed entries the `instruct`
@@ -781,9 +767,38 @@ def _assert_cache_matches_checkpoint(
     # identical and would sail past a canary that only ever asks for the bare one.
     # (Cross-model review.)
     for prompt in dict.fromkeys(prompts):
-        # A partition with no canary yet is not "legacy" -- the unprompted canary
-        # above already vouched for the namespace -- it is simply cold, e.g. an arm
-        # added after the cache was written. Encoding pins it for next time.
+        # A partition is "cold" only when it is EMPTY. A partition that already
+        # holds corpus vectors but no canary is legacy in exactly the sense the
+        # namespace-level gate means -- and it is reachable even on a namespace
+        # whose unprompted canary is present, because that canary was pinned
+        # before this loop existed and vouches only for its own partition.
+        # Treating it as cold would pin a fresh canary over stale prompted
+        # vectors and accept them forever. Same gate, same remedy, per partition.
+        # (Cross-model review.)
+        populated = _cache_entry_count(db_path, prompt)
+        if populated > 0 and not _canary_is_cached(cached, db_path, prompt):
+            if not adopt_legacy:
+                raise StaleEmbeddingCacheError(
+                    f"the embedding cache for namespace {namespace!r} holds {populated} "
+                    f"vectors under prompt={prompt!r} with no canary for that prompt: "
+                    f"they were written before this check existed, so nothing has ever "
+                    f"verified them against a checkpoint, and a run using them would "
+                    f"publish rows mixing two checkpoints. Delete {db_path} and "
+                    f"re-measure this model; the cache it writes will be checked from "
+                    f"its first run onward. If you know this cache was written by the "
+                    f"checkpoint loaded now, pass --trust-existing-cache to adopt it -- "
+                    f"that vouches for it once and pins the canary from then on."
+                )
+            logger.warning(
+                "--trust-existing-cache: adopting %d unverified vectors under prompt=%r "
+                "in namespace %r. Nothing verified this; you did.",
+                populated,
+                prompt,
+                namespace,
+            )
+            cached.encode([_CANARY_TEXT], prompt=prompt)
+            continue
+
         from_cache = np.asarray(cached.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
         fresh = np.asarray(base.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
 

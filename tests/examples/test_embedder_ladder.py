@@ -520,6 +520,65 @@ class TestPromptedCachePartitions:
             )
         assert "query: " in str(excinfo.value)
 
+    def test_a_populated_prompt_partition_without_its_canary_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Reachable even on a namespace whose UNPROMPTED canary is present.
+
+        That canary was pinned before per-prompt canaries existed and vouches
+        only for its own partition. Treating a populated prompt partition as
+        merely "cold" would pin a fresh canary over stale prompted vectors and
+        accept them forever — the vacuous-canary defect again, one partition
+        over. (Cross-model review.)
+        """
+        embedder = _PromptSensitiveEmbedder()
+        # An upgraded namespace: unprompted canary pinned, prompted corpus
+        # vectors present from an older run, no prompted canary.
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
+        self._cached(embedder, tmp_path).encode(["corpus text"], prompt="query: ")
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder,
+                self._cached(embedder, tmp_path),
+                "canary_ns",
+                tmp_path,
+                prompts=[None, "query: "],
+            )
+        assert "query: " in str(excinfo.value)
+
+    def test_an_empty_prompt_partition_is_cold_and_simply_pinned(self, tmp_path: Path) -> None:
+        """Control: adding an arm must not be mistaken for a stale partition.
+
+        Without this, "refuse any partition lacking a canary" would pass the test
+        above and make every newly added prompt arm unrunnable.
+        """
+        embedder = _PromptSensitiveEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path, prompts=[None]
+        )
+
+        LADDER._assert_cache_matches_checkpoint(
+            embedder,
+            self._cached(embedder, tmp_path),
+            "canary_ns",
+            tmp_path,
+            prompts=[None, "query: "],
+        )
+
+    def test_counting_the_unprompted_partition_uses_IS_not_equals(self, tmp_path: Path) -> None:
+        """``prompt = NULL`` is NULL in SQL, never true.
+
+        With ``=`` the unprompted partition — the largest one — counts zero and
+        every cache reports as empty, silently disabling the gate above.
+        """
+        embedder = _PromptSensitiveEmbedder()
+        self._cached(embedder, tmp_path).encode(["a", "b"])
+
+        assert LADDER._cache_entry_count(tmp_path / "canary_ns.db", None) == 2
+
     def test_the_bare_canary_alone_does_not_notice(self, tmp_path: Path) -> None:
         """Control: this is the hole, demonstrated.
 

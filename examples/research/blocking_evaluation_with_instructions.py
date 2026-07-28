@@ -6,9 +6,24 @@ demonstrating the impact of disk caching and instruction prompts:
 2. Qdrant with dense + sparse vectors (hybrid search with RRF fusion)
 3. Qdrant with client-side Jina CrossEncoder reranking (fast, quality reranking)
 
-All approaches use the same Qwen3 embedding model with:
-- **DiskCachedEmbedder**: Persistent caching for instant re-runs
-- **Instruction prompts**: Task-specific instructions for improved matching quality
+All three arms use the same Qwen3 embedding model and **DiskCachedEmbedder**
+(persistent caching for instant re-runs), but they do **NOT** share a prompt
+regime, and the comparison is not readable without knowing that:
+
+- FAISS and the CrossEncoder arm receive ``EMBEDDING_INSTRUCTION`` on the query
+  side;
+- the **Qdrant hybrid arm is UNPROMPTED**. It reaches the index through
+  ``search_all()``, which serves queries from the dense vectors cached at
+  ``create_index()`` time -- so a query prompt can never reach the encoder.
+  ``QdrantHybridIndex.search_all`` now raises rather than accepting one silently.
+
+So every "vs Hybrid" delta below moves *two* things at once (index type AND
+prompt regime) and cannot be attributed to either. The printed tables label each
+arm with its regime and mark those deltas confounded; the saved JSON separates
+``confounded_deltas`` from ``prompt_regime_matched_deltas``. Nothing here
+measures what an instruction prompt is worth -- no two arms share an index. The
+experiment that does hold the index fixed is
+``examples/research/embedder_ladder.py``.
 
 Dataset: 1,741 real-world funder organization names with ground truth labels.
 
@@ -34,7 +49,8 @@ Trade-off analysis:
 
 Performance improvements:
 - DiskCachedEmbedder: Second run is ~100x faster (instant cache lookup)
-- Instruction prompts: Expected +1-5% quality improvement
+- Instruction prompts: NOT measured here (see above -- no two arms share an
+  index). Measured in examples/research/embedder_ladder.py.
 - Jina reranker: 10-15x faster than Qwen3 reranker (4-6 minutes vs 1 hour)
 - ONNX backend: Additional 2-3x speedup for inference
 
