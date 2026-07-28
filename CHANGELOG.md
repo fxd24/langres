@@ -567,6 +567,18 @@ changing the default model hard."* Design note:
   '4.37.3', but running version '4.37.0'`). Dependabot raises one PR per action
   path, so bumping `init` (#231) or `analyze` (#233) alone could only ever be
   red; the three steps are moved together here.
+- **`main` is now a protected branch.** It previously had no branch protection
+  and no rulesets at all, so every check in this repo was advisory -- including
+  the coverage gates. Merging now requires a pull request and five green
+  checks: `lint`, `test (3.13)`, `test-core-only`, `docs-clean-install` and
+  `Analyze (python)`. Force-pushes and branch deletion are blocked.
+  Deliberately excluded from the required set, because they do not report on
+  every PR and a required check that never reports blocks the merge forever:
+  `test-full` (`if: github.event_name != 'pull_request'`), `build`/`deploy`
+  (path-filtered to docs changes), `Sourcery review` (skips when its weekly
+  diff quota is exhausted) and `test-finetune` (`continue-on-error` by design).
+  No approval count is required -- GitHub does not permit self-approval, so on
+  a single-maintainer repo that would block every merge rather than review it.
 - **Dependency quarantine rolled 2026-07-08 -> 2026-07-21.** Since `uv.lock` is
   gitignored, `exclude-newer` *is* the reproducibility pin and CI re-resolves on
   every run, so this is the whole of the Python-side update: 47 packages, no
