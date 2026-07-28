@@ -95,12 +95,11 @@ def test_cross_source_filter_cannot_be_applied_to_this_corpus() -> None:
 
 
 def test_gold_clusters_exceed_pair_size() -> None:
-    """Clusters run 1–6, not the linkage benchmarks' {1, 2}.
+    """Clusters run 1–6, so BCubed and the clusterer's closure are exercised.
 
-    Cluster-based metrics (BCubed) and the clusterer's transitive-closure
-    behaviour are only exercised when a cluster can exceed two records; a
-    benchmark whose every cluster is a pair cannot tell over-merging from a
-    correct merge.
+    Not a uniqueness claim — ``dblp_scholar`` (37) and ``amazon_google`` (6) also
+    exceed two. The difference is provenance: theirs are connected components of
+    a cross-source link file, these are the generator's own entities.
     """
     _corpus, gold_clusters, _pairs = load_febrl_dedup()
     histogram = dict(collections.Counter(len(c) for c in gold_clusters))
@@ -172,9 +171,22 @@ def test_blank_cells_load_as_none() -> None:
 
 
 def test_benchmark_exposes_pinned_config() -> None:
+    """Pins the blocking ``k`` to the LITERAL 50, not to its own constant.
+
+    Asserting ``blocking_k == DEFAULT_DEDUP_BLOCKING_K`` would be circular: both
+    sides move together, so editing the constant to 30 would keep this green
+    *and* keep the slow Pair-Completeness test green (it sweeps at whatever the
+    constant says, and k=30's 0.9440 still clears the 0.93 floor). The literal is
+    what makes changing the pin require a deliberate re-measurement — it is the
+    documented 0.9552 value's only anchor.
+    """
     benchmark = FebrlDedupBenchmark()
     assert benchmark.name == "febrl_dedup"
     assert benchmark.schema is FebrlDedupSchema
+    assert DEFAULT_DEDUP_BLOCKING_K == 50, (
+        "the pinned k changed; re-run sweep_blocking_k and update "
+        "ACHIEVED_PC_AT_DEFAULT_K + the sweep table in the module docstring"
+    )
     assert benchmark.blocking_k == DEFAULT_DEDUP_BLOCKING_K
     assert benchmark.threshold_grid == (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 

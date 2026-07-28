@@ -77,7 +77,7 @@ does). All ship in-repo (`loadable=True`) except OpenSanctions.
 
 | Benchmark | Task | Domain | Why it's in the portfolio |
 | --- | --- | --- | --- |
-| `febrl_dedup` | **dedup** | person | **The deduplication target (FEBRL3).** One 5000-record table, 2000 entities, **clusters of size 1–6** (835 singletons) — the only entry where a cluster can exceed two records, so it is the only one that can tell a correct merge from an over-merge. Gold is entity **membership**, not the transitive closure of a link file, so it carries none of that construction's fusion artifacts. Blocking PC 0.9552 at the pinned `k=50`. **Caveat:** synthetic (ANU generator + injected corruptions), so its corruptions are typo/OCR/field-swap shaped and do not stand in for real-world messiness; and the entity/record ratio puts the all-singletons sanity floor at BCubed F1 0.5721 — read `delta_above_floor`, not the raw BCubed. |
+| `febrl_dedup` | **dedup** | person | **The deduplication target (FEBRL3).** The only **single-source** entry: one 5000-record table, 2000 entities, clusters of size 1–6 (835 singletons). Other benchmarks also have clusters > 2 (`dblp_scholar` reaches 37, `amazon_google` 6), but theirs come from the transitive closure of a cross-source link file; here gold is entity **membership** read directly from the generator, so the multi-record clusters are real entities rather than closure artifacts. Blocking PC 0.9552 at the pinned `k=50`. **Caveat:** synthetic (ANU generator + injected corruptions), so its corruptions are typo/OCR/field-swap shaped and do not stand in for real-world messiness; and the entity/record ratio puts the all-singletons sanity floor at BCubed F1 0.5721 — read `delta_above_floor`, not the raw BCubed. |
 | `fodors_zagat` | linkage | restaurant | **Saturated regression guard.** Tiny, easy, blocking Pair-Completeness ≥ 0.99 — the "nothing should ever regress here" floor. |
 | `abt_buy` | linkage | product | **Product regression guard.** Short, noisy product titles; a standard DeepMatcher band to hold the line against. |
 | `amazon_google` | linkage | product | **Hard product guard.** Unsaturated — blocking PC ~0.84 caps recall, so it separates weak from strong scorers (used as the discrimination check). |
@@ -95,11 +95,15 @@ linkage task — so until `febrl_dedup` landed, none of the published numbers we
 about deduplication. It races through the *same* harness, with two differences
 that matter:
 
-- **No cross-source filter.** The linkage adapters drop every same-source
-  candidate before scoring (`_benchmark_utils.cross_source`), which hands the
-  matcher a bipartite problem. FEBRL3 has one source, so the blocker's own output
-  *is* the candidate set and an intra-source false merge counts against you.
-  (`sweep_blocking_k` takes `cross_source_only=False` for exactly this.)
+- **Nothing can filter its candidates by source.** `_benchmark_utils.cross_source`
+  is used by the linkage adapters' **blocking-recall measurement** (`sweep_blocking_k`,
+  Pair-Completeness) — *not* by `run_methods`, which scores whatever the blocker
+  emits on every dataset. So the difference here is not that dedup scoring stopped
+  filtering; it is that FEBRL3 records carry no `source` field at all, so the
+  linkage *diagnostic* is inapplicable and `sweep_blocking_k` must be passed
+  `cross_source_only=False`. Its reported PC is therefore over all pairs, which is
+  the honest denominator for a dedup task and not directly comparable to a linkage
+  benchmark's cross-source-filtered PC.
 - **Cluster metrics, not a pair proxy.** Read `bcubed_f1` /
   `cluster_pairwise_f1`, never a pair-level F1 relabelled as a dedup score.
 

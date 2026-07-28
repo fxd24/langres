@@ -12,16 +12,31 @@ task                 ``linkage``                        ``dedup``
 sources              two (``person_a`` / ``person_b``)  one
 true matches         all cross-source                   all **intra**-source
 cluster sizes        exactly 2                          1–6 (835 singletons)
-candidate filter     ``cross_source`` (drops the        none — an intra-source pair
-                     intra-source pairs as noise)       is exactly what a match IS
+``source`` field     present                            **absent** — nothing to
+                                                        partition candidates by
+gold construction    ``perfectMapping`` pair file       entity **membership**
 ===================  =================================  ==============================
 
-That last row is why a dedup benchmark is not a linkage one relabelled. The
-linkage adapters throw away every same-source candidate before scoring, which
-hands the matcher a bipartite problem and hides a whole error class. Here the
-blocker's own output is the candidate set, and a wrong merge inside one source
-counts against you — which is the situation ``dedupe()``, langres's primary
-shipped verb, is actually run in.
+Two clarifications, because the easy version of this story is wrong:
+
+- **The scoring harness never filtered by source, on any dataset.**
+  ``run_methods`` scores whatever the blocker emits;
+  :func:`langres.data._benchmark_utils.cross_source` is used only by the linkage
+  adapters' *blocking-recall diagnostic* (``sweep_blocking_k``, Pair-Completeness)
+  and their tests — grep it, it appears nowhere under ``langres/benchmarks/``.
+  What changes here is therefore not the matcher's input but the **diagnostic**:
+  FEBRL3 records carry no ``source`` at all, so the linkage measurement is
+  inapplicable and ``sweep_blocking_k`` must be given ``cross_source_only=False``.
+  Its Pair-Completeness is over all pairs, which is the honest denominator for a
+  dedup task and not directly comparable to a cross-source-filtered one.
+- **Multi-record clusters are not unique to this dataset.** ``dblp_scholar``
+  reaches 37 and ``amazon_google`` 6. The distinction is *where they come from*:
+  those are connected components of a cross-source link file, i.e. closure
+  artifacts (see below), whereas these are the generator's own entities.
+
+What is genuinely only here is the **single-source** shape — one record set in,
+one partition out, with intra-source pairs as the matches rather than as noise.
+That is the situation ``dedupe()``, langres's primary shipped verb, is run in.
 
 **Gold labels are entity membership, not a transitive closure.**
 ``gold_clusters.csv`` names each record's entity directly, so the partition is

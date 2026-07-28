@@ -308,8 +308,9 @@ register(
 # The single-source DEDUPLICATION benchmark. Every entry above is a cross-source
 # linkage task, which left ``dedupe()`` — langres's primary shipped verb — with
 # nothing to be measured on. FEBRL3 is the classic intra-source dedup dataset:
-# one 5000-record table, clusters of size 1–6, gold given as entity membership
-# rather than a transitive closure. Same generator and licence clearance as the
+# one 5000-record table (no ``source`` field to partition candidates by),
+# clusters of size 1–6, gold given as entity membership rather than as the
+# transitive closure of a pair file. Same generator and licence clearance as the
 # ``febrl_person`` FEBRL4 linkage entry above.
 # ---------------------------------------------------------------------------
 

@@ -297,6 +297,66 @@
     "wheel_loadable": false
   },
   {
+    "caveats": [],
+    "cross_source_ceiling": null,
+    "domain": "person",
+    "entropy_bits": 10.66290327601643,
+    "excluded_files": [],
+    "imbalance_ratio": 1910.5172835729581,
+    "load_error": null,
+    "loadable": true,
+    "loaded": true,
+    "max_cluster_size": 6,
+    "mean_field_len": 8.373765932905407,
+    "min_non_null_rate": 0.8614,
+    "n_clusters": 2000,
+    "n_fields": 12,
+    "n_files_shipped": 2,
+    "n_records": 5000,
+    "n_singletons": 835,
+    "name": "febrl_dedup",
+    "positive_pairs": 6538,
+    "prevalence": 0.0005231446289257852,
+    "published_f1": null,
+    "published_system": null,
+    "rapidfuzz_argmax_f1": null,
+    "rapidfuzz_f1": null,
+    "rapidfuzz_threshold": null,
+    "saturated": null,
+    "saturation_error": null,
+    "separability_auc": 0.999998449066993,
+    "size_distribution": [
+      [
+        1,
+        835
+      ],
+      [
+        2,
+        368
+      ],
+      [
+        3,
+        256
+      ],
+      [
+        4,
+        212
+      ],
+      [
+        5,
+        161
+      ],
+      [
+        6,
+        168
+      ]
+    ],
+    "task": "dedup",
+    "vocab_jaccard": null,
+    "vocab_min_coverage": null,
+    "wheel_loadable": true
+  },
+  {
     "caveats": [
       "one-to-one"
     ],

@@ -308,6 +308,12 @@ the one this whole document exists to catch.
 
 ## 7. Portfolio-level gaps
 
+> **Update (2026-07-28): this gap is now closed.** `febrl_dedup` (FEBRL3) is
+> registered as `task="dedup"` and is in the regenerated raw data above (11
+> entries, tasks `['dedup', 'linkage']`). The finding below is kept as written —
+> it is the rationale the benchmark was added for — but it no longer describes
+> the portfolio. See `docs/BENCHMARKS.md` §2a for the measured dedup run.
+
 **All 10 registered entries are `task="linkage"`. There is no registered dedup
 benchmark** — although `dedupe()` is the primary shipped verb and `"dedup"` is a
 declared-but-unused value of `BenchmarkTask`. Every number langres reports about
@@ -389,5 +395,6 @@ should beat one unsupervised combined similarity.
 - **`dblp_scholar`'s gold labels are a transitive closure**; a metric on it
   partly measures the labeling. Report cross-source recall next to PC or the 0.39
   reads as a blocking failure it is not.
-- **The portfolio has no dedup benchmark at all**, which is the gap most worth
-  closing next given what `dedupe()` is.
+- ~~**The portfolio has no dedup benchmark at all**, which is the gap most worth
+  closing next given what `dedupe()` is.~~ **Closed 2026-07-28** by
+  `febrl_dedup` (FEBRL3, single-source, membership gold) — see §7's update note.
