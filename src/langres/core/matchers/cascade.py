@@ -24,6 +24,7 @@ from sentence_transformers import SentenceTransformer
 
 from langres.core.models import ERCandidate, PairwiseJudgement
 from langres.core.matcher import Matcher, SchemaT
+from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
 from langres.core.matchers.llm_judge import (
     DEFAULT_PROMPT,
     render_default_prompt,
@@ -104,7 +105,10 @@ class CascadeChainMatcher(Matcher[SchemaT]):
 
     def __init__(
         self,
-        embedding_model_name: str = "all-MiniLM-L6-v2",
+        # Reads the shared constant rather than repeating the literal: this was
+        # a fourth copy the `model_ref` consolidation missed, and a copy is
+        # exactly how "the default embedding model" comes to mean two things.
+        embedding_model_name: str = DEFAULT_EMBEDDING_MODEL,
         llm_model: str = "gpt-4o-mini",
         llm_api_key: str = "",
         low_threshold: float = 0.3,

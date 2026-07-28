@@ -2,6 +2,114 @@
 
 ## [Unreleased]
 
+### The default embedding model is now `intfloat/e5-base-v2`
+
+**This changes results for any index built against the default.** Saved
+artifacts are *not* invalidated — they reload on the model they were saved with —
+so read the migration note below before re-embedding anything.
+
+`DEFAULT_EMBEDDING_MODEL` moves from `all-MiniLM-L6-v2` to `intfloat/e5-base-v2`
+(MIT). The embedder ladder (`docs/research/20260727_embedder_ladder.md`) measured
+it ahead of the incumbent on **3 of the 5** benchmarks and behind on **none** —
+mean per-record candidate recall at k=20, bootstrapped by gold cluster:
+
+| benchmark | Δ per-record recall | 95% CI | clusters |
+|---|---:|---|---:|
+| `wdc_computers` | **+0.1528** | [+0.1254, +0.1797] | 877 |
+| `abt_buy` | **+0.0324** | [+0.0216, +0.0451] | 1,012 |
+| `walmart_amazon` | **+0.0159** | [+0.0078, +0.0246] | 846 |
+| `amazon_google` | +0.0056 | [-0.0002, +0.0116] (spans 0) | 995 |
+| `fodors_zagat` | +0.0000 | [+0.0000, +0.0000] (exactly 0) | 112 |
+
+It is also a *cheaper* ceiling at that operating point, not just a higher one:
+candidates per unit recall fall on all five (`wdc_computers` 56,103 → 43,834;
+`abt_buy` 11,985 → 9,095).
+
+**What this is not.** It is a **blocking** result — candidate recall, not
+end-to-end F1 — and the field is the **7 of 14** ladder models with rows at
+`metric_revision` 1, so this is the best *measured* model, not a survey.
+`fodors_zagat` is saturated and settles nothing. The ladder's `index build (s)`
+column cannot be used to price the switch either: every `all-MiniLM-L6-v2` row
+read from the embedding cache (`enc 0`) while the e5 rows encoded for real, so
+those two columns measure different things. What is certain is that e5-base-v2
+is **109.5M parameters against 22.7M** and **768-dim against 384** — a bigger
+download, more memory, and slower encoding.
+
+**`google/embeddinggemma-300m` measured better overall and is deliberately not
+the default.** It ships under the Gemma Terms of Use, which is *not* OSI-approved
+and carries a prohibited-use policy that survives redistribution. langres is
+Apache-2.0; a default may not push terms onto users who never chose them. It
+stays a documented opt-in: `SentenceTransformerEmbedder("google/embeddinggemma-300m")`.
+
+**The new default ships with no prompt, on purpose — and this is an open
+question, not a settled one.** E5's model card asks for a prefix and warns that
+omitting one degrades the model. For a *symmetric* task like ER the card's recipe
+is `"query: "` on **both** sides (semantic-similarity guidance), not the
+`"query: "`/`"passage: "` retrieval pair — a shape `VectorBlocker` already
+documents and accepts without warning.
+
+It still ships bare, because **every number above was measured bare**: the
+ladder's `prompt_arm="none"`, `registered_prompts: []` (the checkpoint ships no
+`config_sentence_transformers.json`, so nothing was applied implicitly either),
+and no `documented` arm for this model at all. Switching the recipe on would put
+a configuration nobody measured behind those numbers.
+
+The two facts set a floor rather than conflicting: **e5-base-v2 beat the previous
+default by the margins above while running in the configuration its own card
+calls degraded.** The prefix is uncollected upside, and collecting it is a
+measurement job — add a symmetric arm to the ladder and re-run, then move the
+constant's configuration and its numbers together. Pinned by test meanwhile.
+
+**Migration.** A **normally saved artifact keeps working** — `Resolver.save` /
+`FAISSIndex.config()` serialize the embedder you built with, so `load` rebuilds
+*that* embedder (still `all-MiniLM-L6-v2`) and `load_state` restores the stored
+vectors verbatim without re-embedding. Do **not** discard those.
+
+What does change:
+
+- **Anything that rebuilds an index against the new default** now produces
+  768-dim vectors from a different model. Recall changes as measured above, and
+  such an index cannot be compared against, or mixed with, 384-dim vectors from
+  the old default.
+- **A `DiskCachedEmbedder` cache is re-encoded once** — see the entry below;
+  before that fix the same cache would have silently served the old model's
+  vectors.
+
+To keep the previous behaviour exactly, name the old model:
+
+```python
+from langres.core.embeddings import SentenceTransformerEmbedder
+
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")   # previous default
+```
+
+### Fixed: `DiskCachedEmbedder` could serve a different model's vectors
+
+`_embedder_discriminator()` covered `prompt_name` / `truncate_dim` / `prompts`
+but **not the model**, and `namespace` defaults to `"default"` — so the ordinary
+`DiskCachedEmbedder(embedder=SentenceTransformerEmbedder(), cache_dir=...)` wrote
+every model's vectors into one `default.db` keyed on the bare text. Swapping the
+wrapped model then hit those entries and returned the **previous** model's
+vectors, at the previous model's dimensionality: silently on a fully warm cache,
+and as a ragged 384/768 stack on a partially warm one.
+
+The model now forms part of the key — the `ModelRef` where there is one, so a
+`revision` pin counts too. **Existing caches written by a named model are
+re-encoded once**; caches from an embedder with no model identity (e.g.
+`FakeEmbedder`) still hit, as before.
+
+Changing `DEFAULT_EMBEDDING_MODEL` in the same release is what turned this latent
+hazard into a live one — every user of the default would have kept reading
+MiniLM vectors without touching a line of their own code.
+
+Affected defaults: `SentenceTransformerEmbedder()`,
+`Resolver.from_schema(..., matcher="embedding")`, `VectorLLMCascade(embedder=...)`,
+the `embedding` method's `default_model`, and `CascadeChainMatcher` — whose
+`embedding_model_name` was a fourth hard-coded copy of the old literal and now
+reads the shared constant. **Not** changed: the pinned `all-MiniLM-L6-v2` in the
+benchmark loaders under `langres.data` (they back published baselines) and in
+`SearchSpace` / `BlockerOptimizer` (explicitly enumerated search axes).
+
 ### The better clusterer is now reachable (`clusterer=` opt-in)
 
 `CorrelationClusterer` measured better than the default transitive-closure

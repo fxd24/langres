@@ -1565,7 +1565,7 @@ def _render_recommendation(
         f"\nlangres ships under Apache-2.0. A default that carries a use-restricted "
         f"licence pushes that restriction onto every user who never chose it, so the "
         f"candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed "
-        f"models — including the incumbent, `{REFERENCE_MODEL}` "
+        f"models — including the reference model, `{REFERENCE_MODEL}` "
         f"({(MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)).license}).\n"
     )
     if not osi:
@@ -2022,7 +2022,8 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         out.append("\n## Headline: there is no single winner — the answer is per benchmark\n")
         out.append(
             f"\nThe widest disagreement measured here is `{model}` against "
-            f"`{REFERENCE_MODEL}` (langres's current default) at k={headline_k}: "
+            f"`{REFERENCE_MODEL}` (this ladder's reference model, and langres's "
+            f"default when these rows were measured) at k={headline_k}: "
             f"**{high:+.4f}** per-record recall on `{high_row.benchmark}` "
             f"{_ci(high_row.vs_reference_ci_low, high_row.vs_reference_ci_high)} and "
             f"**{low:+.4f}** on `{low_row.benchmark}` "
@@ -2432,8 +2433,9 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
     out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
     out.append(
-        f"\nEvery model against `{REFERENCE_MODEL}` — langres's current "
-        "`DEFAULT_EMBEDDING_MODEL` — on the same records, paired per record and "
+        f"\nEvery model against `{REFERENCE_MODEL}` — this ladder's reference model, "
+        "which was `DEFAULT_EMBEDDING_MODEL` when these rows were measured — on the "
+        "same records, paired per record and "
         "resampled by gold cluster. **Δ is the mean per-record recall difference**, "
         "not the difference of the two aggregate recalls above: the bootstrap "
         "resamples per-record units, so the point estimate has to be the same "

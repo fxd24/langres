@@ -77,7 +77,71 @@ from typing import Literal, get_args
 #: method's identity) without either importing the other. It previously existed
 #: as three copies of the same literal (``method_registry`` + two in
 #: ``embeddings``), which is exactly how a default drifts.
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+#:
+#: **Chosen from measurement, over the OSI-licensed field only.** langres ships
+#: under Apache-2.0, so a default may not carry a use-restricted licence: it
+#: would push terms onto every user who never chose them. That rules out the
+#: ladder's strongest overall model, ``google/embeddinggemma-300m`` (Gemma Terms
+#: of Use — a prohibited-use policy that survives redistribution, and *not* OSI),
+#: which stays a documented opt-in. Among the OSI field, ``intfloat/e5-base-v2``
+#: (MIT) is ahead of the previous default ``all-MiniLM-L6-v2`` on **3 of the 5**
+#: benchmarks, and behind on **none** — mean per-record candidate recall at
+#: k=20, bootstrapped by gold cluster (``docs/research/20260727_embedder_ladder.md``):
+#:
+#: =============== ========= ====================== =========
+#: benchmark         Δ recall   95% CI                clusters
+#: =============== ========= ====================== =========
+#: wdc_computers     +0.1528   [+0.1254, +0.1797]         877
+#: abt_buy           +0.0324   [+0.0216, +0.0451]       1,012
+#: walmart_amazon    +0.0159   [+0.0078, +0.0246]         846
+#: amazon_google     +0.0056   [-0.0002, +0.0116]         995  (spans 0)
+#: fodors_zagat      +0.0000   [+0.0000, +0.0000]         112  (saturated)
+#: =============== ========= ====================== =========
+#:
+#: **It is measured BARE, and ships bare — deliberately, and this is a known
+#: open question rather than a settled one.** E5's model card asks for a prefix
+#: and says so bluntly: *"Do I need to add the prefix 'query: ' and 'passage: '
+#: to input texts? Yes, this is how the model is trained, otherwise you will see
+#: a performance degradation."* (README FAQ 1, L2685-2687, read from the
+#: checkpoint's own card). Note **which** prefix, though — the card's next lines
+#: split by task shape: ``"query: "``/``"passage: "`` for *asymmetric* retrieval
+#: (L2690), but ``"query: "`` **on both sides** for *symmetric* tasks such as
+#: semantic similarity and paraphrase retrieval (L2692). Entity resolution is
+#: symmetric — records against records, with no "passage" side — so the recipe
+#: this model would want here is the **symmetric** one, not the retrieval one.
+#: ``core/blockers/vector.py`` already documents that shape and accepts it
+#: without warning (``prompt_name="query"``, ``query_prompt`` unset).
+#:
+#: So why bare? Because **the ladder measured bare**, and the numbers above are
+#: only claimable for the configuration that produced them. Every e5 row carries
+#: ``registered_prompts: []`` and ``prompt_arm="none"``; the checkpoint ships no
+#: ``config_sentence_transformers.json`` at all (a ``.no_exist`` entry in the Hub
+#: cache), so nothing was applied implicitly either, and e5-base-v2 has no
+#: ``documented`` arm in the ladder. The symmetric recipe is therefore
+#: **unmeasured here**, and shipping it would put a configuration nobody measured
+#: behind the numbers above.
+#:
+#: The two facts together are not a conflict — they set a floor: e5-base-v2 beat
+#: the previous default by the margins above **while running in the configuration
+#: its own card calls degraded**. The measured win is a lower bound, and the
+#: prefix is upside that has not been collected.
+#:
+#: **To collect it, measure it — don't just switch it on.** Add a symmetric arm
+#: (``"query: "`` bound on both sides) for this model in
+#: ``examples/research/embedder_ladder.py`` and re-run; if it wins, change this
+#: constant's configuration and these numbers together. The ladder's own boxed
+#: warning is the reason for the caution: a query-side prefix *hurt* several
+#: models there, and e5's measured ``instruct`` arm — a generic instruction on
+#: the query side only, which is neither recipe — moved nothing measurable on any
+#: of the five (four intervals span 0; ``fodors_zagat`` is exactly 0).
+#: (Driving a *document* prefix without the matching query side is worse than
+#: neither; ``VectorBlocker`` warns on exactly that.)
+#:
+#: Two consequences worth knowing before changing this again: the ladder ranks
+#: models on **blocking** candidate recall, not end-to-end F1; and the field is
+#: **7 of the 14** models in the ladder — the 7 with rows at ``metric_revision``
+#: 1. This is the best measured model, not a survey of every model that exists.
+DEFAULT_EMBEDDING_MODEL = "intfloat/e5-base-v2"
 
 #: The form of a backbone reference, and the sole input to routing.
 BackboneKind = Literal["api", "endpoint", "hf", "local"]
