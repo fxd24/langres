@@ -25,6 +25,7 @@ from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
 from langres.core.op import ClusterStage, Finalize, Score, Source
 from langres.core.op_adapters import (
     BlockerSource,
+    CalibratorScore,
     CanonicalizeFinalize,
     ClustererStage,
     ComparatorScore,
@@ -567,3 +568,45 @@ def test_adapter_chain_with_rapidfuzz_and_pivot_clusterer() -> None:
     adapter_clusters = ClustererStage(clusterer).forward(pairs)
 
     assert _sorted_clusters(adapter_clusters) == _sorted_clusters(legacy)
+
+
+def test_matcher_score_reports_no_spend_monitor_before_binding() -> None:
+    """An unbound MatcherScore has no ledger to report -- not an empty one.
+
+    ``bind_spend_monitor`` is what wraps the matcher in a SpendCappedMatcher; until
+    then there is genuinely nothing metering this score, and saying so with ``None``
+    is what lets callers tell "uncapped" from "capped at zero spend so far".
+    """
+    matcher: RapidfuzzMatcher[CompanySchema] = RapidfuzzMatcher(
+        field_extractors={"name": (lambda e: e.name, 1.0)}
+    )
+    assert MatcherScore(matcher, out_space="heuristic").spend_monitor is None
+
+
+class _SpyCalibrator:
+    """Minimal CalibratorFitMixin surface: records whether it was asked to work."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def transform(self, scores: list[float]) -> list[float]:
+        self.calls += 1
+        return [min(1.0, score * 2) for score in scores]
+
+
+def test_calibrator_score_passes_unscored_rows_through_untouched() -> None:
+    """Calibrating a row that carries no score would have to invent one.
+
+    Rows arrive unscored (straight off the blocker) or carry a decider's verdict
+    with ``score=None``. Both must pass through, and the calibrator must not be
+    called at all -- feeding it ``None`` would either crash or fabricate a
+    probability the pipeline never measured.
+    """
+    calibrator = _SpyCalibrator()
+    pairs = BlockerSource(AllPairsBlocker(schema=CompanySchema)).forward(_RECORDS)
+    assert pairs.rows, "fixture must produce candidate rows"
+
+    out = CalibratorScore(calibrator).forward(pairs)  # type: ignore[arg-type]
+
+    assert calibrator.calls == 0
+    assert [row.score for row in out.rows] == [None] * len(pairs.rows)

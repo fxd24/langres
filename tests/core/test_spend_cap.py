@@ -205,3 +205,73 @@ class TestSpendCapBudgetEdges:
 
         capped = SpendCappedMatcher(_NoneCostMatcher(), budget_usd=0.0)
         assert len(list(capped.forward(_candidates()))) == 1
+
+
+class _GroupwiseCostlyMatcher(Matcher[object]):
+    """Mimics SelectMatcher's group accounting: full cost on the group's first
+    judgement, $0 on its K-1 siblings, ``group_end`` on the last.
+
+    Lazy on purpose -- ``pulled`` records how far the consumer actually advanced
+    the generator, which is what proves the drain stops at the group boundary
+    instead of resuming the matcher and firing the next group's paid call.
+    """
+
+    def __init__(self, group_size: int, cost_per_group: float, groups: int = 2) -> None:
+        self._group_size = group_size
+        self._cost_per_group = cost_per_group
+        self._groups = groups
+        self.pulled = 0
+
+    def forward(self, candidates: Iterator[ERCandidate[object]]) -> Iterator[PairwiseJudgement]:
+        list(candidates)
+        for group in range(self._groups):
+            for member in range(self._group_size):
+                self.pulled += 1
+                yield PairwiseJudgement(
+                    left_id=f"g{group}",
+                    right_id=f"m{member}",
+                    score=0.9,
+                    score_type="prob_llm",
+                    decision_step="fake_groupwise",
+                    provenance={
+                        "cost_usd": self._cost_per_group if member == 0 else 0.0,
+                        "group_id": f"g{group}",
+                        "group_end": member == self._group_size - 1,
+                    },
+                )
+
+    def inspect_scores(self, judgements: list[PairwiseJudgement], sample_size: int = 10) -> object:
+        raise NotImplementedError
+
+
+class TestGroupsAreNeverSplitAcrossTheCap:
+    """A group is one paid call, so the cap must not keep half of what was paid for.
+
+    The whole group's cost is stamped on its first judgement. If the cap trips
+    there and simply raises, the K-1 already-paid-for siblings are lost: the
+    caller is billed for the call but only sees a fraction of its output.
+    """
+
+    def test_partial_judgements_carry_the_whole_paid_group(self) -> None:
+        matcher = _GroupwiseCostlyMatcher(group_size=3, cost_per_group=5.0)
+        capped = SpendCappedMatcher(matcher, budget_usd=1.0)
+
+        with pytest.raises(BudgetExceeded) as exc:
+            list(capped.forward(_candidates()))
+
+        partial = exc.value.partial_judgements
+        assert [j.right_id for j in partial] == ["m0", "m1", "m2"]
+        assert all(j.provenance["group_id"] == "g0" for j in partial)
+
+    def test_the_drain_stops_at_the_boundary_and_bills_no_second_group(self) -> None:
+        """Draining must not pull past ``group_end`` -- that would resume the
+        matcher and fire the NEXT group's paid call for output nobody keeps."""
+        matcher = _GroupwiseCostlyMatcher(group_size=3, cost_per_group=5.0)
+        capped = SpendCappedMatcher(matcher, budget_usd=1.0)
+
+        with pytest.raises(BudgetExceeded):
+            list(capped.forward(_candidates()))
+
+        # Exactly the first group was produced; the second group's first
+        # judgement (the next paid call) was never requested.
+        assert matcher.pulled == 3

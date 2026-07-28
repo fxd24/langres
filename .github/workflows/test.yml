@@ -1,16 +1,60 @@
 name: Test
 
-# Per-PR: run the FAST suite only (slow ML tests excluded -- see the `test`
-# job). The full suite incl. slow tests + the coverage gates runs on every
-# merge to main (push) + on demand (workflow_dispatch) via the `test-full` job,
-# so slow embedding/ML tests don't cost ~10min on every PR. This repo is public,
-# so Actions minutes are free/unlimited -- per-merge coverage is worth it, while
-# the fast suite still runs per-PR. Jobs are gated by event with `if:` below.
+# Per-PR: run the FAST suite (slow ML tests excluded -- see the `test` job) AND
+# the contract coverage gate against that fast suite's data. The full suite incl.
+# slow tests + the AUTHORITATIVE coverage gates run on every merge to main (push)
+# + on demand (workflow_dispatch) via the `test-full` job, so the slow
+# embedding/ML tests don't cost ~40min on every PR. This repo is public, so
+# Actions minutes are free/unlimited -- per-merge coverage is worth it, while the
+# fast suite still runs per-PR. Jobs are gated by event with `if:` below.
+#
+# MEASURED 2026-07-28, because the previous version of this comment said "~10min"
+# and that number was what justified keeping the contract gate off PRs entirely:
+#   test-full        ~38-41 min   (green run 3dbd13d 37m39s; run 30307689766 41m)
+#   test (fast)      ~6 min       (PR #229's run: 5m53s)
+#   the gate step itself  ~12 s
+# The cost is the SUITE, never the gate. That is why the gate now runs in both
+# places and only the suite under it differs.
 on:
   pull_request:
   push:
     branches: [main, feat/core-packages, epic/193-core-algebra]
   workflow_dispatch:
+
+env:
+  # ONE definition of the langres.core contract include list, used by BOTH
+  # coverage gates below (per-PR on the fast suite, per-merge on the full suite).
+  #
+  # It is here, not written out twice, for the reason this repo keeps
+  # rediscovering: a value duplicated in two places drifts, and the copy that
+  # drifts silently stops gating what it names. Referenced as a plain shell
+  # variable ("$CONTRACT_COVERAGE_INCLUDE"), not `${{ }}`, so nothing is
+  # template-interpolated into a `run:` script.
+  #
+  # !! KEEP THIS IN SYNC WITH THE CONTRACT !! As refactor waves relocate the
+  # contract out of `core/` (components/, architectures/, ... -- see the tier
+  # definition in .claude/rules/testing.md), ADD the new paths here. If the glob
+  # ever matches NOTHING, `coverage report` exits 1 ("No data to report.") and the
+  # gates go red rather than passing vacuously -- but a PARTIAL move still passes
+  # while silently covering less of the contract, so this is a real maintenance
+  # obligation, not a self-healing gate.
+  #
+  # `src/langres/optimize.py` IS LISTED SEPARATELY ON PURPOSE -- DO NOT FOLD IT
+  # INTO AN `optimize/*` GLOB. The facade is a MODULE (a file), not a package; the
+  # engine beside it is the `autoresearch/` package. Coverage compiles a trailing
+  # `/*` to `optimize[/\\].*` (verified against coverage.files.globs_to_regex,
+  # 7.15.0), which matches a directory's contents and can NEVER match the file
+  # `optimize.py`. Writing only `autoresearch/*` here would drop the facade.
+  # (Trailing `/*` is recursive, so `autoresearch/*` does cover the whole engine,
+  # and `core/*` covers `core/blockers/vector.py`.)
+  #
+  # The four `src/langres/curation/{anchor_store,canonicalizer,harvest,review}.py`
+  # files are the CONTRACT half of the curation package. They are listed as FILES,
+  # not a `curation/*` glob, on purpose: the rest of curation is behavior/smoke-tier
+  # harness code, so a `curation/*` glob would drag it under these floors.
+  # `tracking/factories.py` is deliberately NOT listed: it was `clients/tracking.py`,
+  # never under `core/*`, so it was never in this contract tier.
+  CONTRACT_COVERAGE_INCLUDE: "src/langres/core/*,src/langres/metrics/*,src/langres/curation/anchor_store.py,src/langres/curation/canonicalizer.py,src/langres/curation/harvest.py,src/langres/curation/review.py,src/langres/tracking/judgement_log.py,src/langres/tracking/runs.py,src/langres/tracking/trackers/*,src/langres/training/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py"
 
 concurrency:
   # `pull_request`: one group per PR ref, so a new push supersedes the previous
@@ -33,10 +77,16 @@ concurrency:
 
 jobs:
   # Fast per-PR tests: everything EXCEPT the ~76 slow embedding/ML tests (they
-  # load heavy torch models and dominate wall-time). Coverage is collected but
-  # NOT gated here (`--cov-fail-under=0` overrides the pyproject default),
-  # because the excluded slow tests are the only cover for some ML paths -- the
-  # coverage floors are enforced on `test-full` below.
+  # load heavy torch models and dominate wall-time).
+  #
+  # Coverage here is gated on ONE number and not the other:
+  #   - the REPO-WIDE floor is NOT enforced (`--cov-fail-under=0` overrides the
+  #     pyproject default), because the excluded slow tests are the only cover
+  #     for some ML paths, so a repo-wide number measured here would be wrong.
+  #   - the `langres.core` CONTRACT floor IS enforced, at a lower early-warning
+  #     97.5 -- see the long comment on that step below for why the fast-suite
+  #     number is a close proxy (measured: 0.33pp under the full suite).
+  # The authoritative contract floor (98) still runs on `test-full`.
   test:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -69,6 +119,59 @@ jobs:
 
       - name: Run fast unit tests (excludes slow ML tests)
         run: uv run pytest -m "not integration and not slow and not finetune" --cov-fail-under=0
+
+      # THE PER-PR HALF OF THE CONTRACT GATE. This exists because the
+      # authoritative gate on `test-full` is gated `if: github.event_name !=
+      # 'pull_request'` and therefore CANNOT run on a PR. That is not a
+      # hypothetical: PR #229 merged with its check list reading
+      #     lint pass · test pass · test-core-only pass · test-finetune pass
+      #     test-full SKIPPING        <- the only job running the contract gate
+      # It dropped the contract from 98.28% to 97.27% and `main` stayed red for
+      # SIX DAYS across seven merges, because the only place that could see the
+      # failure was a job nobody opens after a merge is already done.
+      #
+      # A gate positioned where no one reads it is not a gate. So the same
+      # include list is checked here too, on data this job already produces:
+      # pyproject's addopts carry `--cov=langres`, so `.coverage` is on disk by
+      # the time this step runs and the check costs ~12 SECONDS.
+      #
+      # WHY A SEPARATE, LOWER FLOOR -- and why that is not the "two numbers
+      # drift" disease this repo has been bitten by. The include LIST (the thing
+      # that actually rots) is defined ONCE, in `env` at the top of this file, and
+      # both gates read it. Only the floor differs, and it must, because the two
+      # gates measure different data: this job deliberately excludes the slow ML
+      # tests, so paths covered only by them read as uncovered here.
+      #
+      # The lower floor is STRUCTURAL, not tuned to an observation. This job's
+      # selection is `not integration and not slow and not finetune`;
+      # `test-full`'s is `not integration and not finetune`. They are identical
+      # except for `not slow`, so the tests run here are a strict SUBSET of the
+      # tests run there. Coverage is monotone in tests executed -- running more
+      # tests can only cover more lines -- and both gates score the same include
+      # list, hence the same denominator. Therefore, on the same tree:
+      #
+      #     full-suite coverage  >=  fast-suite coverage,   ALWAYS.
+      #
+      # So this gate can never demand something the authoritative gate does not
+      # already meet, and a number that clears 98 on `test-full` cannot be failed
+      # here for having been measured on less data.
+      #
+      # The observed gap is small, which is why 97.5 is close rather than
+      # slack. MEASURED at 1b24a2a, 2026-07-28 -- both numbers on THIS tree:
+      #   full suite (test-full)   98.26%   local run, 9011 stmts / 98 miss
+      #   fast suite (this job)    97.93%   CI run 30317465537, same commit
+      #   difference                0.33pp
+      # 97.5 is that 97.93 with the same conservative rounding-down the 98 floor
+      # gets, leaving ~0.43pp of working room.
+      #
+      # This floor is a per-PR EARLY WARNING; `test-full`'s 98 remains the
+      # authoritative contract floor. If this one fires, the contract slipped --
+      # diagnose it here, where it is cheap, instead of after the merge.
+      - name: Coverage gate -- langres.core contract (fast suite, early warning)
+        run: |
+          uv run coverage report \
+            --include="$CONTRACT_COVERAGE_INCLUDE" \
+            --precision=2 --fail-under=97.5
 
   test-core-only:
     if: github.event_name == 'pull_request'
@@ -177,14 +280,20 @@ jobs:
       - name: Run the user-facing docs against a clean wheel install
         run: uv run python tools/doc_snippets.py
 
-  # Full suite INCLUDING the slow embedding/ML tests, plus the coverage gates:
-  # the repo-wide floor (inherited from pyproject addopts) and the core-contract
-  # floor (a separate step). Runs on every merge to main (push) + on
-  # demand (workflow_dispatch) -- NOT per PR -- so ML regressions and the
-  # coverage floors are enforced on every merge without paying ~10min on every
-  # PR. Trigger an ad-hoc run before a release or a risky ML change with the
-  # "Run workflow" button (workflow_dispatch). Do NOT mark this a required
-  # status check (it is skipped on PR events).
+  # Full suite INCLUDING the slow embedding/ML tests, plus the AUTHORITATIVE
+  # coverage gates: the repo-wide floor (inherited from pyproject addopts) and the
+  # core-contract floor (a separate step). Runs on every merge to main (push) + on
+  # demand (workflow_dispatch) -- NOT per PR -- so ML regressions and the honest
+  # coverage floors are enforced on every merge without paying ~40min on every PR
+  # (measured; see the timings at the top of this file). Trigger an ad-hoc run
+  # before a release or a risky ML change with the "Run workflow" button
+  # (workflow_dispatch). Do NOT mark this a required status check (it is skipped
+  # on PR events).
+  #
+  # This job being PR-invisible is what let the contract gate stay red on `main`
+  # for six days across seven merges (#229 -> #237). The per-PR early-warning
+  # gate on the `test` job above exists so that failure mode has a cheaper,
+  # visible tripwire; this job remains the number of record.
   test-full:
     if: github.event_name != 'pull_request'
     # 4-vCPU: the slow ML tests' torch inference uses all 4 cores via torch's
@@ -258,54 +367,37 @@ jobs:
       # vanish before firing. Raise it as the real number climbs; if it ever
       # blocks legitimate work, lower it deliberately rather than deleting it.
       #
-      # !! KEEP THE GLOB IN SYNC !! As refactor waves relocate the contract out
-      # of `core/` (components/, architectures/, ... -- see the tier definition
-      # in .claude/rules/testing.md), ADD the new paths here. If the glob ever
-      # matches NOTHING, `coverage report` exits 1 ("No data to report.") and
-      # this step goes red rather than passing vacuously -- but a PARTIAL move
-      # still passes while silently covering less of the contract, so this is a
-      # real maintenance obligation, not a self-healing gate.
+      # !! THE INCLUDE LIST LIVES IN `env.CONTRACT_COVERAGE_INCLUDE` AT THE TOP OF
+      # THIS FILE, not here. !! It is shared with the per-PR early-warning gate on
+      # the `test` job so the two can never name different things. Its maintenance
+      # rules -- keep it in sync as the contract relocates, why `optimize.py` is a
+      # FILE and not an `optimize/*` glob, why the four curation modules are listed
+      # individually -- are documented there. Read that block before editing it.
       #
-      # `src/langres/report/*`, `src/langres/autoresearch/*` and
-      # `src/langres/optimize.py` were added when the render seam and the
-      # autoresearch engine moved out of core. All measure ~93-100% (report
-      # ~1,400 lines; the engine files all 100%), so they were LIFTING core's
-      # average, not dragging it. Dropping them would have quietly un-gated
-      # 99%-covered public surface (`EvalReport` is root-exported;
-      # `optimize()`/`score_blocking` are the public facade) while making the
-      # remaining number look BETTER. That is the failure this comment exists to
-      # prevent: the glob follows the contract, not the average.
+      # `report/*`, `autoresearch/*`, `optimize.py`, `training/*`, `metrics/*` and
+      # the `tracking/*` contract modules are all in the list because they carry
+      # public surface that USED to live under `core/*` and moved out. Dropping any
+      # of them would un-gate contract code while making the remaining number look
+      # BETTER -- the glob follows the contract, not the average.
       #
-      # The four `src/langres/curation/{anchor_store,canonicalizer,harvest,review}.py`
-      # files are the CONTRACT half of the curation package -- they moved out of
-      # `core/` when bootstrap dissolved in (W2). They are listed as FILES, not a
-      # `curation/*` glob, on purpose: the rest of curation (bootstrapper, labelers,
-      # miners, models, report, base, _pairs -- the former `langres.bootstrap`) is
-      # behavior/smoke-tier harness code, so a `curation/*` glob would drag it under
-      # this 98 floor. The temporary `core/{...}.py` re-export shims left behind carry
-      # `# pragma: no cover` (throwaway back-compat, deleted by the W2 sweep), so they
-      # do not declassify the number they no longer own.
+      # The temporary `core/{...}.py` re-export shims carry `# pragma: no cover`
+      # (throwaway back-compat, deleted by the W2 sweep), so they do not
+      # declassify the number they no longer own. A re-export owns no contract,
+      # and the module each one redirects to is itself inside this list.
       #
-      # !! `src/langres/optimize.py` IS LISTED SEPARATELY ON PURPOSE -- DO NOT
-      # !! FOLD IT INTO AN `optimize/*` GLOB. The facade is a MODULE (a file), not
-      # a package; the engine beside it is the `autoresearch/` package. Coverage
-      # compiles a trailing `/*` to `optimize[/\\].*` (verified against
-      # coverage.files.globs_to_regex, 7.15.0), which matches a directory's
-      # contents and can NEVER match the file `optimize.py`. Writing only
-      # `autoresearch/*` here would drop the facade -- 66 statements, 92.86%, the
-      # WORST-covered file in the glob -- and the TOTAL would go UP while
-      # measuring less. (Trailing `/*` is recursive, so `autoresearch/*` does
-      # cover the whole engine, and `core/*` covers `core/blockers/vector.py`.)
+      # HEADROOM, measured 2026-07-28 at 1b24a2a on the full suite: the include-list
+      # TOTAL is **98.26%** (9011 stmts / 98 miss) against the 98 floor. Neutralising
+      # the six W2 shim pragmas costs 0.10pp (98.16%, 9023 stmts) -- still clear of
+      # the floor, so the exclusions are NOT what carries this number. The floor
+      # gates this WHOLE include list, not `core/*` alone.
       #
-      # HEADROOM WARNING, measured 2026-07-17: the glob TOTAL is **98.39%**
-      # against this 98 floor -- and the 98 was set from a measured **98.84%**
-      # (see above). Note the floor gates this WHOLE include list, not `core/*`
-      # alone (which measures 98.43% by itself -- close, but not the number the
-      # gate compares). It has drifted ~0.45pp DOWN since, so the ratchet now has
-      # ~0.39pp of slack, not the ~0.84pp it was designed with. The next person to
-      # add a handful of uncovered lines here will trip this gate and reasonably
-      # conclude they broke it. They did not: it has been tightening around them
-      # for a while. Diagnose the drift before lowering the floor.
+      # HOW THIS GATE CAME TO BE RED FOR SIX DAYS, so the next reader does not
+      # repeat the diagnosis: #229 merged ~2,000 lines into gated `core/` paths at
+      # ~90% coverage and took the TOTAL 98.28% -> 97.27% in one commit. Nothing
+      # caught it because this job does not run on PRs (see the job comment above),
+      # and `main` then absorbed six more merges. The include list was NOT the
+      # cause -- it is byte-identical to the last green run. If this gate fires on
+      # you, diagnose which commit moved the number before touching the floor.
       #
       # Deliberately AFTER the Codecov upload: that upload is advisory, and when
       # this gate fails you still want the data published to diagnose the drop.
@@ -315,40 +407,17 @@ jobs:
       # passes a --fail-under=98 gate -- the floor would silently mean 97.5.
       # With it the comparison is exact and 98 means 98.
       #
-      # `src/langres/training/*` was ADDED when the fit family (finetune /
-      # calibration / fit_report / methods_prompt / methods_calibrate) moved out
-      # of `core/` into the `langres.training` package (W2). Those five modules
-      # were ALREADY in this gate via `core/*`; dropping them would silently
-      # un-gate ~1000 lines of public-surface contract (`derive_threshold`,
-      # `Calibrator`, `FitReport`, `QLoRA`/`run_finetune`, `Bootstrap`/`MIPRO`/
-      # `GEPA`, `Platt`/`Isotonic` are all root/core-exported). Re-including them
-      # is coverage-NEUTRAL by construction -- the same files, relocated -- so
-      # the TOTAL is unchanged. The glob follows the contract, not the average.
-      #
-      # `src/langres/metrics/*` was ADDED when the ER-metrics/diagnostics family
-      # (metrics / analysis / debugging / diagnostics) moved out of `core/` into
-      # the `langres.metrics` package (W2). Those modules were ALREADY in this
-      # gate via `core/*` (they measure ~99%); re-including them at the new path
-      # is coverage-NEUTRAL by construction and keeps the public metrics surface
-      # (root / `langres.eval`-exported) gated. The metrics branch did not touch
-      # this workflow; the term is added here, at integration, on purpose.
-      #
-      # `src/langres/tracking/{judgement_log.py,runs.py,trackers/*}` are the
-      # CONTRACT half of the tracking package -- observability that left `core/`
-      # (W2). They were in this gate via `core/*`, and `test-full` runs
-      # `--all-extras` so mlflow/wandb/trackio actually exercise the adapters, so
-      # they are re-listed at the new path to stay gated (coverage-NEUTRAL, same
-      # files relocated). `tracking/factories.py` is deliberately NOT listed: it
-      # was `clients/tracking.py`, never under `core/*`, so it was never in this
-      # contract tier. The tracking branch did not touch this workflow either;
-      # these terms are added here, at integration, on purpose.
-      #
-      # STALE-NUMBER NOTE: the HEADROOM WARNING's 98.39% figure above was measured
-      # before the `metrics/*` and `tracking/*` terms were added at integration.
-      # The `--fail-under=98` floor is deliberately left unchanged here; the
-      # test-full TOTAL (and any floor re-derivation) is recomputed once this lands.
+      # RESOLVED (2026-07-28): the old STALE-NUMBER NOTE here promised that the
+      # test-full TOTAL "is recomputed once this lands" after the `metrics/*` and
+      # `tracking/*` terms were added at integration. It never was. It has now
+      # been: the include list is byte-identical to the last green run (3dbd13d,
+      # 98.28%), so the widening was NOT the cause of this gate going red -- #229
+      # was. The floor stays 98.
       - name: Coverage gate -- langres.core contract
-        run: uv run coverage report --include="src/langres/core/*,src/langres/metrics/*,src/langres/curation/anchor_store.py,src/langres/curation/canonicalizer.py,src/langres/curation/harvest.py,src/langres/curation/review.py,src/langres/tracking/judgement_log.py,src/langres/tracking/runs.py,src/langres/tracking/trackers/*,src/langres/training/*,src/langres/report/*,src/langres/autoresearch/*,src/langres/optimize.py" --precision=2 --fail-under=98
+        run: |
+          uv run coverage report \
+            --include="$CONTRACT_COVERAGE_INCLUDE" \
+            --precision=2 --fail-under=98
 
   # The [finetune] extra's OWN job: install the QLoRA training stack (peft/trl/
   # bitsandbytes) that every other job deliberately excludes (`--no-extra

@@ -273,3 +273,26 @@ def test_blocker_stream_groups_default_pairs_equivalence_property() -> None:
 
     assert group_pairs == stream_pairs
     assert len(group_pairs) == 15  # C(6, 2)
+
+
+class TestBlockerSchemaProperty:
+    """`Blocker.schema` resolves a registry NAME, so it must survive the name
+    not resolving -- that is the normal state in a fresh process, not an error."""
+
+    def test_no_schema_name_means_no_schema(self) -> None:
+        blocker = DummyBlocker()
+        assert not hasattr(blocker, "_schema_type_name")
+        assert blocker.schema is None
+
+    def test_a_registered_name_resolves_to_its_class(self) -> None:
+        blocker = DummyBlocker()
+        blocker._schema_type_name = "CompanySchema"  # type: ignore[attr-defined]
+        assert blocker.schema is CompanySchema
+
+    def test_an_unregistered_name_answers_none_instead_of_raising(self) -> None:
+        """A model saved with an inferred, ephemeral schema reloads in a process
+        where that name was never registered. `schema` is a property callers treat
+        as cheap, so "I don't know" beats raising SchemaNotRegistered at them."""
+        blocker = DummyBlocker()
+        blocker._schema_type_name = "NeverRegisteredSchema_123"  # type: ignore[attr-defined]
+        assert blocker.schema is None
