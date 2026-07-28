@@ -1,6 +1,8 @@
 """Reproduce *published* embedding-blocking numbers with langres's own components.
 
-langres has never reproduced anyone else's result. This script does exactly one
+langres had never re-derived anyone else's *blocking* number. (It had replicated a
+matching result -- ``langres.data.peeters`` -- but that replays their archived model
+answers rather than re-deriving a metric from our own models.) This script does one
 thing: it re-runs the candidate-set protocol that DeepBlocker (PVLDB 2021) and
 UniBlocker (arXiv:2404.14831) describe, on langres's shipped benchmark corpora,
 through langres's own :class:`SentenceTransformerEmbedder` and
