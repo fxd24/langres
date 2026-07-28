@@ -1506,7 +1506,22 @@ def _render_recommendation(
             )
             for name in compared
         ]
-        best_count, _best_delta, best_name = max(ranked) if ranked else (0, 0.0, "")
+        best_count, best_delta, best_name = max(ranked) if ranked else (0, 0.0, "")
+        # `name` is in the sort tuple for byte-stability across re-renders, which
+        # makes `max` pick the lexicographically greatest model on an exact tie --
+        # a winner with no measurement behind it. Detect the tie on the MEASURED
+        # part of the key only and report it, rather than letting the tiebreak
+        # silently decide. (Cross-model review.)
+        co_winners = [
+            name for count, delta, name in ranked if (count, delta) == (best_count, best_delta)
+        ]
+        # Wins on benchmarks OUTSIDE the shared set. They cannot enter the ranking
+        # -- that is the whole point of the shared set -- but they are still
+        # CI-clear wins sitting in the table above, so a sentence saying no model
+        # beat the reference "on any benchmark" would contradict it.
+        exclusive_winners = sorted(
+            {name for name in compared if any(row.benchmark not in common for row in wins(name))}
+        )
         if not compared:
             out.append(
                 f"\n**No OSI-licensed challenger currently carries an interval against "
@@ -1528,10 +1543,23 @@ def _render_recommendation(
                 "above still stand individually; re-run the challengers on a shared "
                 "set before comparing them to each other.\n"
             )
+        elif best_count == 0 and exclusive_winners:
+            out.append(
+                f"\n**No compared OSI-licensed model beats `{REFERENCE_MODEL}` on the "
+                f"{len(common)} shared benchmark(s) — but "
+                f"{', '.join(f'`{name}`' for name in exclusive_winners)} does win "
+                "elsewhere, on a benchmark outside the shared set.** No default "
+                "recommendation is made here. Keeping the default would need those "
+                "wins to be absent, and they are not; promoting on them would need "
+                "them to be comparable, and they are not either — the other models "
+                "were never measured there. Re-run the field on a common set to "
+                "settle it.\n"
+            )
         elif best_count == 0:
             out.append(
                 f"\n**None of the {len(compared)} compared OSI-licensed model(s) beats "
-                f"`{REFERENCE_MODEL}` on any benchmark with an interval clear of zero.** "
+                f"`{REFERENCE_MODEL}` on any of the {len(common)} shared benchmark(s) "
+                "with an interval clear of zero.** "
                 "The measured recommendation is therefore to **keep the current "
                 "default** — not because the challengers are bad, but because on this "
                 "evidence the measurement cannot tell them apart, and "
@@ -1544,6 +1572,16 @@ def _render_recommendation(
                     "not part of that statement."
                 )
                 + "\n"
+            )
+        elif len(co_winners) > 1:
+            out.append(
+                f"\n**No single best OSI-licensed candidate: "
+                f"{', '.join(f'`{name}`' for name in sorted(co_winners))} tie exactly** "
+                f"— same {best_count} win(s) on the {len(common)} shared benchmark(s) "
+                f"and the same best Δ ({best_delta:+.4f}). Naming one of them would be "
+                "reporting the sort order, not a measurement. Break the tie with "
+                "something this table does not carry — cost, licence, memory, latency "
+                "— or on more benchmarks.\n"
             )
         else:
             out.append(

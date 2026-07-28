@@ -1343,6 +1343,79 @@ class TestRecommendationSplitsOnLicence:
         assert "share no common benchmark, so no winner is named" in section
         assert "Best OSI-licensed candidate" not in section
 
+    def test_a_win_outside_the_shared_set_blocks_the_keep_the_default_verdict(self) -> None:
+        """The shared-set ranking must not erase a CI-clear win from the table.
+
+        ``best_count`` counts only the shared benchmarks, so a challenger winning
+        on a benchmark the others were never measured on scores zero — and the
+        old sentence then said no model beats the reference "on any benchmark",
+        contradicting the row directly above it.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            # Shared benchmark "a": no one wins it.
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.01,
+                vs_reference_ci_low=-0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.01,
+                vs_reference_ci_low=-0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            # ...but e5 wins "b" outright, and bge was never measured there.
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="b",
+                vs_reference_delta=0.30,
+                vs_reference_ci_low=0.25,
+                vs_reference_ci_high=0.35,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "does win" in section and "outside the shared set" in section
+        assert "`intfloat/e5-base-v2`" in section
+        assert "keep the current default" not in section
+
+    def test_an_exact_tie_names_no_winner(self) -> None:
+        """``name`` is in the sort key for byte-stability, not to break ties.
+
+        Letting ``max`` resolve an exact tie reports the sort order as if it were
+        a measurement.
+        """
+        tied = dict(
+            vs_reference_delta=0.05,
+            vs_reference_ci_low=0.03,
+            vs_reference_ci_high=0.07,
+        )
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell("BAAI/bge-small-en-v1.5", "none", **tied),
+            _cell("intfloat/e5-base-v2", "none", **tied),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "No single best OSI-licensed candidate" in section
+        assert "`BAAI/bge-small-en-v1.5`" in section
+        assert "`intfloat/e5-base-v2`" in section
+        assert "**Best OSI-licensed candidate:" not in section
+
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
         """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
         section = self._section()
