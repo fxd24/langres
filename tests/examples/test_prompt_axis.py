@@ -449,8 +449,9 @@ def test_a_zero_effect_stays_in_its_family_instead_of_shrinking_it() -> None:
     assert harness._row_p_value(degenerate) == 1.0
 
     # p=1 never rejects, but it does occupy a slot -- which is the entire point.
-    assert harness._holm({"a": 0.02, "b": 0.3, "c": 0.4}) == {"a"}
-    assert harness._holm({"a": 0.02, "b": 0.3, "c": 0.4, "d": 1.0}) == set()
+    # m=3 tests the smallest p against 0.05/3 = 0.0167; m=4 against 0.05/4 = 0.0125.
+    assert harness._holm({"a": 0.015, "b": 0.3, "c": 0.4}) == {"a"}
+    assert harness._holm({"a": 0.015, "b": 0.3, "c": 0.4, "d": 1.0}) == set()
 
 
 def test_an_unmeasured_comparison_is_absent_rather_than_counted_as_null() -> None:
