@@ -294,6 +294,30 @@ class TestStaleCacheCanary:
         # mid-sweep and needs the path, not a description of the hazard.
         assert "canary_ns.db" in str(excinfo.value)
 
+    def test_a_cache_written_before_the_canary_existed_is_refused(self, tmp_path: Path) -> None:
+        """The hole the canary would otherwise have on its very first run.
+
+        On a pre-existing cache the canary simply *misses*: it is encoded fresh
+        from whatever checkpoint is loaded now, written into the unvouched
+        database, and then compared against another fresh encoding of itself. It
+        always matches, while every corpus vector beside it may belong to a
+        different checkpoint — the same defect the check exists to close,
+        reintroduced one level up. (Caught by cross-model review.)
+        """
+        embedder = _SwappableEmbedder()
+        # A cache with real entries and no canary: exactly what every namespace
+        # written before this check looks like.
+        legacy = self._cached(embedder, tmp_path)
+        legacy.encode(["some corpus text", "another corpus text"])
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError) as excinfo:
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
+        assert "before this check existed" in str(excinfo.value)
+        assert "canary_ns.db" in str(excinfo.value)
+
 
 class TestPersistence:
     def test_rerunning_a_model_replaces_its_rows_instead_of_appending(self) -> None:

@@ -197,6 +197,13 @@ class TestCoherenceWarning:
         assert len(warnings) == 1
         assert "document-side prompt" in warnings[0]
         assert "prompt_name='document'" in warnings[0]
+        # The remedies are not interchangeable and the warning must not imply they
+        # are: `VectorBlocker.stream()` forwards `query_prompt` to `search_all()`,
+        # and `QdrantHybridIndex.search_all()` raises on any non-None prompt. A
+        # message that led with `query_prompt=` would hand a hybrid user a fix
+        # that turns a running configuration into a crash. (Cross-model review.)
+        assert warnings[0].index("Drop prompt_name") < warnings[0].index("query_prompt=...")
+        assert "QdrantHybridIndex.search_all() does not and will raise" in warnings[0]
 
     def test_warns_through_a_caching_decorator(self, caplog: pytest.LogCaptureFixture) -> None:
         """``DiskCachedEmbedder`` holds the real embedder on ``.embedder``.

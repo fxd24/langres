@@ -510,14 +510,23 @@ class VectorBlocker(Blocker[SchemaT]):
             and query_prompt is None
             and document_prompt not in _QUERY_SIDE_PROMPT_NAMES
         ):
+            # The two remedies are NOT interchangeable, and the order matters.
+            # Dropping prompt_name works on every index. Adding query_prompt only
+            # works on an index that re-encodes the query side: VectorBlocker
+            # forwards it to search_all(), and QdrantHybridIndex.search_all()
+            # raises NotImplementedError on any non-None prompt. Leading with
+            # query_prompt would hand a hybrid user a remedy that converts a
+            # running configuration into a crash. (Caught by cross-model review.)
             logger.warning(
                 "VectorBlocker: the index's embedder binds a document-side prompt "
                 "(prompt_name=%r) but this blocker sets no query_prompt. search_all() "
                 "then reuses the DOCUMENT-prompted corpus vectors as queries, so the "
                 "queries carry the document prefix -- which is not what an asymmetric "
-                "checkpoint documents, and is worse than prompting neither side. Pass "
-                "the checkpoint's query prefix as query_prompt=..., or drop prompt_name "
-                "from the embedder to run both sides bare.",
+                "checkpoint documents, and is worse than prompting neither side. Drop "
+                "prompt_name from the embedder to run both sides bare (works with any "
+                "index); or, if your index re-encodes queries, pass the checkpoint's "
+                "query prefix as query_prompt=... -- FAISSIndex does, "
+                "QdrantHybridIndex.search_all() does not and will raise.",
                 document_prompt,
             )
 

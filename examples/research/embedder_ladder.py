@@ -637,6 +637,20 @@ class StaleEmbeddingCacheError(RuntimeError):
     """The cached vectors were produced by a different checkpoint than the loaded one."""
 
 
+def _cache_entry_count(db_path: Path) -> int:
+    """How many vectors ``db_path`` already holds; 0 if it does not exist yet.
+
+    Read directly rather than via ``cache_info()``, which reports hit/miss
+    *counters for this process* and is therefore 0 for a cache written last week.
+    """
+    import sqlite3
+
+    if not db_path.exists():
+        return 0
+    with sqlite3.connect(db_path) as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0])
+
+
 def _assert_cache_matches_checkpoint(
     base: Any, cached: Any, namespace: str, cache_dir: Path
 ) -> None:
@@ -661,6 +675,15 @@ def _assert_cache_matches_checkpoint(
     drift a revision cannot see — a sentence-transformers upgrade that changes
     pooling, a tokenizer fix, a different dtype path on a new device.
 
+    **A cache that predates the canary cannot be vouched for, and must not pass
+    silently.** On such a cache the canary simply *misses*: it is encoded fresh
+    from the checkpoint loaded right now, written to the otherwise-unvouched
+    database, and then compared against another fresh encoding of itself. It
+    always matches — while every corpus vector beside it may still belong to a
+    different checkpoint. That is the same defect this function exists to close,
+    reintroduced one level up, so the entry count is read *before* the canary is
+    written: a non-empty namespace with no canary in it is refused outright.
+
     Raises:
         StaleEmbeddingCacheError: Naming the namespace file to delete. Deliberately
             fatal rather than a warning: the failure it guards against is one that
@@ -668,7 +691,24 @@ def _assert_cache_matches_checkpoint(
     """
     import numpy as np
 
+    db_path = cache_dir / f"{namespace}.db"
+    before = _cache_entry_count(db_path)
+
     from_cache = np.asarray(cached.encode([_CANARY_TEXT])[0], dtype=np.float64)
+
+    # The canary was a MISS if encoding it added a row. On an empty namespace
+    # that is the ordinary first run; on a populated one it means the cache was
+    # written before this check existed and nothing in it has ever been verified.
+    if _cache_entry_count(db_path) > before and before > 0:
+        raise StaleEmbeddingCacheError(
+            f"the embedding cache for namespace {namespace!r} holds {before} vectors "
+            f"written before this check existed, so nothing in it has ever been "
+            f"verified against a checkpoint. It may predate an upstream re-upload, "
+            f"and a run using it would publish rows mixing two checkpoints. Delete "
+            f"{db_path} and re-measure this model; the cache it writes will be "
+            f"checked from its first run onward."
+        )
+
     fresh = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
 
     if from_cache.shape != fresh.shape:
@@ -1191,13 +1231,16 @@ def _render_recommendation(
 
     out: list[str] = []
     out.append(f"\n## Recommendation (k={headline_k}, no instruction)\n")
-    # The denominator is the LADDER plus anything actually measured, not
-    # ``len(MODELS)``. ``--models`` accepts a name outside the fixed tuple (main()
-    # falls back to a bare ``ModelSpec``), and such a row lands in ``measured``
-    # while never appearing in ``MODELS`` — so a fixed denominator can print
-    # "15 of the 14 models" and point at a 'What did not run' section that only
-    # iterates ``MODELS`` and therefore cannot account for the difference.
-    ladder = {spec.name for spec in MODELS} | set(measured)
+    # The denominator is the LADDER plus every model that RAN, not ``len(MODELS)``
+    # and not the successes. ``--models`` accepts a name outside the fixed tuple
+    # (main() falls back to a bare ``ModelSpec``), so such a model never appears in
+    # ``MODELS`` — and a fixed denominator would print "15 of the 14 models" and
+    # point at a 'What did not run' section that only iterates ``MODELS`` and so
+    # cannot account for the difference. ``models`` and not ``measured``: measured
+    # is derived from ``ok`` rows only, so a custom model that FAILED would drop
+    # out of the denominator entirely while still being listed in the Failures
+    # table — the ladder would appear to shrink because a run went badly.
+    ladder = {spec.name for spec in MODELS} | set(models)
     out.append(
         f"\n**{len(measured)} of the {len(ladder)} models in the ladder have a row at "
         f"metric revision {METRIC_REVISION}.** Everything below is a statement about "
@@ -1914,11 +1957,10 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     stale_models = {row.model for row in stale}
     failed_models = {row.model for row in failures}
     never = [spec for spec in MODELS if spec.name not in measured]
-    # Same denominator as the recommendation section, and for the same reason: a
-    # `--models` name outside the fixed tuple is measured but never listed here,
-    # so counting against `len(MODELS)` makes the two sections disagree about how
-    # big the ladder is.
-    ladder_size = len({spec.name for spec in MODELS} | measured)
+    # Same denominator as the recommendation section, and computed the same way:
+    # every model that RAN, not just the ones that succeeded. Counting only
+    # `measured` here would make a custom model's failure shrink the ladder.
+    ladder_size = len({spec.name for spec in MODELS} | measured | stale_models | failed_models)
     if never:
         out.append(
             f"\n**{len(never)} of the {ladder_size} models in the ladder have no usable "
