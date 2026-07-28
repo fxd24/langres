@@ -7,9 +7,10 @@
 > tool. Three PRs on 2026-07-28 shipped factual errors and **every one was in
 > hand-typed prose sitting beside a correct generated table**, which is why
 > **no number produced by this study is typed by hand anywhere in this
-> document** — every one arrives in a generated table. (The prose does cite two
-> figures from *other* documents, `45 of 54` from PR #250 below; both were
-> checked against their source.)
+> document** — every one arrives in a generated table. The prose does quote
+> figures from *other* documents (`45 of 54` and the `0.174–0.695` derived-cut
+> span, both from PR #250); each was re-read in its source before being repeated
+> here.
 
 - **Date**: 2026-07-28 (checkpoint-transfer run, §7, completed 2026-07-29)
 - **Harness**: `examples/research/threshold_constant_sweep.py` (committed before the run)
