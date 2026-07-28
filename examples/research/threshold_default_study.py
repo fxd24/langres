@@ -5,40 +5,52 @@ The front door hard-codes ``threshold: float = 0.5`` in six places
 ``architectures/vector_llm_cascade.py``). PR #241 landed
 ``ERModel.fit(..., derive_threshold=True)``, which derives the match cut from
 labels (Youden's J) and **races it against the incumbent** on the ``train``
-split, keeping the incumbent unless the candidate strictly wins. The race exists
-because a derived cut is not automatically a better cut: on one fixture the
-derived cut tied on ``train`` and lost held-out (pair-F1 1.00 -> 0.80).
+split, keeping the incumbent unless the candidate *strictly* wins. The race
+exists because a derived cut is not automatically a better cut: on one fixture
+the derived cut tied on ``train`` and lost held-out (pair-F1 1.00 -> 0.80).
 
 ``derive_threshold`` defaults to ``False``. Should it default to ``True``?
 **This script measures that; it does not assume it.** For every registered,
-loadable benchmark it runs the real ``fit`` seam at the front door's ``0.5`` and
-records four numbers: the incumbent cut and its held-out pair-F1, the derived
-cut and *its* held-out pair-F1, and which one the race kept.
+loadable benchmark it runs the real ``fit`` seam against the front door's
+``0.5`` and records four numbers: the incumbent cut and its held-out pair-F1,
+the derived cut and *its* held-out pair-F1, and which one the race kept.
 
 Design decisions, each load-bearing:
 
-* **Every number is held-out and entity-disjoint.** ``fit(pairs=..., split=0.3,
-  seed=...)`` hands the id-keyed labels to ``curation.harvest.align_pairs``,
-  which assigns whole entity-components (union-find over the two ids each pair
-  touches) to ``valid`` -- so no entity straddles the boundary. An in-sample cut
-  flatters itself; ``fit`` itself prints ``IN-SAMPLE`` in capitals when no split
-  is given, for exactly this reason.
-* **The label set is EVERY blocked candidate, labeled by the closed-world gold
-  partition.** That is the distribution the cut actually operates on at
-  inference, and it is the *most generous* labeling budget deriving could ask
-  for -- full supervision over the candidate stream. A cut that cannot win here
-  will not win from a handful of corrections, so a negative result under this
-  regime is the strong form of the negative result.
+* **Held-out means a DISJOINT CORPUS, not a disjoint slice of one label set.**
+  The obvious design -- label every blocked candidate and let
+  ``fit(pairs=..., split=0.3)`` hold out 30 % -- was tried first and
+  **degenerates**, which is a finding in its own right (§ "the split trap" in
+  the write-up). ``align_pairs``' entity-disjoint split assigns whole
+  union-find components, and a k-NN candidate graph over a real corpus is
+  essentially *one* component: on ``fodors_zagat`` it produced ``n_valid = 0``
+  at every seed, and on ``dblp_acm`` it produced 58/18,127 -- inverted at
+  seed 0 and 58 held-out pairs at seeds 1-2. Numbers off 58 pairs are noise.
+  So the split here is the benchmark's own ``Benchmark.split`` -- whole gold
+  clusters to one side, so no entity and no match pair straddles the boundary --
+  and the two corpora are blocked, scored and graded independently.
+* **The race is untouched.** ``_select_threshold`` selects on ``train`` and
+  never reads ``valid``; the ``split=`` argument only affects what ``fit``
+  *reports*. So running ``fit(..., split=None)`` on the train corpus gives the
+  race exactly the label set a user would give it, and grading on the disjoint
+  test corpus is a strictly *stronger* held-out estimate than the one ``fit``
+  would have printed.
+* **The label set is EVERY blocked candidate on the train corpus**, labeled by
+  the closed-world gold partition. That is the distribution the cut operates on
+  at inference, and it is the *most generous* labeling budget deriving could
+  ask for -- full supervision over the candidate stream. A cut that cannot win
+  here will not win from a handful of corrections, so a negative result under
+  this regime is the strong form of the negative result.
 * **The incumbent is 0.5**, the constant the six architectures hard-code -- not
   each benchmark's tuned operating point. The question is about the *default*,
   so the baseline has to be the default.
-* **Selection never sees ``valid``.** That is ``_select_threshold``'s own
-  contract (it races on ``train``); this harness only reads what it reported.
-  Both ``held_out_f1`` values are therefore clean estimates of two cuts, and the
-  ``Δ`` this script reports is a real before/after.
+* **Two held-out F1s, both reported.** ``held_out_f1_blocked`` restricts gold to
+  pairs blocking actually proposed -- the same convention ``fit``'s own
+  ``held_out_f1`` uses (its gold comes from the aligned valid candidates), so it
+  is the like-for-like number and the primary one. ``held_out_f1_all_gold``
+  charges every gold pair blocking missed to recall -- the end-to-end number.
+  Both are computed with ``metrics.classify_pairs``, the function ``fit`` uses.
 * **Multiple seeds.** A conclusion that flips between seeds is not a conclusion.
-  Each (benchmark, method) cell is fitted once per seed with the threshold reset
-  to the incumbent first.
 
 Everything here is **$0 in spend**: ``rapidfuzz`` and ``embedding_cosine`` make
 no paid call. It is *not* dependency-free or offline on a cold cache -- blocking
@@ -75,10 +87,12 @@ from typing import Any, Protocol, cast  # noqa: E402
 
 from pydantic import BaseModel  # noqa: E402
 
+from langres.core.models import PairwiseJudgement  # noqa: E402
 from langres.curation.harvest import LabeledPair  # noqa: E402
-from langres.data.benchmark import Benchmark  # noqa: E402
+from langres.data.benchmark import Benchmark, gold_pairs_from_clusters  # noqa: E402
 from langres.eval import get_benchmark, list_benchmarks  # noqa: E402
 from langres.methods import BlockingBenchmark, make_resolver_factory  # noqa: E402
+from langres.metrics.metrics import classify_pairs  # noqa: E402
 
 logger = logging.getLogger("threshold_default_study")
 
@@ -91,9 +105,6 @@ DEFAULT_METHODS: tuple[str, ...] = ("rapidfuzz", "embedding_cosine")
 #: The constant the six architectures hard-code, and therefore the incumbent
 #: this study races the derived cut against.
 INCUMBENT_THRESHOLD = 0.5
-
-#: Held-out fraction for ``align_pairs``' entity-disjoint split.
-HELD_OUT_SPLIT = 0.3
 
 #: Split seeds. More than one on purpose: a flip between seeds is decision-relevant.
 DEFAULT_SEEDS: tuple[int, ...] = (0, 1, 2)
@@ -110,49 +121,56 @@ class _StudyBenchmark(Benchmark[Any], BlockingBenchmark, Protocol):
 
 
 class CellResult(BaseModel):
-    """One (benchmark, method, seed) fit: the four numbers the decision needs.
+    """One (benchmark, method, seed) fit + its disjoint-corpus grading.
 
     Attributes:
         benchmark: Registry name.
         method: The $0 scorer.
-        seed: The entity-disjoint split seed.
-        n_records: Corpus size.
-        n_candidates: Blocked candidate pairs (the label set size before the join).
-        n_train / n_valid: Aligned pairs each side of the entity-disjoint split.
-        n_valid_positives: Positive labels in ``valid`` (0 makes F1 meaningless).
-        gold_coverage: Blocking pair-completeness on the labeled positives.
-        incumbent_threshold / incumbent_held_out_f1: The 0.5 default and its
-            held-out pair-F1.
-        derived_threshold / derived_held_out_f1: Youden's J on ``train``, and
-            *its* held-out pair-F1 -- reported whether or not the race kept it.
+        seed: Seed for the benchmark's own cluster-disjoint corpus split.
+        n_train_records / n_test_records: The two disjoint corpora.
+        n_train_pairs: Labeled blocked candidates the race derived + selected on.
+        n_test_pairs: Blocked candidates on the held-out corpus (the grading set).
+        n_test_gold_blocked: Gold pairs among ``n_test_pairs`` (0 makes F1 vacuous).
+        incumbent_threshold: The 0.5 default.
+        derived_threshold: Youden's J on the train corpus's labeled pairs.
         incumbent_selection_f1 / derived_selection_f1: The ``train`` pair-F1s the
-            race actually compared (selection never reads ``valid``).
-        kept: ``"derived"`` (the candidate won) or ``"declined"`` (incumbent held).
-        final_threshold: The cut in force on the model after ``fit`` returned.
-        delta_f1: ``kept held-out F1 - incumbent held-out F1``. This is the
-            effect of switching the default on: ``0.0`` whenever the race
-            declined, and NEGATIVE only if the race kept a cut that lost held-out.
-        seconds: Wall clock for the fit.
+            race itself compared. Selection never reads the held-out corpus.
+        kept: ``"derived"`` (candidate won) or ``"declined"`` (incumbent held).
+        final_threshold: The cut in force on the model after ``fit`` returned --
+            the number a user would actually resolve with.
+        incumbent_f1_blocked / derived_f1_blocked / kept_f1_blocked: Held-out
+            pair-F1 on the disjoint corpus with gold restricted to blocked pairs
+            (``fit``'s own ``held_out_f1`` convention). The primary numbers.
+        incumbent_f1_all_gold / derived_f1_all_gold / kept_f1_all_gold: the same,
+            charging blocking's misses to recall (the end-to-end view).
+        delta_f1_blocked / delta_f1_all_gold: ``kept - incumbent``. This is the
+            effect of flipping the default: exactly ``0.0`` whenever the race
+            declined, and NEGATIVE only when the race kept a cut that lost.
+        seconds: Wall clock for the cell.
     """
 
     benchmark: str
     method: str
     seed: int
-    n_records: int
-    n_candidates: int
-    n_train: int
-    n_valid: int
-    n_valid_positives: int
-    gold_coverage: float | None
+    n_train_records: int
+    n_test_records: int
+    n_train_pairs: int
+    n_test_pairs: int
+    n_test_gold_blocked: int
     incumbent_threshold: float
-    incumbent_held_out_f1: float | None
     derived_threshold: float
-    derived_held_out_f1: float | None
     incumbent_selection_f1: float | None
     derived_selection_f1: float | None
     kept: str
-    final_threshold: float | None
-    delta_f1: float | None
+    final_threshold: float
+    incumbent_f1_blocked: float
+    derived_f1_blocked: float
+    kept_f1_blocked: float
+    incumbent_f1_all_gold: float
+    derived_f1_all_gold: float
+    kept_f1_all_gold: float
+    delta_f1_blocked: float
+    delta_f1_all_gold: float
     seconds: float
 
 
@@ -193,82 +211,107 @@ def gold_labels_for_candidates(
     return labels
 
 
+def _pair_f1(
+    judgements: list[PairwiseJudgement], gold: set[frozenset[str]], threshold: float
+) -> float:
+    """Pair-F1 at ``threshold`` via ``classify_pairs`` -- the function ``fit`` uses."""
+    return classify_pairs(judgements, gold, threshold).f1
+
+
 def run_cell(
     *,
     benchmark: str,
     method: str,
     seed: int,
-    resolver: Any,
-    data: list[dict[str, Any]],
-    labels: list[LabeledPair],
-    n_candidates: int,
+    bench: _StudyBenchmark,
+    corpus: list[Any],
+    gold_clusters: list[set[str]],
+    gold_pairs: set[frozenset[str]],
 ) -> CellResult:
-    """Fit one cell and extract the race's own report.
-
-    The threshold is reset to :data:`INCUMBENT_THRESHOLD` first, because
-    ``resolver`` is reused across seeds and a kept cut from the previous seed
-    would silently become the next seed's incumbent -- turning a portfolio study
-    into a sequential optimization.
+    """Derive on the train corpus, grade both cuts on the disjoint test corpus.
 
     Args:
-        benchmark: Registry name (recorded, not used).
-        method: The $0 scorer (recorded, not used).
-        seed: The entity-disjoint split seed.
-        resolver: The model to fit (mutated: threshold reset, then possibly set).
-        data: Raw records as dicts.
-        labels: Id-keyed gold labels over the blocked candidates.
-        n_candidates: Blocked candidate count (recorded).
+        benchmark: Registry name.
+        method: The $0 scorer.
+        seed: Seed for ``bench.split``.
+        bench: The benchmark adapter.
+        corpus: The full record list.
+        gold_clusters: The closed-world gold partition.
+        gold_pairs: The closed-world gold pair set.
 
     Returns:
         The assembled :class:`CellResult`.
 
     Raises:
-        RuntimeError: If ``fit`` reported no ``threshold_fit`` -- the one thing
-            this study exists to read. Better to stop than to report a row whose
-            provenance is missing.
+        RuntimeError: If ``fit`` reported no threshold race (nothing to measure),
+            or if the held-out corpus contains no blocked gold pair (every F1
+            below would be a vacuous 0.0 that a reader would mistake for a
+            measurement).
     """
-    resolver.clusterer.threshold = INCUMBENT_THRESHOLD
     started = time.monotonic()
-    resolver.fit(data, pairs=labels, split=HELD_OUT_SPLIT, seed=seed, derive_threshold=True)
-    seconds = time.monotonic() - started
+    train_records, test_records, _train_clusters, test_clusters = bench.split(
+        corpus, gold_clusters, seed=seed
+    )
+    train_data = [record.model_dump() for record in train_records]
+    test_data = [record.model_dump() for record in test_records]
 
-    report = resolver.fit_report_
-    fit = report.threshold_fit
+    resolver = make_resolver_factory(method, bench)(INCUMBENT_THRESHOLD)
+
+    # 1. Derive + race, on the train corpus only. split=None because the held-out
+    #    estimate comes from the DISJOINT CORPUS below, not from a slice of this
+    #    label set -- see the module docstring's "split trap".
+    train_labels = gold_labels_for_candidates(resolver.candidates(train_data), gold_pairs)
+    resolver.fit(train_data, pairs=train_labels, split=None, seed=seed, derive_threshold=True)
+    fit = resolver.fit_report_.threshold_fit
     if fit is None or fit.previous is None or fit.candidate is None:
         raise RuntimeError(
             f"{benchmark}/{method}/seed={seed}: fit reported no threshold race "
             f"(threshold_fit={fit!r}); there is nothing to measure."
         )
     kept = "derived" if fit.source == "derived" else "declined"
-    kept_f1 = fit.candidate.held_out_f1 if kept == "derived" else fit.previous.held_out_f1
-    delta = (
-        None
-        if kept_f1 is None or fit.previous.held_out_f1 is None
-        else kept_f1 - fit.previous.held_out_f1
-    )
-    coverage = report.coverage
+
+    # 2. Grade BOTH cuts on the held-out corpus, scored once.
+    judgements = resolver.predict(test_data)
+    blocked = {frozenset({j.left_id, j.right_id}) for j in judgements}
+    test_gold_all = gold_pairs_from_clusters(test_clusters)
+    test_gold_blocked = test_gold_all & blocked
+    if not test_gold_blocked:
+        raise RuntimeError(
+            f"{benchmark}/{method}/seed={seed}: the held-out corpus has no blocked "
+            f"gold pair ({len(test_gold_all)} gold, {len(blocked)} blocked), so every "
+            "F1 would be a vacuous 0.0. Refusing to report it as a measurement."
+        )
+
+    incumbent, derived = fit.previous.threshold, fit.candidate.threshold
+    final = float(resolver.clusterer.threshold)
+    f1_blocked = {t: _pair_f1(judgements, test_gold_blocked, t) for t in (incumbent, derived)}
+    f1_all = {t: _pair_f1(judgements, test_gold_all, t) for t in (incumbent, derived)}
+    kept_t = derived if kept == "derived" else incumbent
+
     return CellResult(
         benchmark=benchmark,
         method=method,
         seed=seed,
-        n_records=len(data),
-        n_candidates=n_candidates,
-        n_train=report.n_train,
-        n_valid=report.n_valid,
-        n_valid_positives=(
-            0 if report.metrics is None else report.metrics.tp + report.metrics.fn
-        ),
-        gold_coverage=None if coverage is None else coverage.gold_coverage,
-        incumbent_threshold=fit.previous.threshold,
-        incumbent_held_out_f1=fit.previous.held_out_f1,
-        derived_threshold=fit.candidate.threshold,
-        derived_held_out_f1=fit.candidate.held_out_f1,
+        n_train_records=len(train_records),
+        n_test_records=len(test_records),
+        n_train_pairs=len(train_labels),
+        n_test_pairs=len(judgements),
+        n_test_gold_blocked=len(test_gold_blocked),
+        incumbent_threshold=incumbent,
+        derived_threshold=derived,
         incumbent_selection_f1=fit.previous.selection_f1,
         derived_selection_f1=fit.candidate.selection_f1,
         kept=kept,
-        final_threshold=resolver.clusterer.threshold,
-        delta_f1=delta,
-        seconds=seconds,
+        final_threshold=final,
+        incumbent_f1_blocked=f1_blocked[incumbent],
+        derived_f1_blocked=f1_blocked[derived],
+        kept_f1_blocked=f1_blocked[kept_t],
+        incumbent_f1_all_gold=f1_all[incumbent],
+        derived_f1_all_gold=f1_all[derived],
+        kept_f1_all_gold=f1_all[kept_t],
+        delta_f1_blocked=f1_blocked[kept_t] - f1_blocked[incumbent],
+        delta_f1_all_gold=f1_all[kept_t] - f1_all[incumbent],
+        seconds=time.monotonic() - started,
     )
 
 
@@ -277,69 +320,58 @@ def run_benchmark(
 ) -> list[CellResult]:
     """Run every (method, seed) cell for one registered benchmark.
 
-    One resolver per method, reused across seeds: ``BlockerSource.prepare``
-    reuses a vector index for an identical corpus, so the embedding pass is paid
-    once per method instead of once per seed.
-
     Args:
         name: Registry name (must be ``loadable``).
         methods: $0 method names.
-        seeds: Entity-disjoint split seeds.
+        seeds: Corpus-split seeds.
 
     Returns:
-        One :class:`CellResult` per (method, seed).
+        One :class:`CellResult` per (method, seed) that completed.
     """
     bench = cast(_StudyBenchmark, get_benchmark(name))
-    corpus, _gold_clusters, gold_pairs = bench.load()
-    data = [record.model_dump() for record in corpus]
+    corpus, gold_clusters, gold_pairs = bench.load()
 
     results: list[CellResult] = []
     for method in methods:
-        resolver = make_resolver_factory(method, bench)(INCUMBENT_THRESHOLD)
-        candidates = resolver.candidates(data)
-        labels = gold_labels_for_candidates(candidates, gold_pairs)
-        n_candidates = len(candidates)
-        del candidates  # the label list is all that is needed downstream
         for seed in seeds:
             result = run_cell(
                 benchmark=name,
                 method=method,
                 seed=seed,
-                resolver=resolver,
-                data=data,
-                labels=labels,
-                n_candidates=n_candidates,
+                bench=bench,
+                corpus=corpus,
+                gold_clusters=gold_clusters,
+                gold_pairs=gold_pairs,
             )
             results.append(result)
             print(
-                f"       {method} seed={seed}: incumbent {result.incumbent_threshold:.2f} "
-                f"F1={_f1(result.incumbent_held_out_f1)} | derived "
-                f"{result.derived_threshold:.4f} F1={_f1(result.derived_held_out_f1)} | "
-                f"kept={result.kept} Δ={_f1(result.delta_f1)} ({result.seconds:.1f}s)",
+                f"       {method} seed={seed}: "
+                f"incumbent {result.incumbent_threshold:.2f} "
+                f"F1={result.incumbent_f1_blocked:.4f} | "
+                f"derived {result.derived_threshold:.4f} "
+                f"F1={result.derived_f1_blocked:.4f} | kept={result.kept} "
+                f"Δ={result.delta_f1_blocked:+.4f} ({result.seconds:.1f}s)",
                 flush=True,
             )
     return results
 
 
-def _f1(value: float | None) -> str:
-    """Format an F1/delta, or ``n/a`` when the split produced nothing to grade."""
-    return "n/a" if value is None else f"{value:+.4f}" if value < 0 else f"{value:.4f}"
-
-
 def to_markdown(results: list[CellResult]) -> str:
-    """Render the per-benchmark table. Never an average -- an average hides the
-    single cell that motivated the race in the first place."""
+    """Render the per-cell table.
+
+    Never an average: an average hides the single cell that motivated the race.
+    """
     header = (
-        "| benchmark | method | seed | n_train | n_valid | incumbent t | incumbent F1 | "
-        "derived t | derived F1 | kept | Δ F1 |"
+        "| benchmark | method | seed | train pairs | test pairs | incumbent t | "
+        "incumbent F1 | derived t | derived F1 | kept | Δ F1 |"
     )
     lines = [header, "|" + "---|" * 11]
     for r in results:
         lines.append(
-            f"| {r.benchmark} | {r.method} | {r.seed} | {r.n_train:,} | {r.n_valid:,} | "
-            f"{r.incumbent_threshold:.2f} | {_f1(r.incumbent_held_out_f1)} | "
-            f"{r.derived_threshold:.4f} | {_f1(r.derived_held_out_f1)} | "
-            f"{r.kept} | {_f1(r.delta_f1)} |"
+            f"| {r.benchmark} | {r.method} | {r.seed} | {r.n_train_pairs:,} | "
+            f"{r.n_test_pairs:,} | {r.incumbent_threshold:.2f} | "
+            f"{r.incumbent_f1_blocked:.4f} | {r.derived_threshold:.4f} | "
+            f"{r.derived_f1_blocked:.4f} | {r.kept} | {r.delta_f1_blocked:+.4f} |"
         )
     return "\n".join(lines)
 
@@ -381,9 +413,7 @@ def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
 def write_results(results: list[CellResult], out: Path) -> None:
     """Persist the machine-readable findings to ``out`` (creating parents)."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps([r.model_dump() for r in results], indent=2, sort_keys=True) + "\n"
-    )
+    out.write_text(json.dumps([r.model_dump() for r in results], indent=2, sort_keys=True) + "\n")
 
 
 def main() -> None:
@@ -419,12 +449,11 @@ def main() -> None:
     for name in select_benchmarks(fast=args.fast, only=args.only):
         print(f"[run] {name}: {' '.join(args.methods)} ($0 spend) ...", flush=True)
         try:
-            results.extend(
-                run_benchmark(
-                    name, methods=tuple(args.methods), seeds=tuple(args.seeds)
-                )
-            )
+            results.extend(run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds)))
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
+            # ``exception`` (not ``error``): a benchmark that drops out is absent
+            # from both the table and the tracked JSON, so the traceback in the
+            # run log is the ONLY record of why.
             logger.exception("%s: run_benchmark raised", name)
             print(f"[fail] {name}: {type(exc).__name__}: {exc}", flush=True)
             failures.append(f"{name} ({type(exc).__name__})")
