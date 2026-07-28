@@ -398,6 +398,29 @@ class QdrantHybridRerankingIndex:
         if self._corpus_texts is None:
             raise RuntimeError("Index not built. Must call create_index() before search_all().")
 
+        # In search_all the dense side is served from vectors cached at
+        # create_index() time and the sparse side always encodes with prompt=None,
+        # so the RERANKING embedder is the only stage a query_prompt can reach. If
+        # that embedder ignores prompts -- FastEmbed's late-interaction models do,
+        # and say so -- then no stage sees the prompt and the argument is a silent
+        # no-op: a prompt sweep returns identical numbers at every setting, which
+        # reads as "the prompt does not help". That is the same failure
+        # QdrantHybridIndex.search_all now refuses, and it was reachable here via
+        # that refusal's own suggested alternative. Default True, so an unknown or
+        # duck-typed embedder is trusted rather than broken. (Cross-model review.)
+        if query_prompt is not None and not getattr(
+            self.reranking_embedder, "honours_prompt", True
+        ):
+            raise NotImplementedError(
+                f"{type(self).__name__}.search_all() cannot apply a query_prompt with "
+                f"{type(self.reranking_embedder).__name__} as the reranking embedder: it "
+                "ignores prompts, the dense side is served from vectors cached at "
+                "create_index() time, and the sparse side always encodes unprompted -- "
+                "so no stage would see the prompt. Refusing instead of silently "
+                "ignoring it. Use FAISSIndex, which re-encodes the query side, or give "
+                "this index a reranking embedder that honours prompts."
+            )
+
         # Reuse search() with cached dense embeddings (performance optimization)
         return self.search(
             self._corpus_texts,

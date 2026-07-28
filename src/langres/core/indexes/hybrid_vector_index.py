@@ -388,10 +388,13 @@ class QdrantHybridIndex:
                 "so the prompt would never reach the encoder. Refusing instead of "
                 "silently ignoring it, because an ignored prompt makes a prompt sweep "
                 "return identical numbers at every setting -- which reads as 'the "
-                "prompt does not help'. Use FAISSIndex (re-encodes the query side) or "
-                "QdrantHybridRerankingIndex (its reranking pass encodes queries with "
-                "the prompt), or call search(query_texts, k, query_prompt=...) "
-                "directly, which does encode."
+                "prompt does not help'. Use FAISSIndex, which re-encodes the query "
+                "side, or call search(query_texts, k, query_prompt=...) directly, "
+                "which does encode. QdrantHybridRerankingIndex is NOT a drop-in "
+                "alternative: in its search_all() the dense side is cached and the "
+                "sparse side is unprompted, so only its reranking embedder could see "
+                "the prompt -- and the production one (FastEmbedLateInteractionEmbedder) "
+                "ignores prompts outright, which is why that index refuses too."
             )
 
         # Reuse search() with cached dense embeddings (performance optimization).

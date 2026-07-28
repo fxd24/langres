@@ -1037,6 +1037,18 @@ class FastEmbedLateInteractionEmbedder:
     # serialization helper can discover the type name (see resolver.py).
     type_name: ClassVar[str] = "fastembed_late_interaction_embedder"
 
+    #: ``encode()`` accepts ``prompt`` and **ignores** it -- FastEmbed's
+    #: late-interaction (ColBERT) models have no prompt support, so the argument
+    #: exists only for signature compatibility (see the note in ``encode``).
+    #:
+    #: Declared rather than left implicit because an ignored prompt is invisible:
+    #: it makes a prompt sweep return identical numbers at every setting, which
+    #: reads as "the prompt does not help" instead of "the prompt never arrived".
+    #: That exact confusion already cost this repo a published table. Callers that
+    #: are *about* to rely on the prompt read this flag and refuse instead;
+    #: ``QdrantHybridRerankingIndex.search_all`` is the one that does.
+    honours_prompt: ClassVar[bool] = False
+
     def __init__(self, model_name: str = "colbert-ir/colbertv2.0"):
         """Initialize FastEmbed late-interaction embedder.
 

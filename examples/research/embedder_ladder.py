@@ -763,6 +763,13 @@ def _assert_cache_matches_checkpoint(
 
     if from_cache.shape != fresh.shape:
         drift: float = float("inf")
+    elif not (np.isfinite(from_cache).all() and np.isfinite(fresh).all()):
+        # A NaN anywhere makes `drift` NaN, and `NaN > tolerance` is **False** --
+        # so the guard would ACCEPT a cache it cannot compare and the ladder would
+        # publish rows computed from non-finite vectors. Unstable half precision
+        # on some devices and a truncated cached blob both produce this. Treat it
+        # as maximal drift: unusable is not the same as equal. (Cross-model review.)
+        drift = float("inf")
     else:
         drift = float(np.abs(from_cache - fresh).max())
 
@@ -937,6 +944,16 @@ def evaluate_model_on_benchmark(
         parameter_count = base.parameter_count
         embedding_dim = base.embedding_dim
         prompts = _registered_prompts(base)
+    except StaleEmbeddingCacheError:
+        # NOT a result. Every other exception here is a fact about the model --
+        # it did not load, it ran out of memory -- and recording it as a failure
+        # row is the honest thing. A cache-integrity refusal is a fact about the
+        # HARNESS, and turning it into a row is actively destructive: `main()`
+        # persists that row and `merge_rows()` voids every previously recorded
+        # cell for this (model, benchmark), so a refusal would DELETE good
+        # measurements from the tracked jsonl. `run_ladder.sh` would then see
+        # exit 0 and commit the deletion. Let it out. (Cross-model review.)
+        raise
     except Exception as exc:  # noqa: BLE001 - a failure IS a result, never a skip
         logger.exception("model %s failed on %s", spec.name, benchmark)
         return (
@@ -2168,6 +2185,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.report.write_text(render_report(rows, headline_k=args.headline_k))
         logger.info("rendered %d rows to %s", len(rows), args.report)
         return
+
+    # Vouching is per cache, so it has to be asked for per cache. `--models`
+    # defaults to the WHOLE ladder, so a bare `--trust-existing-cache` would
+    # silently bless every unverified namespace it met -- six of them, as the
+    # cache stands -- from a flag documented as vouching for one. Requiring an
+    # explicit single `--models` makes the operator name what they are vouching
+    # for, which is the whole content of the assertion. (Cross-model review.)
+    if args.trust_existing_cache and len(args.models) != 1:
+        parser.error(
+            "--trust-existing-cache vouches for ONE cache, so it requires exactly one "
+            f"--models NAME (got {len(args.models)}). Adopting a namespace asserts that "
+            "its vectors came from the checkpoint loaded now; that is a claim about a "
+            "specific model, and it is not one you can make for the whole ladder at once."
+        )
 
     arms = {name: PROMPT_ARMS[name] for name in args.prompts}
 

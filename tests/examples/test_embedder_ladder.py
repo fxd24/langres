@@ -339,6 +339,26 @@ class TestStaleCacheCanary:
 
         assert LADDER._cache_entry_count(tmp_path / "canary_ns.db") == entries_before
 
+    def test_a_non_finite_canary_is_maximal_drift_not_agreement(self, tmp_path: Path) -> None:
+        """``NaN > tolerance`` is **False**, so a NaN would be read as agreement.
+
+        Unstable half precision on some devices and a truncated cached blob both
+        produce this. Without the explicit finiteness branch the guard accepts a
+        cache it could not compare, and the ladder publishes rows computed from
+        non-finite vectors.
+        """
+        embedder = _SwappableEmbedder()
+        LADDER._assert_cache_matches_checkpoint(
+            embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+        )
+
+        embedder.weights = float("nan")
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            LADDER._assert_cache_matches_checkpoint(
+                embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
+            )
+
     def test_adopting_a_legacy_cache_vouches_once_and_keeps_checking(self, tmp_path: Path) -> None:
         """``--trust-existing-cache`` is a one-time assertion, not an off switch.
 
@@ -368,6 +388,51 @@ class TestStaleCacheCanary:
             LADDER._assert_cache_matches_checkpoint(
                 embedder, self._cached(embedder, tmp_path), "canary_ns", tmp_path
             )
+
+
+class TestIntegrityRefusalIsNotAResult:
+    """A cache refusal must abort, never become a ``status="failed"`` row.
+
+    Every other exception in that handler is a fact about the *model* — it did
+    not load, it ran out of memory — and recording it as a failure row is honest.
+    A cache-integrity refusal is a fact about the *harness*, and turning it into a
+    row is destructive: ``main()`` persists the row and ``merge_rows()`` voids
+    every previously recorded cell for that (model, benchmark), so the refusal
+    would DELETE good measurements from the tracked jsonl — and ``run_ladder.sh``
+    would see exit 0 and commit the deletion.
+    """
+
+    def _evaluate(self, monkeypatch: pytest.MonkeyPatch, exc: Exception) -> Any:
+        def _boom(*_args: Any, **_kwargs: Any) -> Any:
+            raise exc
+
+        monkeypatch.setattr(LADDER, "_load_benchmark", lambda _name: _boom())
+        return LADDER.evaluate_model_on_benchmark(
+            LADDER.ModelSpec("irrelevant"),
+            "fodors_zagat",
+            k_values=[1],
+            prompt_arms={"none": (None, None)},
+            cache_dir=Path("unused"),
+            device=None,
+            batch_size=1,
+        )
+
+    def test_a_stale_cache_error_escapes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            self._evaluate(monkeypatch, LADDER.StaleEmbeddingCacheError("stale"))
+
+    def test_an_ordinary_model_failure_is_still_recorded_as_a_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Control: without this, "re-raise everything" would pass the test above.
+
+        A model that genuinely fails to load must still produce a failure row —
+        that is the harness's whole no-silent-skip rule.
+        """
+        rows, _updates = self._evaluate(monkeypatch, RuntimeError("no such checkpoint"))
+
+        assert [row.status for row in rows] == ["failed"]
+        assert "no such checkpoint" in (rows[0].error or "")
 
 
 class TestPersistence:
