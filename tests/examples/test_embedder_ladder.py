@@ -1197,6 +1197,58 @@ class TestRecommendationSplitsOnLicence:
         # table must not hide that it won.
         assert "+0.2000" in restricted
 
+    def test_a_restricted_model_with_no_win_is_not_recommended(self) -> None:
+        """A licence classification is not a performance finding.
+
+        "Recommended as a documented opt-in" fired off the licence bucket alone,
+        so a checkpoint that was compared and beat the reference nowhere still
+        read as recommended. Documented opt-in is the exposure MECHANISM its
+        licence requires; whether anything is recommended is a question only the
+        measurement answers.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "google/embeddinggemma-300m",
+                "none",
+                vs_reference_delta=-0.05,
+                vs_reference_ci_low=-0.08,
+                vs_reference_ci_high=-0.02,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+        restricted = section.split("### Use-restricted")[1]
+
+        assert "Recommended as a documented opt-in" not in restricted
+        assert "measured no benchmark where it beats" in restricted
+        assert "required exposure mechanism" in restricted
+        # The licence statement itself is unchanged -- this is about the verdict.
+        assert "NOT OSI-approved" in restricted
+
+    def test_a_restricted_model_that_was_never_compared_says_so(self) -> None:
+        """Control on the other side: no interval is not a measured loss either."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell("google/embeddinggemma-300m", "none", vs_reference_delta=None),
+        ]
+        report = LADDER.render_report(rows)
+        restricted = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ].split("### Use-restricted")[1]
+
+        assert "carries no interval" in restricted
+        assert "missing measurement, not a verdict" in restricted
+        assert "Recommended as a documented opt-in" not in restricted
+
+    def test_a_restricted_model_that_did_win_is_still_recommended(self) -> None:
+        """Control: gating on evidence must not suppress a real recommendation."""
+        restricted = self._section().split("### Use-restricted")[1]
+
+        assert "**Recommended as a documented opt-in**" in restricted
+
     def test_a_restricted_model_is_not_described_as_merely_unverified(self) -> None:
         """The two buckets must not collapse into each other.
 

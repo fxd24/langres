@@ -1782,15 +1782,37 @@ def _render_recommendation(
         for name in restricted:
             spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
             won = wins(name)
-            summary = (
-                ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
-                if won
-                else "no benchmark, with an interval clear of zero"
-            )
+            # "Documented opt-in" is TWO different statements and they were fused.
+            # As a RECOMMENDATION it is a claim about performance; as an EXPOSURE
+            # MECHANISM it is a claim about licence. Emitting the recommendation
+            # off the licence classification alone turned "no win measured" -- or
+            # no comparison at all -- into a positive one. Licence decides the
+            # mechanism; measurement decides whether anything is recommended.
+            # (Cross-model review.)
+            if won:
+                evidence = (
+                    f"Measured ahead of `{REFERENCE_MODEL}` on: "
+                    + ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
+                    + ". **Recommended as a documented opt-in**"
+                )
+            elif has_comparison(name):
+                evidence = (
+                    f"**This sweep measured no benchmark where it beats "
+                    f"`{REFERENCE_MODEL}` with an interval clear of zero**, so nothing "
+                    "here recommends it. If you use it anyway, the documented opt-in is "
+                    "the required exposure mechanism"
+                )
+            else:
+                evidence = (
+                    f"**It carries no interval against `{REFERENCE_MODEL}` at this "
+                    "metric revision**, so this sweep makes no performance claim about "
+                    "it in either direction — that is a missing measurement, not a "
+                    "verdict. If you use it, the documented opt-in is the required "
+                    "exposure mechanism"
+                )
             out.append(
                 f"\n- **`{name}` — licence `{spec.license}`, which is NOT OSI-approved.** "
-                f"Measured ahead of `{REFERENCE_MODEL}` on: {summary}. Recommended as a "
-                "**documented opt-in**: a user who names it accepts its terms; a user "
+                f"{evidence}: a user who names it accepts its terms; a user "
                 "who names nothing must not be given them. Anyone shipping it must read "
                 "the checkpoint's own licence — in Gemma's case a prohibited-use policy "
                 "that survives redistribution, which Apache-2.0 does not impose.\n"

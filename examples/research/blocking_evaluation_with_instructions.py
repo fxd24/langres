@@ -1065,9 +1065,19 @@ def main() -> None:
 
     best_f1 = max(faiss_f1, hybrid_f1, crossenc_f1)
     if crossenc_f1 == best_f1:
+        # An ARM won, and an arm is not a mechanism. This one differs from the
+        # hybrid arm in three ways at once -- reranker, prompt regime, retrieval
+        # depth -- so crediting cross-attention picks one of the three by
+        # narrative. The saved JSON records all three under `confounded_deltas`;
+        # the console must not claim more than the JSON does. (Cross-model review.)
         print(
-            "   ✅ Jina CrossEncoder achieved best F1 score - full cross-attention "
-            "provides deepest understanding of query-document relevance"
+            "   ✅ Jina CrossEncoder arm achieved best F1 score. This run CANNOT "
+            "attribute that to cross-attention: against the hybrid arm it changes "
+            f"three things together — reranker, prompt regime ({HYBRID_ARM_LABEL} is "
+            f"unprompted), and retrieval depth ({CROSSENCODER_PREFETCH} vs "
+            f"{PREFETCH_LIMIT} retrieved before reranking). Any of the three could "
+            "produce this. To isolate the reranker, run both arms prompted at the "
+            "same depth."
         )
     elif hybrid_f1 == best_f1:
         print(
@@ -1082,13 +1092,16 @@ def main() -> None:
     # CrossEncoder vs Hybrid comparison
     if crossenc_precision > hybrid_precision + 1.0:
         print(
-            f"   ✅ CrossEncoder significantly improved precision over Hybrid "
-            f"(+{crossenc_precision - hybrid_precision:.2f}pp) - reranking adds value"
+            f"   ✅ CrossEncoder arm has higher precision than the hybrid arm "
+            f"(+{crossenc_precision - hybrid_precision:.2f}pp). Arm-level result, NOT "
+            "'reranking adds value': the two arms differ in reranker, prompt regime "
+            "and retrieval depth simultaneously (see the confound legend above)."
         )
     else:
         print(
-            "   ⚠️  CrossEncoder did not significantly improve precision over Hybrid - "
-            "hybrid may be better trade-off"
+            "   ⚠️  CrossEncoder arm did not improve precision over the hybrid arm by "
+            "more than 1pp — and since the two differ in three ways at once, that is "
+            "not evidence about reranking either."
         )
 
     print("\n   Use Case Recommendations:")

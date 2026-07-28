@@ -479,10 +479,19 @@ class VectorBlocker(Blocker[SchemaT]):
                 :class:`~langres.core.indexes.vector_index.FAISSIndex` honours it
                 fully — ``search_all`` re-encodes the query side.
                 :class:`~langres.core.indexes.reranking_vector_index.QdrantHybridRerankingIndex`
-                honours it at the stage that decides the final order: its dense
-                *prefetch* is short-circuited on cached vectors, but the
-                late-interaction reranking pass encodes queries with the prompt
-                (``reranking_vector_index.py:294``).
+                honours it **only with a reranking embedder that honours
+                prompts** — which the one that ships is not. Its dense *prefetch*
+                is short-circuited on cached vectors and its sparse side always
+                encodes unprompted, so the late-interaction reranking pass is the
+                only stage a prompt can reach; that pass does apply it
+                (``reranking_vector_index.py:294``). But
+                :class:`~langres.core.embeddings.FastEmbedLateInteractionEmbedder`
+                — the reranker in that index's own documented example, and the
+                only late-interaction embedder in this package — declares
+                ``honours_prompt = False``, and ``search_all`` **raises**
+                ``NotImplementedError`` for that combination rather than run a
+                sweep in which nothing ever sees the prompt. Supply a
+                prompt-honouring reranker, or use ``FAISSIndex``.
                 :class:`~langres.core.indexes.hybrid_vector_index.QdrantHybridIndex`
                 **raises** ``NotImplementedError`` from ``search_all`` rather than
                 serving a query-prompted search it cannot perform: it answers from

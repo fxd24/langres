@@ -302,7 +302,7 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
 
 ### Use-restricted checkpoints — documented opt-in, never a silent default
 
-- **`google/embeddinggemma-300m` — licence `gemma`, which is NOT OSI-approved.** Measured ahead of `all-MiniLM-L6-v2` on: abt_buy +0.0392, walmart_amazon +0.0092, wdc_computers +0.2079. Recommended as a **documented opt-in**: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
+- **`google/embeddinggemma-300m` — licence `gemma`, which is NOT OSI-approved.** Measured ahead of `all-MiniLM-L6-v2` on: abt_buy +0.0392, walmart_amazon +0.0092, wdc_computers +0.2079. **Recommended as a documented opt-in**: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
 
   ```python
   # opt in explicitly, having read the licence
