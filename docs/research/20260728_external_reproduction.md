@@ -353,6 +353,16 @@ measurement that the ceiling accounts for the whole distance to the published li
   harness bug, per E1 — is not possible against a PDF.
 - **The STransformer identity is inferred**, not quoted (see the preamble). If it is
   wrong, the `all-mpnet-base-v2` rows compare two different checkpoints.
+- **The committed rows were measured with an *unpinned* checkpoint load.** A bare
+  `all-mpnet-base-v2` resolves to whatever the Hub's `main` points at on the day you
+  run it. Read from this machine's Hub cache afterwards, `refs/main` was
+  `e8c3b32edf5434bc2275fc9bab85f82640a19130` for `all-mpnet-base-v2` and
+  `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` for `all-MiniLM-L6-v2`; since `refs/main`
+  is by definition what an unpinned load resolves to, those are the weights behind
+  these numbers. The harness now pins both explicitly (`MODEL_REVISIONS`) and carries
+  the revision in its cache namespace, so a rerun cannot drift onto new weights or be
+  served stale vectors under the same name — but that pin is a guarantee for the
+  *next* run, not a fact re-derived for this one.
 - **We could not reproduce UniBlocker's mAP column** from the formula their §4.2
   prints. Their PC and PQ reconcile exactly with `|C| = K * |A|`; their mAP does not
   follow from `sum_k (PC_k - PC_{k-1}) PQ_k` given their own PC/PQ — on

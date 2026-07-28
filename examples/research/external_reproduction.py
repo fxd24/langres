@@ -35,14 +35,20 @@ the whole reason this script exists rather than a call to that function:
 
 Run::
 
-    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run python \\
+    OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE uv run --extra semantic python \\
         examples/research/external_reproduction.py
 
     # one benchmark / one model
     ... external_reproduction.py --benchmarks abt_buy --models all-mpnet-base-v2
 
-    # re-render the markdown from existing rows, measuring nothing
-    ... external_reproduction.py --render-only
+    # re-render the markdown from existing rows, measuring nothing.
+    # Needs no extras -- stdlib + numpy only, no model and no index.
+    uv run python examples/research/external_reproduction.py --render-only
+
+``--extra semantic`` is not optional for a measuring run: ``FAISSIndex`` needs
+``faiss-cpu`` and ``SentenceTransformerEmbedder`` needs ``sentence-transformers``,
+and both live in that extra, so a bare ``uv sync`` checkout fails on the first
+import.
 
 $0: no paid API and no key. Not offline -- the first run of a checkpoint
 downloads it from the Hugging Face Hub.
@@ -124,6 +130,23 @@ BENCHMARKS: dict[str, BenchSpec] = {
 #: separate question "does what langres ships out of the box reach that bar".
 DEFAULT_MODELS = ("sentence-transformers/all-mpnet-base-v2", "all-MiniLM-L6-v2")
 
+#: Hub commit each default checkpoint is pinned to. A bare ``org/name`` resolves
+#: to whatever ``main`` points at on the day you run it, so an unpinned rerun can
+#: load different weights than the committed rows were measured with -- and the
+#: disk cache, keyed on the bare name, would happily serve the old vectors under
+#: the new identity. That is silent drift in exactly the artifact this study
+#: exists to make trustworthy.
+#:
+#: Provenance, so this is checkable rather than asserted: each SHA is what this
+#: machine's Hugging Face cache has in ``refs/main`` for that repo, read after the
+#: measuring run. ``refs/main`` is by definition what an *unpinned* load resolves
+#: to, so pinning here changes nothing about what the committed rows used -- it
+#: only stops a future run from quietly resolving to something else.
+MODEL_REVISIONS: dict[str, str] = {
+    "sentence-transformers/all-mpnet-base-v2": "e8c3b32edf5434bc2275fc9bab85f82640a19130",
+    "all-MiniLM-L6-v2": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+}
+
 
 def _load(spec: BenchSpec) -> tuple[list[Any], list[Any], set[frozenset[str]], list[set[str]]]:
     """Load one benchmark, split into (A, B) and return the RAW gold pairs.
@@ -166,18 +189,39 @@ def _closure_size(clusters: Sequence[set[str]]) -> int:
     return sum(len(c) * (len(c) - 1) // 2 for c in clusters if len(c) >= 2)
 
 
-def _build_embedder(model_name: str, cache_dir: Path) -> Any:
+def _build_embedder(model_name: str, cache_dir: Path) -> tuple[Any, str | None]:
     """langres's own sentence-transformer embedder behind a disk cache.
 
-    The cache namespace is prefixed so it can never collide with the embedder
-    ladder's namespaces, whose canary-pinning protocol this script does not
-    implement. A fresh namespace under ``tmp/`` is written by this run only.
+    Returns ``(embedder, revision)``. ``revision`` is the pinned Hub commit from
+    :data:`MODEL_REVISIONS`, or ``None`` for a model this script does not pin --
+    in which case the caller records the absence rather than implying a pin.
+
+    The cache namespace carries the revision as well as the name, so a rerun on a
+    different commit cannot be served stale vectors from the old one. It is also
+    prefixed so it can never collide with the embedder ladder's namespaces, whose
+    canary-pinning protocol this script does not implement.
     """
     from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
+    from langres.core.model_ref import ModelRef
 
-    base = SentenceTransformerEmbedder(model_name, normalize_embeddings=True)
-    namespace = "extrepro__" + model_name.replace("/", "__")
-    return DiskCachedEmbedder(embedder=base, cache_dir=cache_dir, namespace=namespace)
+    revision = MODEL_REVISIONS.get(model_name)
+    if revision is None:
+        logger.warning(
+            "%s is not in MODEL_REVISIONS, so this run is NOT revision-pinned and "
+            "may not reproduce: whatever the Hub's `main` points at today is what "
+            "gets loaded. Add its commit to MODEL_REVISIONS to pin it.",
+            model_name,
+        )
+        ref: str | ModelRef = model_name
+        suffix = "unpinned"
+    else:
+        ref = ModelRef(base=model_name, kind="hf", revision=revision)
+        suffix = revision[:12]
+
+    base = SentenceTransformerEmbedder(ref, normalize_embeddings=True)
+    namespace = "extrepro__" + model_name.replace("/", "__") + "__" + suffix
+    cached = DiskCachedEmbedder(embedder=base, cache_dir=cache_dir, namespace=namespace)
+    return cached, revision
 
 
 def measure(
@@ -203,7 +247,7 @@ def measure(
     texts_b = [concat_comparable_fields(r) for r in records_b]
 
     started = time.perf_counter()
-    embedder = _build_embedder(model_name, cache_dir)
+    embedder, model_revision = _build_embedder(model_name, cache_dir)
     index = FAISSIndex(embedder=embedder, metric="cosine")
     index.create_index(texts_b)
     build_seconds = time.perf_counter() - started
@@ -269,6 +313,7 @@ def measure(
         "metric_revision": METRIC_REVISION,
         "benchmark": benchmark,
         "model": model_name,
+        "model_revision": model_revision,
         "n_a": len(records_a),
         "n_b": len(records_b),
         "gold_raw": gold_n,
@@ -324,7 +369,7 @@ def crosscheck(
     corpus = records_a + records_b
     texts = [concat_comparable_fields(r) for r in corpus]
 
-    embedder = _build_embedder(model_name, cache_dir)
+    embedder, model_revision = _build_embedder(model_name, cache_dir)
 
     # Directional: index B, query A.
     directional = FAISSIndex(embedder=embedder, metric="cosine")
@@ -362,8 +407,10 @@ def crosscheck(
         return len(cands & gold) / len(gold) if gold else 0.0
 
     return {
+        "metric_revision": METRIC_REVISION,
         "benchmark": benchmark,
         "model": model_name,
+        "model_revision": model_revision,
         "k": k,
         "paper": _recall(directional_pairs, raw_gold),
         "paper_direction_closure_gold": _recall(directional_pairs, closure_gold),
@@ -602,6 +649,16 @@ measurement that the ceiling accounts for the whole distance to the published li
   harness bug, per E1 — is not possible against a PDF.
 - **The STransformer identity is inferred**, not quoted (see the preamble). If it is
   wrong, the `all-mpnet-base-v2` rows compare two different checkpoints.
+- **The committed rows were measured with an *unpinned* checkpoint load.** A bare
+  `all-mpnet-base-v2` resolves to whatever the Hub's `main` points at on the day you
+  run it. Read from this machine's Hub cache afterwards, `refs/main` was
+  `e8c3b32edf5434bc2275fc9bab85f82640a19130` for `all-mpnet-base-v2` and
+  `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` for `all-MiniLM-L6-v2`; since `refs/main`
+  is by definition what an unpinned load resolves to, those are the weights behind
+  these numbers. The harness now pins both explicitly (`MODEL_REVISIONS`) and carries
+  the revision in its cache namespace, so a rerun cannot drift onto new weights or be
+  served stale vectors under the same name — but that pin is a guarantee for the
+  *next* run, not a fact re-derived for this one.
 - **We could not reproduce UniBlocker's mAP column** from the formula their §4.2
   prints. Their PC and PQ reconcile exactly with `|C| = K * |A|`; their mAP does not
   follow from `sum_k (PC_k - PC_{k-1}) PQ_k` given their own PC/PQ — on
@@ -659,6 +716,31 @@ def _load_rows(path: Path) -> list[dict[str, Any]]:
         if line:
             rows.append(json.loads(line))
     return rows
+
+
+def _current_revision_only(rows: Sequence[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+    """Drop rows measured under a superseded ``METRIC_REVISION``.
+
+    The replacement key in :func:`_write_row` includes the revision on purpose --
+    bumping it must not overwrite the measurements that justified the bump. The
+    cost is that the file then holds two generations at once, and rendering both
+    into one table would silently mix incompatible measurements. This is the
+    other half of that contract: the file keeps everything, the report shows one
+    revision, and anything dropped is named in the log rather than vanishing.
+    """
+    keep = [r for r in rows if r.get("metric_revision") == METRIC_REVISION]
+    dropped = [r for r in rows if r.get("metric_revision") != METRIC_REVISION]
+    if dropped:
+        logger.warning(
+            "%s: ignoring %d row(s) from superseded metric revisions %s "
+            "(current is %d). Re-run those cells to bring them forward: %s",
+            label,
+            len(dropped),
+            sorted({r.get("metric_revision") for r in dropped}, key=str),
+            METRIC_REVISION,
+            sorted({(r.get("benchmark"), r.get("model")) for r in dropped}),
+        )
+    return keep
 
 
 def _write_row(path: Path, row: dict[str, Any]) -> None:
@@ -902,8 +984,26 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
     add("")
 
     crosscheck_path = RESEARCH_DIR / "20260728_external_reproduction_crosscheck.json"
+    checks: list[dict[str, Any]] = []
     if crosscheck_path.exists():
-        checks = json.loads(crosscheck_path.read_text())
+        # This artifact is a SEPARATE run from the rows above, so it can describe a
+        # different experiment: a stale metric revision, or a (benchmark, model)
+        # cell that is not even in the report. Section F would then silently
+        # attribute a gap measured elsewhere. Admit only entries whose revision is
+        # current AND whose cell is actually rendered here.
+        rendered_cells = {(r["benchmark"], r["model"]) for r in rows}
+        raw_checks = _current_revision_only(
+            json.loads(crosscheck_path.read_text()), str(crosscheck_path)
+        )
+        checks = [c for c in raw_checks if (c["benchmark"], c["model"]) in rendered_cells]
+        orphans = [c for c in raw_checks if (c["benchmark"], c["model"]) not in rendered_cells]
+        if orphans:
+            logger.warning(
+                "crosscheck: ignoring %d entr(ies) for cells absent from the rendered rows: %s",
+                len(orphans),
+                sorted({(c["benchmark"], c["model"]) for c in orphans}),
+            )
+    if checks:
         add("## F. Where the published protocol and `score_blocking` diverge")
         add("")
         add(
@@ -1028,7 +1128,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     row["map_at_100"],
                 )
 
-    rows = _load_rows(args.rows)
+    rows = _current_revision_only(_load_rows(args.rows), str(args.rows))
+    if not rows:
+        raise SystemExit(
+            f"no rows at metric revision {METRIC_REVISION} in {args.rows}; "
+            "nothing to render. Run a measuring pass first."
+        )
     reference = json.loads(REFERENCE_PATH.read_text())
     tables = render(rows, reference)
     REPORT_PATH.write_text(tables)
