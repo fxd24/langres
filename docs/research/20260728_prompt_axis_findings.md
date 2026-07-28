@@ -28,14 +28,18 @@ intervals are paired bootstraps resampled **by gold cluster**.
 
 ## The answer, in four lines
 
-1. **Yes, instructions help — but only the checkpoint's own *retrieval* prefix.**
+1. **Yes, instructions help — but only the checkpoint's own *retrieval* prefix,
+   and on three of the four instruction-trained models, not four.**
    EmbeddingGemma's documented Retrieval pair is the only **documented** arm in
    the sweep that is positive and clear of zero on all three unsaturated
    benchmarks (`wdc_computers` recall `0.7786 → 0.8128`). bge's documented query
    instruction is worth **+0.1224** *macro Δ per-record recall* on the same
    benchmark (its micro recall moves `+0.1098`). (Exactly one
    *other* arm clears zero on all three — Qwen3 with **our** text in its
-   template — which is the whole subject of line 3.)
+   template — which is the whole subject of line 3.) **`intfloat/e5-base-v2` is
+   not in that list**: its effects are real-looking one interval at a time and
+   do not survive correcting for multiplicity — see the next section, which is
+   the one place this document's answer changed.
 2. **"Documented" is NOT sufficient — this is the trap.** Gemma's `clustering`
    template is every bit as official as its retrieval one and costs **−0.3183**
    Δ per-record recall on `wdc_computers`. Anyone skimming for "use the official
@@ -198,6 +202,74 @@ Full per-model × per-benchmark tables with all four `k` values are in
 across models** — the whole question was whether the effect is model-specific,
 and it emphatically is.
 
+### Everything below is corrected for multiplicity, and that cost us e5
+
+This sweep produces **80** separate 95% intervals. Read one at a time, each
+controls its own error rate. Read as a set — which is exactly how *"this recipe
+helps this checkpoint"* gets read — they do not, and at α=0.05 you expect a
+handful of spurious exclusions from noise alone.
+
+So each `(model, arm)` is treated as one **family** across benchmarks and
+corrected with **Holm's step-down** at family-wise α=0.05. Holm is uniformly at
+least as powerful as Bonferroni and assumes nothing about dependence — which
+matters, because the arms of one model share a baseline and a corpus. The
+verdicts are computed **by the harness**, not by hand: `20260728_prompt_axis.md`
+carries a `Holm` column on every headline row and a section listing every
+comparison and its p-value.
+
+**The p-values are approximate, and the exact route was unavailable.** Holm needs
+p-values; the rows carry percentile intervals, and the bootstrap replicate
+distributions were not retained (re-measuring costs the whole sweep). Each p is
+recovered by reading the interval as normal and scaling from the bound **facing
+zero** only — the side that decides exclusion — so no symmetry is assumed. Two
+properties then follow by arithmetic rather than by judgement, which is what
+makes this safe to use for a *retraction*:
+
+- An interval that spans zero yields `p > 0.05`. **Correction can only remove
+  claims, never add one** — so no result below was promoted by this step.
+- A bound resting *exactly* on zero yields `p = 0.05` exactly, and therefore
+  fails every Holm threshold in a family of more than one. The four such cells
+  (`e5`/`official_asymmetric`/`wdc_computers`, `e5`/`er_query_only`/`abt_buy`,
+  `Qwen3`/`er_query_only`/`abt_buy`, `Qwen3`/`er_query_only`/`amazon_google`)
+  drop out without anyone deciding they should.
+
+**Counts.** Of 80 comparisons, **61 are testable** and **19 are not** — the arm
+changed no record's recall, so the estimate and both bounds are exactly zero and
+the bootstrap has no support to resample. All 19 are on the saturated
+`fodors_zagat`. Of the 61, **40 intervals exclude zero uncorrected and 37
+survive Holm**.
+
+**All three withdrawals are `intfloat/e5-base-v2`**, and they are its whole
+documented story:
+
+| withdrawn | Δ per-record | 95% CI | approx p |
+|---|---:|---|---:|
+| `official_asymmetric` / `abt_buy` | +0.0069 | [+0.0010, +0.0128] | 0.0221 |
+| `official_symmetric` / `amazon_google` | −0.0029 | [−0.0059, −0.0004] | 0.0229 |
+| `official_symmetric` / `wdc_computers` | −0.0145 | [−0.0274, −0.0023] | 0.0197 |
+
+e5's `official_asymmetric` family fails at Holm's **first** step — its smallest
+p is `0.0221` against a threshold of `0.05/3 = 0.0167` — so nothing in that
+family is rejected, and the same happens to `official_symmetric`. Every one of
+these was a *just barely* significant reading (all three p between 0.0197 and
+0.0229), which is precisely the population a multiplicity correction exists to
+thin out.
+
+Nothing else moved. Every claim in §4.1–§4.5 about EmbeddingGemma, bge, Qwen3
+and the MiniLM control survives unchanged, including the `official_clustering`
+harm on the saturated benchmark (`p = 0.0061` at the last step of a family of
+four) and the EmbeddingGemma counter-example in §4.2 (`p = 0.0013`).
+
+**Sensitivity to the family choice, stated because it is a choice.** Correcting
+instead over the whole sweep as a single family of 61 leaves **24** comparisons
+standing rather than 37. That stricter reading costs margin, not conclusions:
+all three documented-retrieval winners still clear it — Gemma on all three
+benchmarks, bge on `abt_buy` and `wdc_computers`, Qwen3 on `wdc_computers` — so
+"significantly positive on at least one benchmark for three of the four
+instruction-trained models" holds under either family. The per-`(model, arm)`
+family is used because it is the unit the claims are stated in: a row of the
+results table.
+
 ### A note on the saturated benchmark, because it earned its keep
 
 `fodors_zagat` is **saturated**: every model reaches recall `1.0000` at `k=20`
@@ -244,33 +316,50 @@ sweep that
 broke the saturated `fodors_zagat` control (`1.0000 → 0.9375`). Picking the
 wrong official template is far more damaging than using no prompt at all.
 
-**`intfloat/e5-base-v2`** — same shape, smaller magnitude. The card's
-**asymmetric** retrieval recipe wins; its **symmetric** rule of thumb loses:
+**`intfloat/e5-base-v2`** — the null result. Same *shape* as Gemma's, an order of
+magnitude smaller, and **nothing here survives correction**:
 
 | arm | abt_buy | amazon_google | wdc_computers |
 |---|---|---|---|
-| `official_asymmetric` (`query:`/`passage:`) | **+0.0069** [+0.0010, +0.0128] | +0.0020 [−0.0012, +0.0056] | +0.0152 [+0.0000, +0.0310] |
-| `official_symmetric` (`query:` both sides) | −0.0020 [−0.0059, +0.0020] | **−0.0029** [−0.0059, −0.0004] | **−0.0145** [−0.0274, −0.0023] |
+| `official_asymmetric` (`query:`/`passage:`) | +0.0069 [+0.0010, +0.0128] *withdrawn* | +0.0020 [−0.0012, +0.0056] | +0.0152 [+0.0000, +0.0310] |
+| `official_symmetric` (`query:` both sides) | −0.0020 [−0.0059, +0.0020] | −0.0029 [−0.0059, −0.0004] *withdrawn* | −0.0145 [−0.0274, −0.0023] *withdrawn* |
 
-> **The `wdc_computers` cell is a boundary case, not a win.** `+0.0152` looks
+**Read one interval at a time this table says the asymmetric recipe wins and the
+symmetric one loses. Read as the family it is, it says neither.** Both e5 families
+fail at Holm's *first* step (smallest p `0.0221` and `0.0197`, against a threshold
+of `0.0167`), so **no e5 documented arm is distinguishable from no prompt at all**
+on this data. The three cells marked *withdrawn* are the study's entire retraction
+list.
+
+Two further reasons not to rescue this row:
+
+> **The `wdc_computers` cell was never a win even uncorrected.** `+0.0152` looks
 > like the largest e5 effect in the table, but its interval closes **exactly on
-> zero** — it does not exclude it, so this benchmark does not by itself establish
-> that the asymmetric recipe helps e5. The claim rests on `abt_buy`
-> (`+0.0069 [+0.0010, +0.0128]`), which does. An earlier draft of this doc read
-> `[+0.0009, +0.0308]` here and called it significant; that interval came from a
-> run whose bootstrap was not reproducible (gold clusters arrive as `set`s, so
-> per-process hash randomisation changed the resampling order despite the fixed
-> seed). After the fix, every point estimate in this document is unchanged and
-> this is the **only** verdict that moved.
+> zero** — it does not exclude it. An earlier draft read `[+0.0009, +0.0308]`
+> here and called it significant; that interval came from a run whose bootstrap
+> was not reproducible (gold clusters arrive as `set`s, so per-process hash
+> randomisation changed the resampling order despite the fixed seed). After the
+> fix every point estimate was unchanged and that was the only verdict to move —
+> until multiplicity took `abt_buy` too, which is what left this model with
+> nothing.
 
-This **contradicts e5's own model card**, and is the most useful negative result
-here. The card's FAQ says to use `query: ` on both sides for *"symmetric tasks
-such as semantic similarity, paraphrase retrieval"*. ER blocking over a pooled
-corpus looks exactly like that description — and does not behave like it. Reading
-the card was necessary but not sufficient; only measurement settled it. Note the
-asymmetric recipe's advantage over the symmetric one is clear on `wdc_computers`
-even though its own margin over *no prompt* is not: `−0.0145` and `+0.0152` have
-non-overlapping intervals.
+> **The arm-versus-arm comparison is withdrawn with them.** An earlier version of
+> this paragraph argued that asymmetric beats symmetric on `wdc_computers` even
+> though neither beats no-prompt, because `−0.0145` and `+0.0152` have
+> non-overlapping intervals. That was never a test — non-overlap of two intervals
+> is an informal proxy, the two arms are paired on the same corpus so their errors
+> are correlated, and both cells have now failed correction against the baseline.
+> A comparison between two effects neither of which is established is not evidence.
+
+What survives is a **negative** result about the card, and it is still the useful
+one. e5's FAQ says to use `query: ` on both sides for *"symmetric tasks such as
+semantic similarity, paraphrase retrieval"*. ER blocking over a pooled corpus
+looks exactly like that description. Following that advice bought e5 **no
+measurable improvement in blocking recall** — the point estimates are negative on
+two of three benchmarks, and the recipe it recommends against (`query:`/`passage:`)
+is not measurably better either. Reading the card was necessary and turned out not
+to be sufficient in either direction: for this checkpoint the prompt axis is
+simply not a lever worth pulling, which you can only learn by measuring.
 
 **`BAAI/bge-base-en-v1.5`** — the largest single gain in the sweep, from a
 query-only recipe that is documented as query-only:
@@ -367,7 +456,7 @@ distinction, and it is the more useful result:
 
 | what you do | outcome | evidence (**Δ per-record recall**, macro, @k=20) |
 |---|---|---|
-| Use the checkpoint's **documented retrieval prompt** | **Reliable win.** Significantly positive on ≥1 benchmark for all four instruction-trained models; never significantly negative. | On `wdc_computers`: Gemma +0.0394, bge +0.1224, Qwen3 +0.0646 (all exclude 0). e5 is the weakest case — its `wdc_computers` +0.0152 closes on zero, so its evidence is `abt_buy` +0.0069 [+0.0010, +0.0128]. |
+| Use the checkpoint's **documented retrieval prompt** | **Reliable win on 3 of the 4 instruction-trained models**, and never significantly negative on any. | On `wdc_computers`: Gemma +0.0394, bge +0.1224, Qwen3 +0.0646 — all exclude zero and all survive Holm. **e5 is not in the list**: its `wdc_computers` +0.0152 closes exactly on zero, and its `abt_buy` +0.0069 was withdrawn by the correction (p=0.0221 against a 0.0167 threshold). |
 | Substitute **your own task text into its template shape** | **Coin flip, and model-specific.** Never beat the model's own default on candidate recall. | Qwen3 +0.0388 (helped, and the only non-documented arm clear of zero on 3/3); Gemma **−0.1589** (hurt badly) |
 | Use a **raw English sentence outside any template** | **Harmful on 4 of the 5 checkpoints — not universally.** | Hurt: −0.1038 e5, −0.0907 Qwen3, −0.0775 bge, −0.0632 MiniLM (all `wdc_computers`). **Exception: EmbeddingGemma**, which is *significantly positive* on `amazon_google` (+0.0118 [+0.0046, +0.0196]) and neutral on `wdc_computers` (+0.0004, spans 0). |
 
@@ -429,3 +518,50 @@ test_asymmetric_prompt_recipe.py::TestCoherenceWarning::
 test_silent_when_only_the_query_side_is_driven` pins exactly this shape — so no
 new test was added. The probe above confirms the existing coverage holds with the
 real documented prompt strings rather than synthetic ones.
+
+---
+
+## 5. Limitations
+
+Stated because each one bounds a claim above, not as boilerplate.
+
+**The p-values behind §4's Holm column are approximate.** They are recovered from
+the stored percentile intervals under a normal reading (zero-facing side only, so
+no symmetry is assumed) because the bootstrap replicate distributions were not
+retained. The exact procedure — re-running the bootstrap at each Holm threshold —
+costs the whole sweep. The approximation is conservative in the direction that
+matters (a spanning interval can never become significant), but a comparison
+close to a threshold could in principle fall on the other side of it under the
+exact computation. Three of the sweep's 61 testable comparisons sit in that
+region: exactly the three e5 cells this document withdraws, at p `0.0197`–`0.0229`
+against a `0.0167` threshold. They are not marginal *by a little* — they miss by
+18%, 33% and 38% of the threshold — but a reader who needs e5 settled should
+re-measure rather than rely on this.
+
+**A full sweep does not fit in one process on this machine.** The single-process
+run OOMed at row 324 of 400, with torch requesting **42.44 GiB** on MPS while
+loading a 0.6B fp16 model: the MPS allocator caches freed blocks across model
+loads and a sweep long enough will exhaust it. The committed rows were produced
+one `(model, benchmark)` per process, which the cell-granularity `--resume` makes
+free (embeddings come back from the on-disk cache). This is a real constraint on
+reproduction, not an incidental crash — a naive `python prompt_axis.py` with no
+`--models`/`--benchmarks` narrowing will not finish here. Detail and the driver
+loop are in `docs/FRICTION_LOG.md`.
+
+**One `k`, one seed, one size per model family.** Every verdict is at `k=20`
+(other `k` are tabulated but not tested), from a single bootstrap seed, on one
+checkpoint per family — `Qwen3-Embedding-0.6B` is the smallest of its family and
+`embeddinggemma-300m` the only size published. Nothing here establishes that the
+ranking holds at other `k`, or that a larger sibling behaves the same way.
+
+**Four benchmarks, one data culture.** `fodors_zagat`, `abt_buy`, `amazon_google`
+and `wdc_computers` are English restaurant and e-commerce records. No person
+names, no addresses, no multilingual data, and no dedup-shaped benchmark — so
+"the checkpoint's retrieval prefix is the lever" is established for
+product-catalogue linkage and is untested outside it.
+
+**EmbeddingGemma's licence is use-restricted and not OSI-approved.** It is the
+strongest result in the sweep and it is the one model you may not be able to
+ship. Of the arms that survive correction, `BAAI/bge-base-en-v1.5` (MIT) is the
+recommendation for anyone who needs an OSI licence, and it carries the largest
+single gain measured here.
