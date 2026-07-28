@@ -626,6 +626,66 @@ def write_reference(path: Path, store: dict[str, RecallByRecord]) -> None:
 #: against on every later one.
 _CANARY_TEXT = "langres embedder-ladder cache canary"
 
+#: A second probe, long enough to be cut by any realistic truncation boundary.
+#:
+#: One short string cannot see an INPUT-SELECTIVE change. Halving a checkpoint's
+#: ``max_seq_length`` leaves a five-token probe bit-identical while every long
+#: record's vector moves — so the check would pass and the ladder would publish
+#: rows mixing two checkpoints, which is the exact failure the canary exists to
+#: stop. ~1024 words is past the 128/256/512-token limits sentence-transformers
+#: checkpoints actually use, so this probe is truncated by all of them and its
+#: vector moves when the cut moves. Deterministic and fixed forever, like the
+#: short one: the entry written on the first run is what later runs compare to.
+#: (Cross-model review.)
+_CANARY_LONG_TEXT = " ".join(f"canary{i}" for i in range(1024))
+
+
+def _vector_affecting_runtime(embedder: Any) -> str:
+    """Runtime knobs that change vectors but are NOT in the cache key.
+
+    ``DiskCachedEmbedder._embedder_discriminator`` covers ``prompt_name`` /
+    ``truncate_dim`` / ``prompts``. ``max_seq_length`` is the one it does not,
+    and it is the input-selective one: change it and short texts are untouched
+    while long ones are re-cut.
+
+    Folding it into the canary *text* — rather than adding storage — means a
+    changed value changes the cache KEY, so the partition holds vectors with no
+    canary under the new key and the legacy gate already built refuses it. Reuse
+    of that refusal is the point: a second, parallel staleness check would be a
+    second thing to keep correct.
+
+    Duck-typed and total. An unreadable knob yields ``None``, which is stable
+    across runs (so it cannot cause a spurious refusal) and is honest: it says
+    the probe cannot see that knob, which is what the long probe above is for.
+    """
+    model = None
+    getter = getattr(embedder, "_get_model", None)
+    if callable(getter):
+        try:
+            model = getter()
+        except Exception:  # pragma: no cover - a load failure surfaces at encode
+            model = None
+    if model is None:
+        model = getattr(embedder, "model", embedder)
+    value = getattr(model, "max_seq_length", None)
+    if value is None:
+        value = getattr(embedder, "max_seq_length", None)
+    return f"max_seq_length={value!r}"
+
+
+def _canary_texts(embedder: Any) -> tuple[str, ...]:
+    """The probe texts pinned in each partition: one short, one truncation-length.
+
+    Both carry :func:`_vector_affecting_runtime`, so the pair identifies the
+    checkpoint *and* the runtime configuration it was measured under.
+    """
+    fingerprint = _vector_affecting_runtime(embedder)
+    return (
+        f"{_CANARY_TEXT} [{fingerprint}]",
+        f"{_CANARY_LONG_TEXT} [{fingerprint}]",
+    )
+
+
 #: How far a cached canary vector may sit from a freshly encoded one before the
 #: cache is declared stale. Generous on purpose: run-to-run float noise (device,
 #: batch composition, BLAS version) is ~1e-6 on normalized vectors, while a
@@ -677,8 +737,10 @@ def _cache_entry_count(db_path: Path, prompt: str | None = _ANY_PROMPT) -> int:
         return int(row.fetchone()[0])
 
 
-def _canary_is_cached(cached: Any, db_path: Path, prompt: str | None = None) -> bool:
-    """Is the canary already in ``db_path``, *without* putting it there?
+def _canary_is_cached(
+    cached: Any, db_path: Path, prompt: str | None = None, texts: Sequence[str] = ()
+) -> bool:
+    """Are ALL the canaries already in ``db_path``, *without* putting them there?
 
     Asking by encoding would answer the question by changing it: a legacy
     namespace would gain a canary row on the very run that refuses it, and the
@@ -696,10 +758,17 @@ def _canary_is_cached(cached: Any, db_path: Path, prompt: str | None = None) -> 
 
     if not db_path.exists():
         return False
-    key = cached._hash_text(_CANARY_TEXT, prompt)
+    # ALL, not any: a partition pinned before a probe existed has never been
+    # verified against what that probe covers, which is the definition of legacy
+    # the refusal already uses. Reading it as pinned would grandfather in exactly
+    # the vectors the new probe was added to check.
     with sqlite3.connect(db_path) as conn:
-        row = conn.execute("SELECT 1 FROM embeddings WHERE text_hash = ?", (key,)).fetchone()
-    return row is not None
+        for text in texts:
+            key = cached._hash_text(text, prompt)
+            row = conn.execute("SELECT 1 FROM embeddings WHERE text_hash = ?", (key,)).fetchone()
+            if row is None:
+                return False
+    return True
 
 
 def _assert_cache_matches_checkpoint(
@@ -775,8 +844,9 @@ def _assert_cache_matches_checkpoint(
         # Treating it as cold would pin a fresh canary over stale prompted
         # vectors and accept them forever. Same gate, same remedy, per partition.
         # (Cross-model review.)
+        canaries = _canary_texts(base)
         populated = _cache_entry_count(db_path, prompt)
-        if populated > 0 and not _canary_is_cached(cached, db_path, prompt):
+        if populated > 0 and not _canary_is_cached(cached, db_path, prompt, canaries):
             if not adopt_legacy:
                 raise StaleEmbeddingCacheError(
                     f"the embedding cache for namespace {namespace!r} holds {populated} "
@@ -796,32 +866,34 @@ def _assert_cache_matches_checkpoint(
                 prompt,
                 namespace,
             )
-            cached.encode([_CANARY_TEXT], prompt=prompt)
+            cached.encode(list(canaries), prompt=prompt)
             continue
 
-        from_cache = np.asarray(cached.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
-        fresh = np.asarray(base.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
+        for text in canaries:
+            from_cache = np.asarray(cached.encode([text], prompt=prompt)[0], dtype=np.float64)
+            fresh = np.asarray(base.encode([text], prompt=prompt)[0], dtype=np.float64)
 
-        if from_cache.shape != fresh.shape:
-            drift: float = float("inf")
-        elif not (np.isfinite(from_cache).all() and np.isfinite(fresh).all()):
-            # A NaN anywhere makes `drift` NaN, and `NaN > tolerance` is **False**
-            # -- so the guard would ACCEPT a cache it cannot compare and the ladder
-            # would publish rows computed from non-finite vectors. Unstable half
-            # precision on some devices and a truncated cached blob both produce
-            # this. Treat it as maximal drift: unusable is not equal.
-            drift = float("inf")
-        else:
-            drift = float(np.abs(from_cache - fresh).max())
+            if from_cache.shape != fresh.shape:
+                drift: float = float("inf")
+            elif not (np.isfinite(from_cache).all() and np.isfinite(fresh).all()):
+                # A NaN anywhere makes `drift` NaN, and `NaN > tolerance` is **False**
+                # -- so the guard would ACCEPT a cache it cannot compare and the ladder
+                # would publish rows computed from non-finite vectors. Unstable half
+                # precision on some devices and a truncated cached blob both produce
+                # this. Treat it as maximal drift: unusable is not equal.
+                drift = float("inf")
+            else:
+                drift = float(np.abs(from_cache - fresh).max())
 
-        if drift > _CANARY_TOLERANCE:
-            raise StaleEmbeddingCacheError(
-                f"the embedding cache for namespace {namespace!r} was written by a "
-                f"different checkpoint than the one loaded now (canary vectors for "
-                f"prompt={prompt!r} differ by {drift:.3g} > {_CANARY_TOLERANCE:g}). "
-                f"Every cached vector in it is suspect, so continuing would publish "
-                f"rows mixing two checkpoints. Delete {db_path} and re-measure."
-            )
+            if drift > _CANARY_TOLERANCE:
+                raise StaleEmbeddingCacheError(
+                    f"the embedding cache for namespace {namespace!r} was written by a "
+                    f"different checkpoint than the one loaded now (canary vectors for "
+                    f"prompt={prompt!r}, probe of {len(text)} chars, differ by "
+                    f"{drift:.3g} > {_CANARY_TOLERANCE:g}). "
+                    f"Every cached vector in it is suspect, so continuing would publish "
+                    f"rows mixing two checkpoints. Delete {db_path} and re-measure."
+                )
 
 
 def _build_embedder(
@@ -1515,10 +1587,30 @@ def _render_recommendation(
         co_winners = [
             name for count, delta, name in ranked if (count, delta) == (best_count, best_delta)
         ]
+
         # Wins on benchmarks OUTSIDE the shared set. They cannot enter the ranking
         # -- that is the whole point of the shared set -- but they are still
         # CI-clear wins sitting in the table above, so a sentence saying no model
         # beat the reference "on any benchmark" would contradict it.
+        # A shared-set zero is not one state. An interval of [-0.12, -0.08] is a
+        # CLEAR LOSS -- the measurement distinguished the models perfectly well,
+        # in the incumbent's favour -- while [-0.02, 0.04] is genuinely
+        # inconclusive. Calling the first "cannot tell them apart" describes the
+        # opposite of what was measured. Both justify keeping the incumbent, and
+        # for opposite reasons, so the sentence has to say which. (Cross-model
+        # review.)
+        def loses_clearly(model: str) -> bool:
+            return any(
+                row.model == model
+                and row.benchmark in common
+                and row.k == headline_k
+                and row.prompt_arm == "none"
+                and row.vs_reference_ci_high is not None
+                and row.vs_reference_ci_high < 0
+                for row in ok
+            )
+
+        clear_losers = [name for name in compared if loses_clearly(name)]
         exclusive_winners = sorted(
             {name for name in compared if any(row.benchmark not in common for row in wins(name))}
         )
@@ -1561,9 +1653,29 @@ def _render_recommendation(
                 f"`{REFERENCE_MODEL}` on any of the {len(common)} shared benchmark(s) "
                 "with an interval clear of zero.** "
                 "The measured recommendation is therefore to **keep the current "
-                "default** — not because the challengers are bad, but because on this "
-                "evidence the measurement cannot tell them apart, and "
-                "'indistinguishable' is not a reason to move."
+                "default**"
+                + (
+                    (
+                        f" — and for {len(clear_losers)} of them "
+                        f"({', '.join(f'`{name}`' for name in clear_losers)}) that is a "
+                        "**measured loss**, not an absence of evidence: at least one "
+                        "shared interval sits entirely below zero. "
+                        + (
+                            "The rest are genuinely inconclusive, with intervals "
+                            "spanning zero, and 'indistinguishable' is not a reason to "
+                            "move either."
+                            if len(clear_losers) < len(compared)
+                            else "Every compared model is in that position."
+                        )
+                    )
+                    if clear_losers
+                    else (
+                        " — not because the challengers are bad, but because on this "
+                        "evidence the measurement cannot tell them apart: every shared "
+                        "interval spans zero, and 'indistinguishable' is not a reason "
+                        "to move."
+                    )
+                )
                 + (
                     ""
                     if len(compared) == len(osi)

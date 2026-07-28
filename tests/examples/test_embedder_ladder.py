@@ -257,6 +257,24 @@ class _SwappableEmbedder:
         )
 
 
+class _RetunableEmbedder:
+    """Only LONG inputs change when ``max_seq_length`` moves.
+
+    Models the input-selective hazard a single short probe cannot see: the
+    checkpoint truncates at ``max_seq_length``, so shortening it leaves a
+    five-token text bit-identical while every long record is re-cut.
+    """
+
+    embedding_dim = 4
+
+    def __init__(self, max_seq_length: int = 512) -> None:
+        self.max_seq_length = max_seq_length
+
+    def encode(self, texts: list[str], prompt: str | None = None) -> np.ndarray:
+        cut = [((prompt or "") + text)[: self.max_seq_length] for text in texts]
+        return np.array([[float(len(t) + i) for i in range(4)] for t in cut], dtype=np.float32)
+
+
 class TestStaleCacheCanary:
     """The cache namespace omits the Hub revision; this is what covers that.
 
@@ -270,6 +288,32 @@ class TestStaleCacheCanary:
         from langres.core.embeddings import DiskCachedEmbedder
 
         return DiskCachedEmbedder(embedder, cache_dir=tmp_path, namespace="canary_ns")
+
+    def test_shortening_max_seq_length_is_caught(self, tmp_path: Path) -> None:
+        """A short probe alone cannot see this, so the check must not rest on one.
+
+        The knob rides in the canary TEXT, so a changed value changes the cache
+        key: the partition then holds vectors with no canary under the new key
+        and the legacy gate refuses it — the same refusal, reused.
+        """
+        embedder = _RetunableEmbedder(max_seq_length=512)
+        cached = self._cached(embedder, tmp_path)
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+        cached.encode(["a corpus record that is long enough to be affected " * 40])
+
+        embedder.max_seq_length = 128
+
+        with pytest.raises(LADDER.StaleEmbeddingCacheError):
+            LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+
+    def test_an_unchanged_max_seq_length_still_passes(self, tmp_path: Path) -> None:
+        """Control: folding the knob into the key must not refuse every warm run."""
+        embedder = _RetunableEmbedder(max_seq_length=512)
+        cached = self._cached(embedder, tmp_path)
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
+        cached.encode(["a corpus record"])
+
+        LADDER._assert_cache_matches_checkpoint(embedder, cached, "canary_ns", tmp_path)
 
     def test_a_cold_cache_agrees_with_the_checkpoint(self, tmp_path: Path) -> None:
         """Control: the check must not fire on the ordinary first run."""
@@ -1415,6 +1459,55 @@ class TestRecommendationSplitsOnLicence:
         assert "`BAAI/bge-small-en-v1.5`" in section
         assert "`intfloat/e5-base-v2`" in section
         assert "**Best OSI-licensed candidate:" not in section
+
+    def test_a_clear_loss_is_not_called_indistinguishable(self) -> None:
+        """An interval entirely below zero distinguished the models perfectly.
+
+        It just did so in the incumbent's favour. Reporting it as "the
+        measurement cannot tell them apart" states the opposite of the finding,
+        while reaching the same recommendation -- which is how a wrong reason
+        survives review.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=-0.10,
+                vs_reference_ci_low=-0.12,
+                vs_reference_ci_high=-0.08,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "**measured loss**" in section
+        assert "`BAAI/bge-small-en-v1.5`" in section
+        assert "cannot tell them apart" not in section
+        # The recommendation itself is unchanged -- only its reason.
+        assert "keep the current default" in section
+
+    def test_an_interval_spanning_zero_is_still_called_inconclusive(self) -> None:
+        """The control: without it, always saying 'measured loss' would pass."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                vs_reference_delta=-0.01,
+                vs_reference_ci_low=-0.03,
+                vs_reference_ci_high=0.02,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "cannot tell them apart" in section
+        assert "**measured loss**" not in section
 
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
         """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
