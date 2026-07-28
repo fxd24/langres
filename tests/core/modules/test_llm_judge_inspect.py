@@ -224,7 +224,7 @@ class TestLLMJudgeModuleInspection:
         report = module.inspect_scores(high_scores_judgements, sample_size=5)
 
         # With high median (> 0.7), should NOT recommend threshold=0.6
-        recommendations_text = " ".join(report.recommendations)
+        " ".join(report.recommendations)
         # High scores mean median > 0.7, so should not see balanced precision/recall
         assert report.score_distribution["median"] > 0.7
 

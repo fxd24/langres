@@ -17,8 +17,11 @@ import pytest
 
 torch = pytest.importorskip("torch", reason="requires the [semantic] extra (torch)")
 
-from langres.core.matchers.model_ref import ModelRef
-from langres.core.matchers.transformers_backend import TransformersBackend
+# E402 is deliberate: these modules pull torch, so they must be imported AFTER
+# the importorskip above -- hoisting them to the top would turn a clean skip
+# into a collection error when the [semantic] extra is absent.
+from langres.core.matchers.model_ref import ModelRef  # noqa: E402
+from langres.core.matchers.transformers_backend import TransformersBackend  # noqa: E402
 
 
 class _FakeTokenizer:

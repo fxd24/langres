@@ -1,7 +1,5 @@
 """Tests for diagnostic models."""
 
-import pytest
-
 from langres.metrics.diagnostics import (
     DiagnosticExamples,
     FalsePositiveExample,

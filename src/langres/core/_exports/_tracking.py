@@ -23,7 +23,8 @@ from langres.tracking.trackers import (
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
     # without pulling mlflow/wandb into a bare `import langres`.
-    from langres.tracking.trackers import MlflowTracker, WandbTracker
+    # The F401 below is deliberate: re-exported lazily via LAZY_SYMBOLS.
+    from langres.tracking.trackers import MlflowTracker, WandbTracker  # noqa: F401
 
 __all__ = [
     "capture_run",

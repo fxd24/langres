@@ -25,7 +25,8 @@ from langres.core import (
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy names visible to `mypy --strict`
     # without pulling scikit-learn into a bare `import langres`.
-    from langres.training.calibration import derive_threshold
+    # The F401 below is deliberate: re-exported lazily via LAZY_SYMBOLS.
+    from langres.training.calibration import derive_threshold  # noqa: F401
 
 __all__ = [
     "align_pairs",

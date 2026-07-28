@@ -546,7 +546,6 @@ class TestQdrantHybridIndexInstructionPrompts:
 
     def test_qdrant_hybrid_documents_no_prompts(self):
         """Test that create_index encodes documents without prompts."""
-        from unittest.mock import Mock
 
         # Create tracking embedders
         dense_call_log = []
@@ -589,7 +588,6 @@ class TestQdrantHybridIndexInstructionPrompts:
 
     def test_qdrant_hybrid_queries_dense_with_prompt_sparse_without(self):
         """Test that search encodes queries with prompt for dense, without for sparse."""
-        from unittest.mock import Mock
 
         # Create tracking embedders
         dense_call_log = []
@@ -649,7 +647,6 @@ class TestQdrantHybridIndexInstructionPrompts:
         Performance optimization: search_all should reuse dense embeddings,
         not re-encode with prompt. Sparse embeddings still need to be encoded.
         """
-        from unittest.mock import Mock
 
         # Create tracking embedders
         dense_call_log = []

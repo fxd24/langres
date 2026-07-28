@@ -8,12 +8,10 @@ import logging
 from unittest.mock import Mock
 
 import pytest
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
 
 from langres.clients.openrouter import SpendMonitor
-from langres.core.models import CompanySchema, ERCandidate, PairwiseJudgement
-from langres.core.matchers.llm_judge import LLMMatcher, LLMMatcher
+from langres.core.models import CompanySchema, ERCandidate
+from langres.core.matchers.llm_judge import LLMMatcher
 from langres.core.registry import get_component
 
 logger = logging.getLogger(__name__)

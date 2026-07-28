@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     # Never executed at runtime -- keeps the lazy name visible to `mypy --strict`
     # without pulling the data-profile module into a bare `import langres`.
-    from langres.data.data_profile import DataProfileReport
+    # The F401 below is deliberate: re-exported lazily via LAZY_SYMBOLS.
+    from langres.data.data_profile import DataProfileReport  # noqa: F401
 
 #: Nothing is eager here by design -- see the module docstring.
 __all__: list[str] = []
