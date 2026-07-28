@@ -540,6 +540,39 @@ changing the default model hard."* Design note:
   `author/method` namespacing (model ids keep their slashes in the separate
   `model=` kwarg).
 
+### CI & supply-chain maintenance
+
+- **Every GitHub Action is now hash-pinned to an exact commit, and every pin
+  names its exact version.** `test.yml`'s `test-finetune` job still used
+  floating `actions/checkout@v7` / `astral-sh/setup-uv@v7` (OpenSSF Scorecard
+  `PinnedDependencies`). The `# v7`-style comments on the hash-pinned steps were
+  their own hazard: they read as current while `actions/checkout` had moved
+  v7.0.0 -> v7.0.1 underneath them, so the comments now carry exact versions.
+- **Workflows run with a least-privilege `GITHUB_TOKEN`.** `lint`, `publish`,
+  `security` and `test` declared no top-level `permissions:`, and the
+  repository default is `write` — every job in them held a read-write token it
+  never used. All four are now `contents: read` (Scorecard `TokenPermissions`,
+  4x high). `publish.yml`'s job-level block (`id-token: write` for trusted
+  publishing) replaces the top-level one wholesale and is unaffected.
+- **Action versions rolled forward**, superseding Dependabot #231-#234:
+  `github/codeql-action` v4.37.0 -> v4.37.3, `actions/setup-python` v6 ->
+  v7.0.0, `actions/checkout` v7.0.0 -> v7.0.1, `astral-sh/setup-uv` v8.3.2 ->
+  v9.0.0, `ossf/scorecard-action` v2.4.3 -> v2.4.4, and `uv` itself 0.11.28 ->
+  0.11.32 (`test.yml` had drifted to 0.11.24 in one job).
+  `setup-uv` v9's one breaking change — `prune-cache` defaulting to false — is
+  explicitly held at the pre-v9 `true` at all seven cache sites, so the bump
+  changes no CI behaviour.
+- **The CodeQL jobs are green again.** `github/codeql-action` refuses to run
+  when its steps disagree on version (`Loaded a configuration file for version
+  '4.37.3', but running version '4.37.0'`). Dependabot raises one PR per action
+  path, so bumping `init` (#231) or `analyze` (#233) alone could only ever be
+  red; the three steps are moved together here.
+- **Dependency quarantine rolled 2026-07-08 -> 2026-07-21.** Since `uv.lock` is
+  gitignored, `exclude-newer` *is* the reproducibility pin and CI re-resolves on
+  every run, so this is the whole of the Python-side update: 47 packages, no
+  major bumps, nothing added or removed. Verified against the new resolve —
+  ruff, `ruff format --check`, `mypy src` (2.3.0) and 4557 tests all pass.
+
 ### Fixed
 
 - **`langres.__version__` no longer drifts from the released version.** It was a
