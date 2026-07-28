@@ -437,10 +437,14 @@ def to_markdown(results: list[CellResult]) -> str:
 def to_spread_markdown(results: list[CellResult]) -> str:
     """Per method: the range of derived cuts across benchmarks.
 
-    The answer to the strongest objection this study faces -- "the derived cut
-    only wins because 0.5 is a bad constant; a *better* constant per score family
-    would capture the same gain with no labels." That objection survives a narrow
-    spread and dies on a wide one, so the spread is the evidence, not the deltas.
+    Evidence on the strongest objection this study faces -- "the derived cut only
+    wins because 0.5 is a bad constant; a *better* constant per score family would
+    capture the same gain with no labels." A narrow spread supports the objection
+    directly. A wide one only WEAKENS it: this study measures F1 at 0.5 and at
+    each dataset's own derived cut, never at a shared alternative, and Youden's J
+    is flat across a separating gap -- so far-apart argmaxes do not prove that no
+    common constant scores well on all of them. Ruling one out needs a fixed-grid
+    sweep this harness does not run.
     """
     header = "| method | benchmarks | min derived t | median | max derived t | spread |"
     lines = [header, "|" + "---|" * 6]
@@ -488,6 +492,89 @@ def to_split_trap_markdown(results: list[CellResult]) -> str:
         lines.append(
             f"| {r.benchmark} | {r.seed} | {total:,} | {r.align_split_train:,} | "
             f"{r.align_split_valid:,} | {share} |"
+        )
+    return "\n".join(lines)
+
+
+def to_outcome_markdown(results: list[CellResult]) -> str:
+    """The headline counts -- and BOTH framings of them.
+
+    Every numeric error this study's review caught was in a hand-written summary
+    of these counts, not in a generated table, so they are generated now. The two
+    framings are genuinely different questions and were conflated once already:
+    the RACE's outcome is what ``fit`` ships, the RAW candidate's is what a
+    derive-and-apply implementation would have shipped.
+    """
+    race_win = sum(1 for r in results if r.delta_f1_blocked > 0)
+    race_tie = sum(1 for r in results if r.delta_f1_blocked == 0)
+    race_loss = sum(1 for r in results if r.delta_f1_blocked < 0)
+    raw_win = sum(1 for r in results if r.derived_f1_blocked > r.incumbent_f1_blocked)
+    raw_tie = sum(1 for r in results if r.derived_f1_blocked == r.incumbent_f1_blocked)
+    raw_loss = sum(1 for r in results if r.derived_f1_blocked < r.incumbent_f1_blocked)
+    caught = sum(
+        1 for r in results if r.derived_f1_blocked < r.incumbent_f1_blocked and r.kept == "declined"
+    )
+    wins = [r.delta_f1_blocked for r in results if r.delta_f1_blocked > 0]
+    span = f"{min(wins):+.4f} .. {max(wins):+.4f}" if wins else "n/a"
+    return "\n".join(
+        [
+            "| framing | better | tied | worse |",
+            "|---|---|---|---|",
+            f"| `fit(derive_threshold=True)` (derive **then race**) | {race_win} "
+            f"| {race_tie} | {race_loss} |",
+            f"| the raw derived candidate alone | {raw_win} | {raw_tie} | {raw_loss} |",
+            "",
+            f"Race win span: {span}. Of the {raw_loss} raw-candidate losses, "
+            f"**{caught}** were caught by the race (kept the incumbent) and "
+            f"{raw_loss - caught} were applied anyway.",
+        ]
+    )
+
+
+def to_seed_stability_markdown(results: list[CellResult]) -> str:
+    """Per method: how far the derived cut moves between seeds.
+
+    Generated because the hand-written version of this claimed "~±0.005", which
+    is wrong by ~8x at the tail.
+    """
+    lines = ["| method | min spread | max spread | cells > 0.01 |", "|---|---|---|---|"]
+    for method in sorted({r.method for r in results}):
+        spreads: list[tuple[float, str]] = []
+        for benchmark in sorted({r.benchmark for r in results if r.method == method}):
+            cuts = [
+                r.derived_threshold
+                for r in results
+                if r.method == method and r.benchmark == benchmark
+            ]
+            spreads.append((max(cuts) - min(cuts), benchmark))
+        if not spreads:
+            continue
+        lo, hi = min(spreads), max(spreads)
+        over = sum(1 for s, _ in spreads if s > 0.01)
+        lines.append(
+            f"| {method} | {lo[0]:.4f} (`{lo[1]}`) | {hi[0]:.4f} (`{hi[1]}`) | "
+            f"{over} of {len(spreads)} |"
+        )
+    return "\n".join(lines)
+
+
+def to_decline_markdown(results: list[CellResult]) -> str:
+    """Every cell where the race declined, and whether declining was right."""
+    lines = [
+        "| declined cell | incumbent F1 | derived F1 (not applied) | declining was… |",
+        "|---|---|---|---|",
+    ]
+    for r in sorted(
+        (r for r in results if r.kept == "declined"), key=lambda r: (r.benchmark, r.seed)
+    ):
+        verdict = (
+            "correct"
+            if r.derived_f1_blocked < r.incumbent_f1_blocked
+            else ("an exact tie" if r.derived_f1_blocked == r.incumbent_f1_blocked else "WRONG")
+        )
+        lines.append(
+            f"| {r.benchmark}/{r.method} s{r.seed} | {r.incumbent_f1_blocked:.4f} | "
+            f"{r.derived_f1_blocked:.4f} | {verdict} |"
         )
     return "\n".join(lines)
 
@@ -569,8 +656,22 @@ def read_results(path: Path) -> list[CellResult]:
 
 
 def print_tables(results: list[CellResult]) -> None:
-    """Print every table this study reports, in the order the write-up uses them."""
+    """Print every table this study reports, in the order the write-up uses them.
+
+    "Every" is meant literally. It used to cover three of the six, leaving the
+    outcome counts, seed stability and decline audit to be typed by hand into the
+    write-up -- and every numeric error found in review was in one of those three.
+    """
     print(to_markdown(results))
+    print()
+    print("The headline counts, in both framings:")
+    print(to_outcome_markdown(results))
+    print()
+    print("Seed stability -- how far the derived cut moves between seeds:")
+    print(to_seed_stability_markdown(results))
+    print()
+    print("Was the race right when it declined?")
+    print(to_decline_markdown(results))
     print()
     print("Would a better CONSTANT do just as well? The between-dataset spread:")
     print(to_spread_markdown(results))

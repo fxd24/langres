@@ -236,9 +236,11 @@ switching would buy. Regenerate with
 | wdc_computers | embedding_cosine | 2 | 111,850 | 47,421 | 312 | 0.50 | 0.0131 | 0.8730 | 0.0471 | derived | +0.0340 |
 
 ⚠ `tiny_fixture` is a **12-record smoke fixture**, not an ER benchmark. Its
-held-out corpus is 3 records with **one** gold pair, so its F1 is a coin flip
-between `0.0` and `1.0` and its ±1.0000 deltas carry no evidential weight in
-either direction. It is kept in the table rather than dropped, because dropping
+held-out corpus is 3 records with **one** gold pair, so a single pair decides
+recall outright and its ±1.0000 deltas carry no evidential weight in either
+direction. (F1 there is not itself two-valued — false positives still move
+precision, which is why the `embedding_cosine` rows read `0.5000` on the same
+one gold pair. The problem is the sample size, not the metric's range.) It is kept in the table rather than dropped, because dropping
 the only cells that lose would be exactly the wrong instinct — but it should not
 be read as a benchmark result. (The harness refuses a cell with **zero** blocked
 gold pairs; a corpus with one is the smallest thing it will still report.)
