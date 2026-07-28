@@ -376,9 +376,10 @@ def structural_caveats(profile: BenchmarkProfile) -> list[str]:
         caveats.append("one-to-one")
     # Scoped to linkage on purpose: the rule reads a big cluster as a closure
     # artifact of two-source labeling. In a DEDUP corpus a 10-record entity is
-    # ordinary, so firing there would brand a healthy dataset. No registered entry
-    # is a dedup set today (that is itself a portfolio gap) -- this keeps the rule
-    # honest for the one that eventually is.
+    # ordinary, so firing there would brand a healthy dataset. That scoping is no
+    # longer hypothetical -- `febrl_dedup` (FEBRL3) is now registered as
+    # task="dedup", and its gold is entity membership rather than a closure, so
+    # the artifact this rule looks for cannot exist there by construction.
     if (
         profile.task == "linkage"
         and profile.max_cluster_size is not None

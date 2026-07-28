@@ -17,13 +17,15 @@ from langres.data.registry import (
     register,
 )
 
-#: Every benchmark that ships loadable in-repo data: the five originals (Wave B)
-#: plus the four DeepMatcher loaders wired in by Wave C/D.
+#: Every benchmark that ships loadable in-repo data: the five originals (Wave B),
+#: the four DeepMatcher loaders wired in by Wave C/D, plus ``febrl_dedup`` (the
+#: single-source deduplication entry).
 _LOADABLE_NAMES = {
     "abt_buy",
     "amazon_google",
     "dblp_acm",
     "dblp_scholar",
+    "febrl_dedup",
     "febrl_person",
     "fodors_zagat",
     "tiny_fixture",
@@ -64,6 +66,14 @@ def test_benchmark_entries_carry_correct_metadata() -> None:
     assert by_name["dblp_scholar"].loader_symbol == "DblpScholarBenchmark"
     assert by_name["walmart_amazon"].module_path == "langres.data.walmart_amazon"
     assert by_name["wdc_computers"].domain == "product"
+    # The task field discriminates the two evaluation shapes, and both are used:
+    # every cross-source entry is "linkage", febrl_dedup is the single-source
+    # "dedup" one. Asserting both sides keeps the portfolio from drifting back to
+    # linkage-only with the Literal's second member unused.
+    assert by_name["febrl_dedup"].task == "dedup"
+    assert by_name["febrl_dedup"].module_path == "langres.data.febrl_dedup"
+    assert by_name["febrl_dedup"].loader_symbol == "FebrlDedupBenchmark"
+    assert {e.task for e in list_benchmarks()} == {"linkage", "dedup"}
     # No loadable entry carries a fetch hint; only the external-only seam does.
     assert all(e.fetch_hint is None for e in list_benchmarks() if e.loadable)
     assert by_name["opensanctions"].fetch_hint is not None
