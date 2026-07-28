@@ -35,7 +35,8 @@ graded on a corpus-disjoint held-out split.
   be `0.0` or `1.0`. On the **8 real benchmarks the shipped outcome never loses
   at any seed for either scorer**, and the wins are not marginal: +0.42
   (dblp_acm/rapidfuzz), +0.66 (dblp_acm/cosine), +0.82 (febrl_person/cosine),
-  +0.89 (fodors_zagat/cosine).
+  +0.86 (fodors_zagat/cosine) — all at **seed 0**, so the four sit on one basis.
+  (The largest single cell anywhere is +0.8887, fodors_zagat/cosine at seed 1.)
 
   **These are outcomes of the whole `fit` seam — derive *then* race — not of the
   derived cut alone**, and the difference is the entire point of (b). Scored on
@@ -263,9 +264,10 @@ how much depends on the scorer. Per-cell spread across the three seeds:
 | `rapidfuzz` | 0.0000 (`febrl_person` — identical at all 3 seeds) | **0.0384** (`walmart_amazon`, 0.5206 / 0.5538 / 0.5590) | 3 of 9 |
 
 So the cosine family is reproducible to well under ±0.005, and most `rapidfuzz`
-cells are too — but three are not (`wdc_computers` 0.0097, `abt_buy` 0.0205,
-`walmart_amazon` 0.0384). "Derived cuts are stable to ~±0.005" was in an earlier
-draft of this section, generalised from one benchmark; it is wrong by ~8× at the
+cells are too — but three exceed 0.01: `tiny_fixture` 0.0105 (the 1-gold-pair
+fixture), `abt_buy` 0.0205 and `walmart_amazon` 0.0384, with `wdc_computers`
+next at 0.0097. "Derived cuts are stable to ~±0.005" was in an earlier draft of
+this section, generalised from one benchmark; it is wrong by ~8× at the
 tail. That matters for anyone tempted to lift a single derived number and
 hard-code it — the thing §5 argues against on other grounds too.
 
