@@ -120,6 +120,17 @@ from langres.metrics.metrics import classify_pairs  # noqa: E402
 
 logger = logging.getLogger("threshold_default_study")
 
+
+class CheckpointError(RuntimeError):
+    """The run cannot persist its checkpoint.
+
+    Deliberately distinct from a benchmark failure. The sweep tolerates a
+    benchmark that raises -- it records it and moves on -- but it cannot tolerate
+    losing the ability to save, because everything after that point would be
+    measured (minutes per cell) and then thrown away.
+    """
+
+
 #: The $0 scorers this study races. ``rapidfuzz`` stands in for the string path
 #: (``FuzzyString``), ``embedding_cosine`` for the vector path
 #: (``architectures/retrieval.py``) -- the two families the six hard-coded
@@ -662,7 +673,17 @@ def main() -> None:
         try:
             for result in run_benchmark(name, methods=tuple(args.methods), seeds=tuple(args.seeds)):
                 results.append(result)
-                write_results(results, scratch)
+                try:
+                    write_results(results, scratch)
+                except OSError as exc:
+                    # A benchmark that fails is recoverable -- skip it and carry on.
+                    # A checkpoint that cannot be written is NOT: every later cell
+                    # would run for minutes with nothing catching it, and the closing
+                    # message would still announce "kept at <scratch>" over cells that
+                    # only ever existed in memory. Abort while the loss is small.
+                    raise CheckpointError(f"cannot write checkpoint {scratch}: {exc}") from exc
+        except CheckpointError:
+            raise
         except Exception as exc:  # noqa: BLE001 - a broken loader must not kill the sweep
             # ``exception`` (not ``error``): a benchmark that drops out leaves no
             # row anywhere -- and the tracked artifact is not written at all once
