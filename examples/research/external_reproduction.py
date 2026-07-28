@@ -553,7 +553,7 @@ their STransformer row (see below).
 
 The sharpest test is Section B2's second table — `all-mpnet-base-v2` against
 UniBlocker's STransformer column, same checkpoint, at *their* k. Because our gold set
-is a strict subset of theirs on three benchmarks (Section C), the honest question is
+is smaller than theirs on three benchmarks (Section C), the honest question is
 not "do the numbers match" but "is their published value reachable from what we
 measured". For the same checkpoint:
 
@@ -568,6 +568,13 @@ measured". For the same checkpoint:
 
 Four are consistent outright. `dblp_acm` misses by 1.3 pp on a bound only 4 pairs wide
 — that is a real but small residual, not a category error.
+
+**This whole table is conditional on `G_ours` nesting inside `G_theirs`, which we
+argue from provenance and cannot verify** (Section B2's note). Neither paper publishes
+its pair list. If that nesting fails, the intervals are not bounds and this count is
+not 4 of 6. The two benchmarks the verdict actually rests on are the ones that do not
+need it: `dblp_scholar`, where the gold *count* is DeepBlocker's own 5,347, and
+`dblp_acm`, where the interval is 4 pairs wide and we clear their value either way.
 
 `fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
 theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
@@ -830,15 +837,30 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
             f"{k * row['n_a']:,} | {_fmt(ref['recall_pct'], 1)} | {_fmt(ours)} |"
         )
     add("")
-    add("### B2. What our PC would be against *their* gold set (a bound, not an estimate)")
+    add("### B2. What our PC would be against *their* gold set (a *conditional* interval)")
     add("")
     add(
-        "Our gold set is a strict subset of theirs on the product benchmarks "
-        "(Section C). We cannot score the pairs we do not have, but we can bound "
-        "the number: the missing `G_theirs - G_ours` pairs are either all "
-        "missed (lower bound) or all retrieved (upper bound). Whenever the paper's "
-        "value falls inside the bound, the measurement is *consistent* with theirs "
-        "and the gold set is a sufficient explanation for the visible difference."
+        "We cannot score the pairs we do not have, but we can bound the number: the "
+        "missing `G_theirs - G_ours` pairs are either all missed (lower limit) or all "
+        "retrieved (upper limit). Whenever the paper's value falls inside that "
+        "interval, the measurement is *consistent* with theirs and the gold set is a "
+        "sufficient explanation for the visible difference."
+    )
+    add("")
+    add(
+        "> **This is conditional, not a mathematical bound, and the condition is not "
+        "verified.** The arithmetic below is only a bound if `G_ours` is literally a "
+        "*subset* of `G_theirs`. What we actually have is two aggregate match counts "
+        "and a provenance argument -- the shipped CSVs are the DeepMatcher labelled "
+        "splits, whose positives were drawn from the same original benchmarks after a "
+        "blocking pass. **Equal or smaller counts do not prove subset membership.** "
+        "Neither paper publishes its pair list, so nothing here can settle it; if "
+        "either used different preprocessing or a different release, `hits / G_theirs` "
+        "is not a floor and the missing-pair term is not a ceiling, and the `inside?` "
+        'column and the 4-of-6 headline could both move. Read the interval as *"if the '
+        "gold sets nest as their provenance says, then...\"*. Obtaining either paper's "
+        "candidate or gold pair list would convert it into a real bound; that is the "
+        "same missing artifact called out under *What could still be wrong*."
     )
     add("")
     add(
@@ -991,17 +1013,26 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
         # cell that is not even in the report. Section F would then silently
         # attribute a gap measured elsewhere. Admit only entries whose revision is
         # current AND whose cell is actually rendered here.
-        rendered_cells = {(r["benchmark"], r["model"]) for r in rows}
+        # The checkpoint revision is part of the identity, not decoration: Section F
+        # claims "one set of embeddings", which is false if the rows were remeasured
+        # on a new pin and the crosscheck was not. Both artifacts predating the field
+        # read None on each side and still match, which is correct -- they were one run.
+        rendered_cells = {(r["benchmark"], r["model"], r.get("model_revision")) for r in rows}
+
+        def _cell(entry: dict[str, Any]) -> tuple[Any, Any, Any]:
+            return (entry["benchmark"], entry["model"], entry.get("model_revision"))
+
         raw_checks = _current_revision_only(
             json.loads(crosscheck_path.read_text()), str(crosscheck_path)
         )
-        checks = [c for c in raw_checks if (c["benchmark"], c["model"]) in rendered_cells]
-        orphans = [c for c in raw_checks if (c["benchmark"], c["model"]) not in rendered_cells]
+        checks = [c for c in raw_checks if _cell(c) in rendered_cells]
+        orphans = [c for c in raw_checks if _cell(c) not in rendered_cells]
         if orphans:
             logger.warning(
-                "crosscheck: ignoring %d entr(ies) for cells absent from the rendered rows: %s",
+                "crosscheck: ignoring %d entr(ies) whose (benchmark, model, revision) "
+                "is not among the rendered rows: %s",
                 len(orphans),
-                sorted({(c["benchmark"], c["model"]) for c in orphans}),
+                sorted(str(_cell(c)) for c in orphans),
             )
     if checks:
         add("## F. Where the published protocol and `score_blocking` diverge")
@@ -1030,7 +1061,32 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
             )
         add("")
 
-    if VERDICT.strip():
+    # VERDICT is fixed prose written against the FULL canonical sweep -- it names
+    # specific benchmarks, specific numbers and "4 of 6". Appending it to a partial
+    # render would make the report claim results it does not contain (rendering only
+    # the febrl_person row would still assert the DBLP 98.82%). Emit it only when
+    # every canonical cell is present, and say why when it is not.
+    missing = {(b, m) for b in BENCHMARKS for m in DEFAULT_MODELS} - {
+        (r["benchmark"], r["model"]) for r in rows
+    }
+    if missing:
+        logger.warning(
+            "partial render (%d canonical cell(s) missing) -- omitting the verdict, "
+            "which is written against the full sweep: %s",
+            len(missing),
+            sorted(missing),
+        )
+        add("## G. Verdict")
+        add("")
+        add(
+            "*Omitted: this is a **partial** render. The verdict is fixed prose written "
+            "against the full canonical sweep (every benchmark x both default models) "
+            f"and would assert results these tables do not contain. Missing "
+            f"{len(missing)} cell(s). Re-render from the full "
+            "`20260728_external_reproduction_rows.jsonl` to get it.*"
+        )
+        add("")
+    elif VERDICT.strip():
         add(VERDICT.strip())
         add("")
 
@@ -1136,8 +1192,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     reference = json.loads(REFERENCE_PATH.read_text())
     tables = render(rows, reference)
-    REPORT_PATH.write_text(tables)
-    logger.info("wrote %s (%d rows)", REPORT_PATH, len(rows))
+    # The canonical report is the artifact this PR's claims are read from. A trial
+    # run against `--rows tmp/...` must not silently replace it with partial tables;
+    # an alternate rows file gets an alternate report beside it.
+    out = REPORT_PATH if Path(args.rows) == ROWS_PATH else Path(args.rows).with_suffix(".md")
+    if out != REPORT_PATH:
+        logger.warning(
+            "non-canonical --rows %s: writing %s instead of the tracked report %s",
+            args.rows,
+            out,
+            REPORT_PATH,
+        )
+    out.write_text(tables)
+    logger.info("wrote %s (%d rows)", out, len(rows))
     return 0
 
 

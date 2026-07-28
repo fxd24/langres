@@ -110,6 +110,42 @@ def test_crosscheck_section_is_dropped_when_its_cells_are_not_rendered(
     assert "## F. Where the published protocol" not in rendered
 
 
+def test_crosscheck_is_dropped_when_the_checkpoint_revision_moved(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """Section F claims "one set of embeddings"; a moved pin makes that false."""
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+    remeasured = [dict(r, model_revision="0" * 40) for r in rows]
+
+    rendered = harness.render(remeasured, reference)
+
+    assert "## F. Where the published protocol" not in rendered
+
+
+def test_partial_renders_omit_the_fixed_verdict(
+    harness: ModuleType, rows: list[dict[str, Any]]
+) -> None:
+    """The verdict is prose about the full sweep, so a subset must not assert it."""
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+    partial = [r for r in rows if r["benchmark"] == "febrl_person"]
+
+    rendered = harness.render(partial, reference)
+
+    assert "this is a **partial** render" in rendered
+    assert "4 of 6" not in rendered
+    assert "98.82" not in rendered
+
+
+def test_full_render_keeps_the_verdict(harness: ModuleType, rows: list[dict[str, Any]]) -> None:
+    """The complement of the test above -- otherwise it could pass by never firing."""
+    reference = json.loads(harness.REFERENCE_PATH.read_text())
+
+    rendered = harness.render(rows, reference)
+
+    assert "this is a **partial** render" not in rendered
+    assert "4 of 6" in rendered
+
+
 def test_crosscheck_entries_cover_only_benchmarks_the_report_measures(
     harness: ModuleType, rows: list[dict[str, Any]]
 ) -> None:

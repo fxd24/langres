@@ -117,9 +117,11 @@ Their `DL` column is a per-dataset **trained** Autoencoder/Hybrid over fastText,
 | `walmart_amazon` | `all-MiniLM-L6-v2` | 20 | 51.1k | 51,080 | 92.2 | 98.02 |
 | `walmart_amazon` | `sentence-transformers/all-mpnet-base-v2` | 20 | 51.1k | 51,080 | 92.2 | 95.63 |
 
-### B2. What our PC would be against *their* gold set (a bound, not an estimate)
+### B2. What our PC would be against *their* gold set (a *conditional* interval)
 
-Our gold set is a strict subset of theirs on the product benchmarks (Section C). We cannot score the pairs we do not have, but we can bound the number: the missing `G_theirs - G_ours` pairs are either all missed (lower bound) or all retrieved (upper bound). Whenever the paper's value falls inside the bound, the measurement is *consistent* with theirs and the gold set is a sufficient explanation for the visible difference.
+We cannot score the pairs we do not have, but we can bound the number: the missing `G_theirs - G_ours` pairs are either all missed (lower limit) or all retrieved (upper limit). Whenever the paper's value falls inside that interval, the measurement is *consistent* with theirs and the gold set is a sufficient explanation for the visible difference.
+
+> **This is conditional, not a mathematical bound, and the condition is not verified.** The arithmetic below is only a bound if `G_ours` is literally a *subset* of `G_theirs`. What we actually have is two aggregate match counts and a provenance argument -- the shipped CSVs are the DeepMatcher labelled splits, whose positives were drawn from the same original benchmarks after a blocking pass. **Equal or smaller counts do not prove subset membership.** Neither paper publishes its pair list, so nothing here can settle it; if either used different preprocessing or a different release, `hits / G_theirs` is not a floor and the missing-pair term is not a ceiling, and the `inside?` column and the 4-of-6 headline could both move. Read the interval as *"if the gold sets nest as their provenance says, then..."*. Obtaining either paper's candidate or gold pair list would convert it into a real bound; that is the same missing artifact called out under *What could still be wrong*.
 
 > **`inside? = no` is not a failure, and the column is uninformative when the gold sets nearly match.** The bound's width is exactly `(G_theirs - G_ours) / G_theirs`, so where the two gold sets are the same size (`fodors_zagat`, `dblp_scholar` vs DeepBlocker) the bound collapses to a point and *any* difference at all, however small, reads `no`. On `dblp_acm` it is 4 pairs wide. Read the column as "can the gold-set difference alone account for this?" -- and where it says `no`, read the size of the residual, not the word.
 
@@ -257,7 +259,7 @@ their STransformer row (see below).
 
 The sharpest test is Section B2's second table — `all-mpnet-base-v2` against
 UniBlocker's STransformer column, same checkpoint, at *their* k. Because our gold set
-is a strict subset of theirs on three benchmarks (Section C), the honest question is
+is smaller than theirs on three benchmarks (Section C), the honest question is
 not "do the numbers match" but "is their published value reachable from what we
 measured". For the same checkpoint:
 
@@ -272,6 +274,13 @@ measured". For the same checkpoint:
 
 Four are consistent outright. `dblp_acm` misses by 1.3 pp on a bound only 4 pairs wide
 — that is a real but small residual, not a category error.
+
+**This whole table is conditional on `G_ours` nesting inside `G_theirs`, which we
+argue from provenance and cannot verify** (Section B2's note). Neither paper publishes
+its pair list. If that nesting fails, the intervals are not bounds and this count is
+not 4 of 6. The two benchmarks the verdict actually rests on are the ones that do not
+need it: `dblp_scholar`, where the gold *count* is DeepBlocker's own 5,347, and
+`dblp_acm`, where the interval is 4 pairs wide and we clear their value either way.
 
 `fodors_zagat` is the one genuine outlier — and note its gold set is *identical* to
 theirs, so unlike the product benchmarks the residual cannot be a denominator effect.
