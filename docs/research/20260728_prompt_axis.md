@@ -124,6 +124,36 @@ Control: not instruction-trained, ships no prompts.
 | wdc_computers | `official_asymmetric` | documented | 0.7390 | 0.0152 | [+0.0009, +0.0308] ** | 0.02486 | 0.01444 | 0.9501 | 0.702 | 32141 |
 | wdc_computers | `official_symmetric` | documented | 0.7156 | -0.0145 | [-0.0288, -0.0023] ** | 0.01444 | 0.01444 | 1.0000 | 0.836 | 32029 |
 
+### `google/embeddinggemma-300m`
+
+307581696 params, dim 768, licence `gemma (NOT OSI-approved; use-restricted)` (**NOT OSI-approved**).
+
+Gated + use-restricted licence. Never the default recommendation.
+
+| benchmark | arm | kind | recall | Δ vs none | 95% CI | doc shift | query shift | doc·query | pair J | candidates |
+|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|
+| fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 4161 |
+| fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0.2381 | 0.2381 | 1.0000 | 0.401 | 4629 |
+| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0.2065 | 0.7935 | 0.542 | 4600 |
+| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0.2065 | 0.2065 | 1.0000 | 0.475 | 4391 |
+| fodors_zagat | `official_clustering` | documented | 0.9375 | -0.0625 | [-0.1161, -0.0268] ** | 0.3625 | 0.3625 | 1.0000 | 0.305 | 4470 |
+| fodors_zagat | `official_retrieval` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0.08287 | 0.1564 | 0.8585 | 0.494 | 4501 |
+| fodors_zagat | `official_sts` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0.2208 | 0.2208 | 1.0000 | 0.436 | 4362 |
+| abt_buy | `none` | baseline | 0.9741 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 9196 |
+| abt_buy | `er_in_official_template` | ours | 0.9559 | -0.0181 | [-0.0275, -0.0088] ** | 0.2174 | 0.2174 | 1.0000 | 0.563 | 9817 |
+| abt_buy | `er_query_only` | trap | 0.9751 | 0.0010 | [-0.0039, +0.0059] (spans 0) | 0 | 0.1478 | 0.8522 | 0.713 | 10211 |
+| abt_buy | `er_symmetric` | ours | 0.9665 | -0.0078 | [-0.0147, -0.0020] ** | 0.1478 | 0.1478 | 1.0000 | 0.629 | 9052 |
+| abt_buy | `official_clustering` | documented | 0.9023 | -0.0721 | [-0.0869, -0.0559] ** | 0.3584 | 0.3584 | 1.0000 | 0.468 | 10055 |
+| abt_buy | `official_retrieval` | documented | 0.9828 | 0.0088 | [+0.0030, +0.0147] ** | 0.06653 | 0.1527 | 0.8283 | 0.590 | 12155 |
+| abt_buy | `official_sts` | documented | 0.9617 | -0.0127 | [-0.0226, -0.0029] ** | 0.217 | 0.217 | 1.0000 | 0.569 | 10292 |
+| amazon_google | `none` | baseline | 0.8014 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 21531 |
+| amazon_google | `er_in_official_template` | ours | 0.8237 | 0.0238 | [+0.0136, +0.0346] ** | 0.2042 | 0.2042 | 1.0000 | 0.362 | 22589 |
+| amazon_google | `er_query_only` | trap | 0.8144 | 0.0136 | [+0.0043, +0.0244] ** | 0 | 0.209 | 0.7910 | 0.477 | 22538 |
+| amazon_google | `er_symmetric` | ours | 0.8129 | 0.0118 | [+0.0043, +0.0198] ** | 0.209 | 0.209 | 1.0000 | 0.465 | 22655 |
+| amazon_google | `official_clustering` | documented | 0.7871 | -0.0164 | [-0.0272, -0.0056] ** | 0.2994 | 0.2994 | 1.0000 | 0.256 | 23475 |
+| amazon_google | `official_retrieval` | documented | 0.8367 | 0.0371 | [+0.0264, +0.0478] ** | 0.09595 | 0.1442 | 0.8734 | 0.427 | 23038 |
+| amazon_google | `official_sts` | documented | 0.8223 | 0.0224 | [+0.0132, +0.0328] ** | 0.2208 | 0.2208 | 1.0000 | 0.469 | 21627 |
+
 ## Every k
 
 | model | benchmark | arm | k | recall | recall/reachable | candidates |
@@ -208,6 +238,90 @@ Control: not instruction-trained, ships no prompts.
 | `BAAI/bge-base-en-v1.5` | wdc_computers | `official_symmetric` | 10 | 0.6112 | 0.6790 | 16289 |
 | `BAAI/bge-base-en-v1.5` | wdc_computers | `official_symmetric` | 20 | 0.7129 | 0.7920 | 32205 |
 | `BAAI/bge-base-en-v1.5` | wdc_computers | `official_symmetric` | 50 | 0.8236 | 0.9150 | 80500 |
+| `google/embeddinggemma-300m` | abt_buy | `er_in_official_template` | 5 | 0.7692 | 0.7811 | 2091 |
+| `google/embeddinggemma-300m` | abt_buy | `er_in_official_template` | 10 | 0.8793 | 0.8930 | 4452 |
+| `google/embeddinggemma-300m` | abt_buy | `er_in_official_template` | 20 | 0.9559 | 0.9708 | 9817 |
+| `google/embeddinggemma-300m` | abt_buy | `er_in_official_template` | 50 | 0.9828 | 0.9981 | 26452 |
+| `google/embeddinggemma-300m` | abt_buy | `er_query_only` | 5 | 0.8745 | 0.8881 | 2370 |
+| `google/embeddinggemma-300m` | abt_buy | `er_query_only` | 10 | 0.9531 | 0.9679 | 4907 |
+| `google/embeddinggemma-300m` | abt_buy | `er_query_only` | 20 | 0.9751 | 0.9903 | 10211 |
+| `google/embeddinggemma-300m` | abt_buy | `er_query_only` | 50 | 0.9837 | 0.9990 | 26985 |
+| `google/embeddinggemma-300m` | abt_buy | `er_symmetric` | 5 | 0.8142 | 0.8268 | 1987 |
+| `google/embeddinggemma-300m` | abt_buy | `er_symmetric` | 10 | 0.9157 | 0.9300 | 4114 |
+| `google/embeddinggemma-300m` | abt_buy | `er_symmetric` | 20 | 0.9665 | 0.9815 | 9052 |
+| `google/embeddinggemma-300m` | abt_buy | `er_symmetric` | 50 | 0.9828 | 0.9981 | 24789 |
+| `google/embeddinggemma-300m` | abt_buy | `none` | 5 | 0.8477 | 0.8609 | 2107 |
+| `google/embeddinggemma-300m` | abt_buy | `none` | 10 | 0.9339 | 0.9484 | 4380 |
+| `google/embeddinggemma-300m` | abt_buy | `none` | 20 | 0.9741 | 0.9893 | 9196 |
+| `google/embeddinggemma-300m` | abt_buy | `none` | 50 | 0.9837 | 0.9990 | 24294 |
+| `google/embeddinggemma-300m` | abt_buy | `official_clustering` | 5 | 0.5958 | 0.6051 | 1939 |
+| `google/embeddinggemma-300m` | abt_buy | `official_clustering` | 10 | 0.7538 | 0.7656 | 4339 |
+| `google/embeddinggemma-300m` | abt_buy | `official_clustering` | 20 | 0.9023 | 0.9163 | 10055 |
+| `google/embeddinggemma-300m` | abt_buy | `official_clustering` | 50 | 0.9789 | 0.9942 | 27703 |
+| `google/embeddinggemma-300m` | abt_buy | `official_retrieval` | 5 | 0.9282 | 0.9426 | 2830 |
+| `google/embeddinggemma-300m` | abt_buy | `official_retrieval` | 10 | 0.9693 | 0.9844 | 5821 |
+| `google/embeddinggemma-300m` | abt_buy | `official_retrieval` | 20 | 0.9828 | 0.9981 | 12155 |
+| `google/embeddinggemma-300m` | abt_buy | `official_retrieval` | 50 | 0.9847 | 1.0000 | 31489 |
+| `google/embeddinggemma-300m` | abt_buy | `official_sts` | 5 | 0.7711 | 0.7831 | 2132 |
+| `google/embeddinggemma-300m` | abt_buy | `official_sts` | 10 | 0.8927 | 0.9066 | 4651 |
+| `google/embeddinggemma-300m` | abt_buy | `official_sts` | 20 | 0.9617 | 0.9767 | 10292 |
+| `google/embeddinggemma-300m` | abt_buy | `official_sts` | 50 | 0.9837 | 0.9990 | 28102 |
+| `google/embeddinggemma-300m` | amazon_google | `er_in_official_template` | 5 | 0.7338 | 0.8740 | 5216 |
+| `google/embeddinggemma-300m` | amazon_google | `er_in_official_template` | 10 | 0.7978 | 0.9503 | 10817 |
+| `google/embeddinggemma-300m` | amazon_google | `er_in_official_template` | 20 | 0.8237 | 0.9811 | 22589 |
+| `google/embeddinggemma-300m` | amazon_google | `er_in_official_template` | 50 | 0.8367 | 0.9966 | 60605 |
+| `google/embeddinggemma-300m` | amazon_google | `er_query_only` | 5 | 0.7388 | 0.8800 | 5327 |
+| `google/embeddinggemma-300m` | amazon_google | `er_query_only` | 10 | 0.7921 | 0.9434 | 10875 |
+| `google/embeddinggemma-300m` | amazon_google | `er_query_only` | 20 | 0.8144 | 0.9700 | 22538 |
+| `google/embeddinggemma-300m` | amazon_google | `er_query_only` | 50 | 0.8317 | 0.9906 | 59903 |
+| `google/embeddinggemma-300m` | amazon_google | `er_symmetric` | 5 | 0.7266 | 0.8655 | 5126 |
+| `google/embeddinggemma-300m` | amazon_google | `er_symmetric` | 10 | 0.7842 | 0.9340 | 10738 |
+| `google/embeddinggemma-300m` | amazon_google | `er_symmetric` | 20 | 0.8129 | 0.9683 | 22655 |
+| `google/embeddinggemma-300m` | amazon_google | `er_symmetric` | 50 | 0.8309 | 0.9897 | 62188 |
+| `google/embeddinggemma-300m` | amazon_google | `none` | 5 | 0.7058 | 0.8406 | 5035 |
+| `google/embeddinggemma-300m` | amazon_google | `none` | 10 | 0.7712 | 0.9186 | 10350 |
+| `google/embeddinggemma-300m` | amazon_google | `none` | 20 | 0.8014 | 0.9546 | 21531 |
+| `google/embeddinggemma-300m` | amazon_google | `none` | 50 | 0.8180 | 0.9743 | 58543 |
+| `google/embeddinggemma-300m` | amazon_google | `official_clustering` | 5 | 0.6734 | 0.8021 | 5297 |
+| `google/embeddinggemma-300m` | amazon_google | `official_clustering` | 10 | 0.7439 | 0.8860 | 11110 |
+| `google/embeddinggemma-300m` | amazon_google | `official_clustering` | 20 | 0.7871 | 0.9374 | 23475 |
+| `google/embeddinggemma-300m` | amazon_google | `official_clustering` | 50 | 0.8173 | 0.9734 | 62309 |
+| `google/embeddinggemma-300m` | amazon_google | `official_retrieval` | 5 | 0.7791 | 0.9280 | 5443 |
+| `google/embeddinggemma-300m` | amazon_google | `official_retrieval` | 10 | 0.8273 | 0.9854 | 11181 |
+| `google/embeddinggemma-300m` | amazon_google | `official_retrieval` | 20 | 0.8367 | 0.9966 | 23038 |
+| `google/embeddinggemma-300m` | amazon_google | `official_retrieval` | 50 | 0.8388 | 0.9991 | 60746 |
+| `google/embeddinggemma-300m` | amazon_google | `official_sts` | 5 | 0.7417 | 0.8835 | 5110 |
+| `google/embeddinggemma-300m` | amazon_google | `official_sts` | 10 | 0.7993 | 0.9520 | 10415 |
+| `google/embeddinggemma-300m` | amazon_google | `official_sts` | 20 | 0.8223 | 0.9794 | 21627 |
+| `google/embeddinggemma-300m` | amazon_google | `official_sts` | 50 | 0.8360 | 0.9957 | 57485 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_in_official_template` | 5 | 1.0000 | 1.0000 | 1063 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_in_official_template` | 10 | 1.0000 | 1.0000 | 2240 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_in_official_template` | 20 | 1.0000 | 1.0000 | 4629 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_in_official_template` | 50 | 1.0000 | 1.0000 | 11863 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_query_only` | 5 | 1.0000 | 1.0000 | 1094 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_query_only` | 10 | 1.0000 | 1.0000 | 2259 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_query_only` | 20 | 1.0000 | 1.0000 | 4600 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_query_only` | 50 | 1.0000 | 1.0000 | 11963 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_symmetric` | 5 | 1.0000 | 1.0000 | 1028 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_symmetric` | 10 | 1.0000 | 1.0000 | 2113 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_symmetric` | 20 | 1.0000 | 1.0000 | 4391 |
+| `google/embeddinggemma-300m` | fodors_zagat | `er_symmetric` | 50 | 1.0000 | 1.0000 | 11241 |
+| `google/embeddinggemma-300m` | fodors_zagat | `none` | 5 | 1.0000 | 1.0000 | 942 |
+| `google/embeddinggemma-300m` | fodors_zagat | `none` | 10 | 1.0000 | 1.0000 | 1990 |
+| `google/embeddinggemma-300m` | fodors_zagat | `none` | 20 | 1.0000 | 1.0000 | 4161 |
+| `google/embeddinggemma-300m` | fodors_zagat | `none` | 50 | 1.0000 | 1.0000 | 11023 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_clustering` | 5 | 0.9196 | 0.9196 | 960 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_clustering` | 10 | 0.9286 | 0.9286 | 2059 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_clustering` | 20 | 0.9375 | 0.9375 | 4470 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_clustering` | 50 | 0.9732 | 0.9732 | 11651 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_retrieval` | 5 | 1.0000 | 1.0000 | 1084 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_retrieval` | 10 | 1.0000 | 1.0000 | 2193 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_retrieval` | 20 | 1.0000 | 1.0000 | 4501 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_retrieval` | 50 | 1.0000 | 1.0000 | 11298 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_sts` | 5 | 1.0000 | 1.0000 | 990 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_sts` | 10 | 1.0000 | 1.0000 | 2100 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_sts` | 20 | 1.0000 | 1.0000 | 4362 |
+| `google/embeddinggemma-300m` | fodors_zagat | `official_sts` | 50 | 1.0000 | 1.0000 | 11351 |
 | `intfloat/e5-base-v2` | abt_buy | `er_query_only` | 5 | 0.7941 | 0.8064 | 2299 |
 | `intfloat/e5-base-v2` | abt_buy | `er_query_only` | 10 | 0.9195 | 0.9339 | 4914 |
 | `intfloat/e5-base-v2` | abt_buy | `er_query_only` | 20 | 0.9655 | 0.9805 | 10366 |
