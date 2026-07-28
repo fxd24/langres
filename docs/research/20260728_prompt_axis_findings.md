@@ -319,8 +319,9 @@ sweep that
 broke the saturated `fodors_zagat` control (`1.0000 → 0.9375`). Picking the
 wrong official template is far more damaging than using no prompt at all.
 
-**`intfloat/e5-base-v2`** — the null result. Same *shape* as Gemma's, an order of
-magnitude smaller, and **nothing here survives correction**:
+**`intfloat/e5-base-v2`** — its **documented** arms are the null result. Same
+*shape* as Gemma's, an order of magnitude smaller, and **neither survives
+correction**:
 
 | arm | abt_buy | amazon_google | wdc_computers |
 |---|---|---|---|
@@ -361,8 +362,18 @@ looks exactly like that description. Following that advice bought e5 **no
 measurable improvement in blocking recall** — the point estimates are negative on
 two of three benchmarks, and the recipe it recommends against (`query:`/`passage:`)
 is not measurably better either. Reading the card was necessary and turned out not
-to be sufficient in either direction: for this checkpoint the prompt axis is
-simply not a lever worth pulling, which you can only learn by measuring.
+to be sufficient in either direction, which you can only learn by measuring.
+
+> **This is not "prompts do nothing to e5" — read the sign.** The prompt axis
+> moves this checkpoint hard; it only ever moves it *down*. e5's `er_symmetric`
+> arm — our own ER sentence on both sides — is the **largest negative effect any
+> model suffers in the sweep** (`−0.1038` on `wdc_computers`, `−0.0436` on
+> `abt_buy`), and both survive the correction comfortably. So the honest summary
+> for e5 is: **its two documented recipes buy nothing, and a plausible
+> hand-written one costs a tenth of its recall.** "The prefix does nothing" and
+> "your own prose actively hurts" are different findings, and the second is the
+> one worth carrying away. (The first version of this section stated the former
+> as though it covered the model; caught by automated review on PR #252.)
 
 **`BAAI/bge-base-en-v1.5`** — the largest single gain in the sweep, from a
 query-only recipe that is documented as query-only:
