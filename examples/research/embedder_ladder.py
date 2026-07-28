@@ -1448,6 +1448,35 @@ def _render_recommendation(
         """
         return comparable_count(model) > 0
 
+    def evidence_phrase(model: str) -> str:
+        """What this sweep measured about ``model`` vs the reference, in three states.
+
+        Won / compared-and-did-not-win / never-compared are three different
+        claims, and the first version of this collapsed the last two into
+        "measured ahead on: no benchmark" — which reads as a result and is not
+        one. Shared by the restricted and unclassified sections deliberately:
+        they had the identical defect and only one of them got fixed, because
+        the branch was written twice. One phrasing, one place to be wrong.
+        (Cross-model review.)
+        """
+        won = wins(model)
+        if won:
+            return (
+                f"Measured ahead of `{REFERENCE_MODEL}` on: "
+                + ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
+                + "."
+            )
+        if has_comparison(model):
+            return (
+                f"**This sweep measured no benchmark where it beats `{REFERENCE_MODEL}` "
+                "with an interval clear of zero**, so nothing here recommends it."
+            )
+        return (
+            f"**It carries no interval against `{REFERENCE_MODEL}` at this metric "
+            "revision**, so this sweep makes no performance claim about it in either "
+            "direction — that is a missing measurement, not a verdict."
+        )
+
     def comparable_benchmarks(model: str) -> set[str]:
         """Which benchmarks ``model`` actually has an interval on.
 
@@ -1781,41 +1810,22 @@ def _render_recommendation(
     else:
         for name in restricted:
             spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
-            won = wins(name)
-            # "Documented opt-in" is TWO different statements and they were fused.
-            # As a RECOMMENDATION it is a claim about performance; as an EXPOSURE
-            # MECHANISM it is a claim about licence. Emitting the recommendation
-            # off the licence classification alone turned "no win measured" -- or
-            # no comparison at all -- into a positive one. Licence decides the
-            # mechanism; measurement decides whether anything is recommended.
-            # (Cross-model review.)
-            if won:
-                evidence = (
-                    f"Measured ahead of `{REFERENCE_MODEL}` on: "
-                    + ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
-                    + ". **Recommended as a documented opt-in**"
-                )
-            elif has_comparison(name):
-                evidence = (
-                    f"**This sweep measured no benchmark where it beats "
-                    f"`{REFERENCE_MODEL}` with an interval clear of zero**, so nothing "
-                    "here recommends it. If you use it anyway, the documented opt-in is "
-                    "the required exposure mechanism"
-                )
-            else:
-                evidence = (
-                    f"**It carries no interval against `{REFERENCE_MODEL}` at this "
-                    "metric revision**, so this sweep makes no performance claim about "
-                    "it in either direction — that is a missing measurement, not a "
-                    "verdict. If you use it, the documented opt-in is the required "
-                    "exposure mechanism"
-                )
+            # Licence decides the MECHANISM; measurement decides whether anything
+            # is recommended. Fusing them emitted "Recommended as a documented
+            # opt-in" off the licence bucket alone. (Cross-model review.)
+            consequence = (
+                "**Recommended as a documented opt-in**"
+                if wins(name)
+                else "If you use it anyway, the documented opt-in is the required "
+                "exposure mechanism"
+            )
             out.append(
                 f"\n- **`{name}` — licence `{spec.license}`, which is NOT OSI-approved.** "
-                f"{evidence}: a user who names it accepts its terms; a user "
-                "who names nothing must not be given them. Anyone shipping it must read "
-                "the checkpoint's own licence — in Gemma's case a prohibited-use policy "
-                "that survives redistribution, which Apache-2.0 does not impose.\n"
+                f"{evidence_phrase(name)} {consequence}: a user who names it accepts its "
+                "terms; a user who names nothing must not be given them. Anyone shipping "
+                "it must read the checkpoint's own licence — in Gemma's case a "
+                "prohibited-use policy that survives redistribution, which Apache-2.0 "
+                "does not impose.\n"
                 f"\n  ```python\n"
                 f"  # opt in explicitly, having read the licence\n"
                 f'  SentenceTransformerEmbedder("{name}")\n'
@@ -1835,17 +1845,11 @@ def _render_recommendation(
             "identifier on `MODELS`.\n"
         )
         for name in unclassified:
-            won = wins(name)
-            summary = (
-                ", ".join(f"{r.benchmark} {r.vs_reference_delta:+.4f}" for r in won)
-                if won
-                else "no benchmark, with an interval clear of zero"
-            )
             out.append(
-                f"\n- **`{name}` — licence not recorded.** Measured ahead of "
-                f"`{REFERENCE_MODEL}` on: {summary}. Read the checkpoint's own model "
-                "card before shipping it anywhere, then add the identifier to `MODELS` "
-                "so the next run classifies it instead of deferring again.\n"
+                f"\n- **`{name}` — licence not recorded.** {evidence_phrase(name)} Read "
+                "the checkpoint's own model card before shipping it anywhere, then add "
+                "the identifier to `MODELS` so the next run classifies it instead of "
+                "deferring again.\n"
             )
 
     return out

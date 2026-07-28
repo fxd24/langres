@@ -1294,6 +1294,47 @@ class TestRecommendationSplitsOnLicence:
         # The measurement still survives the hedge.
         assert "+0.0700" in unclassified
 
+    def test_an_uncompared_unclassified_model_is_not_reported_as_measured(self) -> None:
+        """The unclassified section had the SAME defect as the restricted one.
+
+        It said "Measured ahead of `<ref>` on: no benchmark" whether the model
+        was compared and did not win or was never compared at all. Fixing one
+        section and not its sibling is the failure mode that made the two share
+        one phrasing helper.
+        """
+        rows = [
+            *self._rows(),
+            _cell("someone/brand-new-model", "none", vs_reference_delta=None),
+        ]
+        report = LADDER.render_report(rows)
+        unclassified = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ].split("### Unclassified licences")[1]
+
+        assert "carries no interval" in unclassified
+        assert "missing measurement, not a verdict" in unclassified
+        assert "Measured ahead" not in unclassified
+
+    def test_a_compared_unclassified_model_that_never_wins_says_so(self) -> None:
+        """The middle state: compared, beat nothing. Not the same as uncompared."""
+        rows = [
+            *self._rows(),
+            _cell(
+                "someone/brand-new-model",
+                "none",
+                vs_reference_delta=-0.04,
+                vs_reference_ci_low=-0.07,
+                vs_reference_ci_high=-0.01,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        unclassified = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ].split("### Unclassified licences")[1]
+
+        assert "measured no benchmark where it beats" in unclassified
+        assert "carries no interval" not in unclassified
+
     def test_an_unknown_licence_is_not_treated_as_OSI(self) -> None:
         """The allow list must fail closed: absence is not approval.
 
