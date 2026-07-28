@@ -65,11 +65,14 @@ medians of those derived cuts were a documented prior, not a finding.
   improves, with all 95% intervals entirely above zero. `0.5` was not a mildly
   mistuned cut on a cosine scale — normalized embeddings put nearly every
   candidate pair above it, so it accepted almost everything the blocker proposed
-  and precision collapsed. **Affects `Retrieve` (and `RetrieveRerank`'s
-  retrieval stage) when you pass no `threshold=`**; an explicit value is
-  untouched. Two registered methods (`embedding`, `embedding_cosine`) also now
-  *declare* `0.90`, though `MethodSpec.default_threshold` still has no runtime
-  reader.
+  and precision collapsed. **The only front door this changes is `Retrieve`**,
+  constructed without an explicit `threshold=`; an explicit value is untouched.
+  Note it does *not* change `RetrieveRerank`: that chain is
+  `RetrieveOp -> Rerank -> ThresholdSelect`, whose single cut is tagged
+  `heuristic` (the reranker's `out_space`) and stays `0.5` — there is no cosine
+  threshold in it to move. Two registered methods (`embedding`,
+  `embedding_cosine`) also now *declare* `0.90`, though
+  `MethodSpec.default_threshold` still has no runtime reader.
 - **It is a floor, not a tuning, and it was chosen for safety across encoders.**
   A cosine cut belongs to the *encoder*, not the family tag, and every benchmark
   loader pins `all-MiniLM-L6-v2` while `DEFAULT_EMBEDDING_MODEL` is

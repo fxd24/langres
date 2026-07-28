@@ -72,9 +72,25 @@ Each cell is one `(benchmark, method, seed)`.
    independent — every pair touching one entity rises and falls together — so
    resampling pair rows yields intervals that are far too narrow. The resampling
    unit is the **gold cluster**; each judged pair is assigned to `min` of its two
-   endpoints' units, so every pair is counted exactly once and an entity's pairs
-   move as a block. The same resample grades both the candidate constant and
-   `0.5`, and the interval is on their difference.
+   endpoints' units, so every pair is counted exactly once. The same resample
+   grades both the candidate constant and `0.5`, and the interval is on their
+   difference.
+
+   **What that `min` does and does not buy** — an earlier draft of this section
+   claimed more than it should, and review caught it. A *gold* pair has both
+   endpoints in the same cluster by definition, so `min` is a no-op for it: the
+   true-positive numerator and the recall denominator are attributed exactly, and
+   an entity's gold pairs do move as a block. A *non-gold candidate* pair spans
+   two clusters, and attributing it to one endpoint means resampling the other
+   endpoint's cluster does not move it — so the model is exact on the recall side
+   and approximate on the precision side, biasing intervals slightly **too
+   narrow**. It is disclosed rather than fixed because the alternative (requiring
+   both clusters to be drawn) makes inclusion quadratic and measures a different
+   quantity, and because **neither verdict is marginal**: `sim_cos` ships on
+   point estimates positive in every eligible cell, which no interval width can
+   reverse, and `heuristic`'s veto — the one direction that could be sensitive —
+   rests on deltas several half-widths below zero on three independent seeds and
+   fails safe, since its effect is to keep the incumbent.
 6. **No averaging across benchmarks in any reported number.** Aggregation appears
    in exactly one place — the LOBO *selection* criterion, which has to reduce the
    other benchmarks to a single ordering — and it is a median over benchmarks of

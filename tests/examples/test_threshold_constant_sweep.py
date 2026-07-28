@@ -38,8 +38,10 @@ from examples.research.threshold_constant_sweep import (
     _unit_index,
     dedupe_scores,
     lobo_constants,
+    main,
     to_transfer_markdown,
     to_verdict_markdown,
+    write_report,
 )
 from langres.core.models import PairwiseJudgement
 
@@ -340,3 +342,82 @@ class TestCellResultRecordsItsCheckpoint:
         assert GRID[SHIPPED_INDEX] == 0.5
         curve = [float(i) for i in range(len(GRID))]
         assert _cell("alpha", curve=curve).shipped_f1_blocked == float(SHIPPED_INDEX)
+
+
+class TestResumeRefusesToPoolIncomparableCells:
+    """A resumed cell is REUSED; the header is rewritten from the new flags.
+
+    So without this check a resume under different flags mints an artifact whose
+    header describes neither half of it -- intervals bootstrapped at one
+    ``--resamples`` published under another, or MiniLM and e5 cosine cells (two
+    different score scales) pooled under one embedder label. Both were raised in
+    review. These tests drive ``main()``, which must refuse *before* measuring
+    anything.
+    """
+
+    @staticmethod
+    def _partial(tmp_path: Any, *, resamples: int, embedder: str | None) -> Any:
+        out = tmp_path / "sweep.json"
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=resamples,
+                cells=[_cell("abt_buy").model_copy(update={"embedder": embedder})],
+            ),
+            out.with_name(out.name + ".partial"),
+        )
+        return out
+
+    def _run(self, monkeypatch: pytest.MonkeyPatch, out: Any, argv: list[str]) -> str:
+        monkeypatch.setattr(
+            "sys.argv", ["threshold_constant_sweep.py", "--out", str(out), "--resume", *argv]
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+        # argparse.error exits 2 and writes to stderr; the code is the contract.
+        assert excinfo.value.code == 2
+        return str(excinfo.value)
+
+    def test_a_changed_resample_count_is_refused(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        out = self._partial(tmp_path, resamples=250, embedder=None)
+        self._run(monkeypatch, out, ["--resamples", "1000"])
+        assert "250" in capsys.readouterr().err
+
+    def test_a_changed_embedder_is_refused(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        out = self._partial(tmp_path, resamples=1000, embedder="intfloat/e5-base-v2")
+        self._run(monkeypatch, out, ["--resamples", "1000"])
+        assert "e5-base-v2" in capsys.readouterr().err
+
+    def test_matching_flags_are_not_refused(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The negative control: without it, a check that always fires looks identical."""
+        out = self._partial(tmp_path, resamples=1000, embedder=None)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "threshold_constant_sweep.py",
+                "--out",
+                str(out),
+                "--resume",
+                "--resamples",
+                "1000",
+                "--only",
+                "definitely_not_a_benchmark",
+            ],
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+        # It got PAST the resume guard and failed later, on the unknown
+        # benchmark -- proving the guard is selective rather than a blanket
+        # refusal to resume. Asserting on WHICH error fired is the point; a bare
+        # "it exited" would pass even if the resume guard had rejected it.
+        message = str(excinfo.value)
+        assert "definitely_not_a_benchmark" in message
+        assert "--resamples" not in message
+        assert "embedder" not in message

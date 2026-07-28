@@ -170,9 +170,16 @@ class MethodSpec(BaseModel):
 
         ``mode="before"`` because it must distinguish *omitted* from *explicitly
         0.5*, and after validation the field default has already erased that
-        difference. An unknown ``score_type`` is left alone rather than raising
-        here -- the field's own validation owns that error, and swallowing it
-        would report a threshold problem for what is really a bad family tag.
+        difference.
+
+        An unrecognized ``score_type`` is left alone and keeps the field default
+        of ``0.5``. Note what that does **not** mean: ``score_type`` is typed
+        plain ``str``, not :data:`~langres.core.score_type.ScoreType`, so nothing
+        downstream rejects a typo'd family either -- it is simply accepted with a
+        ``0.5`` cut. (An earlier version of this docstring claimed "the field's
+        own validation owns that error", which was wrong; there is no such
+        validation. Tightening the annotation is a separate change with its own
+        blast radius across every registered spec and third-party method.)
         """
         if isinstance(data, dict) and "default_threshold" not in data:
             family = data.get("score_type")

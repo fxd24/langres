@@ -39,9 +39,30 @@ Design decisions, each load-bearing:
   -- so resampling pair rows would give intervals that are far too narrow. The
   resampling unit is the **gold cluster** of the held-out corpus; each judged
   pair is assigned to ``min`` of its two endpoints' cluster units, so every pair
-  is counted exactly once and an entity's pairs move as a block. The same
-  resample grades both the candidate constant and ``0.5`` (paired), and the
-  interval is on their *difference*.
+  is counted exactly once. The same resample grades both the candidate constant
+  and ``0.5`` (paired), and the interval is on their *difference*.
+
+  **Exactly what that ``min`` does and does not buy** (raised in review, and the
+  earlier wording here overclaimed it). A **gold** pair has both endpoints in the
+  *same* cluster by definition, so ``min`` is a no-op for it: every gold pair --
+  the true-positive numerator and the recall denominator -- is attributed to its
+  own cluster, and an entity's gold pairs really do move as a block. A **non-gold
+  candidate** pair spans two clusters, and attributing it to one endpoint means
+  resampling the *other* endpoint's cluster does not move it. So the dependency
+  model is exact on the recall side and approximate on the precision side, where
+  it under-counts co-movement of false positives and therefore biases intervals
+  slightly **too narrow**.
+
+  This is disclosed rather than fixed because no verdict in the study turns on
+  it, and the alternative changes the estimand: requiring both clusters to be
+  drawn makes a pair's inclusion probability quadratic, which shrinks the
+  effective sample and measures a different quantity. Neither verdict is
+  marginal. ``sim_cos`` ships on point estimates that are positive on every
+  eligible cell (``+0.05`` to ``+0.87``), and a narrower interval cannot turn a
+  positive point estimate negative. ``heuristic``'s veto is the direction that
+  *could* be sensitive -- but its ``abt_buy`` deltas sit several interval
+  half-widths below zero on all three seeds independently, and the veto's effect
+  is to keep the incumbent, so an error here fails safe.
 * **Never an average across benchmarks in a reported number.** Aggregation
   appears in exactly one place -- the LOBO *selection* criterion, which must
   reduce the other benchmarks to one ordering -- and it is a median over
@@ -1384,7 +1405,34 @@ def main() -> None:
     scratch = out.with_name(out.name + ".partial")
     cells: list[CellResult] = []
     if args.resume and scratch.exists():
-        cells = read_report(scratch).cells
+        partial = read_report(scratch)
+        # A resumed cell is REUSED, not recomputed, but the published report's
+        # header is rewritten from THIS invocation's flags. So a resume under
+        # different flags silently mints an artifact whose header describes
+        # neither half of it: cells bootstrapped at the old --resamples while the
+        # report claims the new count, or MiniLM and e5 cosine cells -- two
+        # different score scales -- pooled under one embedder label. That is the
+        # "a label decoupled from what it describes" failure this repo keeps
+        # hitting, so the header is checked against the cells before they count
+        # as done.
+        if partial.bootstrap_resamples != args.resamples:
+            parser.error(
+                f"{scratch} was measured with --resamples {partial.bootstrap_resamples}, "
+                f"but this run passes {args.resamples}. Resuming would publish those "
+                "cells' intervals under the new number. Re-run with "
+                f"--resamples {partial.bootstrap_resamples}, or start a fresh --out."
+            )
+        stale_embedder = sorted(
+            {c.embedder for c in partial.cells if c.embedder != args.embedder}
+        )
+        if stale_embedder:
+            parser.error(
+                f"{scratch} holds cells measured with embedder(s) {stale_embedder}, but "
+                f"this run passes {args.embedder!r}. A cosine cut is a cut on an "
+                "encoder's scale, so pooling them would compare different scales in one "
+                "table. Re-run with the original --embedder, or start a fresh --out."
+            )
+        cells = partial.cells
         print(f"[resume] {len(cells)} cell(s) already measured in {scratch}", flush=True)
     else:
         for stale in (scratch, scratch.with_name(scratch.name + ".writing")):
