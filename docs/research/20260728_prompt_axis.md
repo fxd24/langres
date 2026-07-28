@@ -60,11 +60,65 @@ Control: not instruction-trained, ships no prompts.
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 4880 |
 | fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0.2486 | 0.7514 | 0.459 | 5294 |
 | fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0.2486 | 0.2486 | 1.0000 | 0.524 | 4936 |
+| abt_buy | `none` | baseline | 0.9349 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 11204 |
+| abt_buy | `er_query_only` | trap | 0.9320 | -0.0029 | [-0.0128, +0.0064] (spans 0) | 0 | 0.25 | 0.7500 | 0.542 | 13352 |
+| abt_buy | `er_symmetric` | ours | 0.8688 | -0.0667 | [-0.0820, -0.0500] ** | 0.25 | 0.25 | 1.0000 | 0.558 | 9436 |
+| amazon_google | `none` | baseline | 0.8266 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 23024 |
+| amazon_google | `er_query_only` | trap | 0.8165 | -0.0122 | [-0.0210, -0.0038] ** | 0 | 0.3825 | 0.6175 | 0.345 | 25990 |
+| amazon_google | `er_symmetric` | ours | 0.8273 | 0.0001 | [-0.0045, +0.0046] (spans 0) | 0.3825 | 0.3825 | 1.0000 | 0.461 | 24310 |
+| wdc_computers | `none` | baseline | 0.5770 | 0.0000 | [+0.0000, +0.0000] (spans 0) | 0 | 0 | 1.0000 | 1.000 | 32369 |
+| wdc_computers | `er_query_only` | trap | 0.5698 | -0.0079 | [-0.0292, +0.0118] (spans 0) | 0 | 0.3584 | 0.6416 | 0.507 | 36491 |
+| wdc_computers | `er_symmetric` | ours | 0.5176 | -0.0632 | [-0.0843, -0.0441] ** | 0.3584 | 0.3584 | 1.0000 | 0.649 | 32814 |
 
 ## Every k
 
 | model | benchmark | arm | k | recall | recall/reachable | candidates |
 |---|---|---|---:|---:|---:|---:|
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_query_only` | 5 | 0.7366 | 0.7481 | 2824 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_query_only` | 10 | 0.8372 | 0.8502 | 6035 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_query_only` | 20 | 0.9320 | 0.9465 | 13352 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_query_only` | 50 | 0.9751 | 0.9903 | 36396 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_symmetric` | 5 | 0.6063 | 0.6158 | 1815 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_symmetric` | 10 | 0.7500 | 0.7617 | 4070 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_symmetric` | 20 | 0.8688 | 0.8823 | 9436 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `er_symmetric` | 50 | 0.9665 | 0.9815 | 27061 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `none` | 5 | 0.7126 | 0.7237 | 2243 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `none` | 10 | 0.8285 | 0.8414 | 4998 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `none` | 20 | 0.9349 | 0.9494 | 11204 |
+| `sentence-transformers/all-MiniLM-L6-v2` | abt_buy | `none` | 50 | 0.9789 | 0.9942 | 31476 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_query_only` | 5 | 0.7338 | 0.8740 | 6183 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_query_only` | 10 | 0.7863 | 0.9366 | 12669 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_query_only` | 20 | 0.8165 | 0.9726 | 25990 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_query_only` | 50 | 0.8338 | 0.9931 | 67583 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_symmetric` | 5 | 0.7547 | 0.8989 | 5678 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_symmetric` | 10 | 0.8094 | 0.9640 | 11706 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_symmetric` | 20 | 0.8273 | 0.9854 | 24310 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `er_symmetric` | 50 | 0.8374 | 0.9974 | 63964 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `none` | 5 | 0.7612 | 0.9066 | 5469 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `none` | 10 | 0.8101 | 0.9649 | 11145 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `none` | 20 | 0.8266 | 0.9846 | 23024 |
+| `sentence-transformers/all-MiniLM-L6-v2` | amazon_google | `none` | 50 | 0.8396 | 1.0000 | 60013 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_query_only` | 5 | 0.9911 | 0.9911 | 1235 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_query_only` | 10 | 1.0000 | 1.0000 | 2608 |
 | `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_query_only` | 20 | 1.0000 | 1.0000 | 5294 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_query_only` | 50 | 1.0000 | 1.0000 | 13327 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_symmetric` | 5 | 0.9911 | 0.9911 | 1142 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_symmetric` | 10 | 0.9911 | 0.9911 | 2340 |
 | `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_symmetric` | 20 | 1.0000 | 1.0000 | 4936 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `er_symmetric` | 50 | 1.0000 | 1.0000 | 12528 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `none` | 5 | 1.0000 | 1.0000 | 1196 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `none` | 10 | 1.0000 | 1.0000 | 2365 |
 | `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `none` | 20 | 1.0000 | 1.0000 | 4880 |
+| `sentence-transformers/all-MiniLM-L6-v2` | fodors_zagat | `none` | 50 | 1.0000 | 1.0000 | 12246 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_query_only` | 5 | 0.3303 | 0.3670 | 9350 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_query_only` | 10 | 0.4374 | 0.4860 | 18354 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_query_only` | 20 | 0.5698 | 0.6330 | 36491 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_query_only` | 50 | 0.7012 | 0.7790 | 91066 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_symmetric` | 5 | 0.2826 | 0.3140 | 8487 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_symmetric` | 10 | 0.4068 | 0.4520 | 16666 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_symmetric` | 20 | 0.5176 | 0.5750 | 32814 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `er_symmetric` | 50 | 0.6427 | 0.7140 | 81551 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `none` | 5 | 0.3375 | 0.3750 | 8480 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `none` | 10 | 0.4608 | 0.5120 | 16523 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `none` | 20 | 0.5770 | 0.6410 | 32369 |
+| `sentence-transformers/all-MiniLM-L6-v2` | wdc_computers | `none` | 50 | 0.7237 | 0.8040 | 80024 |
