@@ -8,10 +8,20 @@ is why this shim is covered by tests instead of carrying the ``# pragma: no
 cover`` its plain-re-export siblings use (see ``test_training_backcompat_shims``
 for the sibling pattern).
 
-The lazy-path tests deliberately resolve against a monkeypatched attribute on the
-real module: asserting against the genuine ``MlflowTracker`` would import
+The lazy-path tests resolve against a stand-in injected into the real module's
+``__dict__``: asserting against the genuine ``MlflowTracker`` would import
 ``mlflow`` (it sits at that adapter module's top level), which is exactly the
 heavyweight import the laziness exists to avoid.
+
+``monkeypatch.setitem(real.__dict__, ...)`` -- NOT ``monkeypatch.setattr(real,
+..., raising=False)``. That distinction is load-bearing and was found the hard
+way: ``setattr`` records the previous value with ``getattr``, which on a PEP 562
+module *invokes* ``__getattr__`` (importing the backend), and its teardown then
+writes that class back into the module ``__dict__``. The name would be cached
+there permanently, ``__getattr__`` would never run for it again, and every later
+test asserting the missing-extra ``ImportError`` path would fail. ``setitem``
+reads with ``dict.get``, which does not trigger ``__getattr__``, and deletes the
+key on teardown -- leaving the module exactly as it was found.
 """
 
 from __future__ import annotations
@@ -51,9 +61,11 @@ def test_lazy_adapter_resolves_through_the_new_module(
 ) -> None:
     """Accessing an adapter name delegates to ``langres.tracking.trackers``."""
     sentinel = object()
-    # Set it on the real module so the shim's `getattr` finds it directly --
-    # this exercises the shim's lazy branch without importing the backend.
-    monkeypatch.setattr(real, name, sentinel, raising=False)
+    # Inject into the real module's __dict__ so the shim's `getattr` finds it
+    # directly -- exercising the shim's lazy branch without importing the
+    # backend, and without perturbing the real module's __getattr__ for any
+    # later test (see this module's docstring: setitem, never setattr).
+    monkeypatch.setitem(real.__dict__, name, sentinel)
     assert getattr(shim, name) is sentinel
 
 
