@@ -27,11 +27,12 @@ intervals are paired bootstraps resampled **by gold cluster**.
    recall on `wdc_computers`. Anyone skimming for "use the official prompt" will
    take away the wrong instruction. You must use the checkpoint's *retrieval*
    template, and you must verify it on your data.
-3. **Writing a better English instruction does not work.** Our ER-specific
-   sentence — a strictly more accurate description of blocking than "retrieve
-   passages answering a query" — costs up to **−0.1038** on e5 and **−0.1589**
-   when dropped into Gemma's own template shape. The lever is the *trained*
-   prefix, not better prose.
+3. **Writing your own instruction is not the lever.** A raw ER sentence used as a
+   bare prefix is reliably harmful (up to **−0.1038**). Putting our ER task text
+   inside the checkpoint's own template is a **coin flip**: it helped Qwen3
+   (+0.0388) and cost Gemma **−0.1589** — and it never beat the model's own
+   default, even when that default describes *web search*. Take the checkpoint's
+   retrieval prompt; do not author a better one. (§4.2 has the three tiers.)
 4. **The effect is strongly model-specific**, which is why nothing here is
    averaged. The same instruction is +0.0474 on one model and −0.0701 on another
    for the same benchmark. A non-instruction-trained control gained nothing
@@ -220,6 +221,25 @@ in *either* placement — query-only (documented) or both-sides (not documented)
 which is the tell that what matters is the **string being one the checkpoint was
 trained on**, not where it sits.
 
+**`Qwen/Qwen3-Embedding-0.6B`** — the only model where *our own* task text also
+helped, and the reason the story below is three tiers rather than two:
+
+| arm | kind | abt_buy | amazon_google | wdc_computers |
+|---|---|---|---|---|
+| `official_query_instruct` | documented | **+0.0088** [+0.0039, +0.0147] | +0.0040 [−0.0002, +0.0087] | **+0.0646** [+0.0461, +0.0835] |
+| `er_in_official_template` | ours | **+0.0088** [+0.0039, +0.0147] | **+0.0044** [+0.0009, +0.0087] | **+0.0388** [+0.0230, +0.0555] |
+| `er_symmetric` | ours | +0.0010 [−0.0020, +0.0049] | +0.0005 [−0.0046, +0.0061] | **−0.0907** [−0.1164, −0.0671] |
+
+Qwen3's card claims instructions are worth *"an improvement of 1% to 5%"*. We
+measured `+0.4%` to `+6.5%` — consistent with the claim, and the only model card
+prediction in this sweep that survived contact with the data.
+
+But note what beat what. The card also says to *"create tailored instructions
+specific to your tasks"*. We did exactly that (`er_in_official_template`), and it
+**lost to the model's own generic default** on `wdc_computers` (+0.0388 vs
++0.0646) — despite that default being an instruction about retrieving **web
+search passages**, a task description that is simply wrong for entity resolution.
+
 ### 4.2 The counter-headline: writing a better English instruction does not work
 
 This answers the underlying question better than the positive result does. Our
@@ -237,10 +257,6 @@ models where it matters most, **actively harmful**:
 | `intfloat/e5-base-v2` | abt_buy | **−0.0436** | [−0.0568, −0.0314] |
 | `google/embeddinggemma-300m` | wdc_computers | +0.0004 | [−0.0139, +0.0139] |
 
-And dropping our ER task description into Gemma's *own template shape*
-(`task: entity resolution | query: `) — precisely what Qwen3's card instructs
-developers to do — costs **−0.1589** [−0.1847, −0.1358] on `wdc_computers`.
-
 **The lever is the checkpoint's trained prefix, not better English.** A prompt to
 these models is not an instruction that is understood; it is a token sequence
 whose embedding geometry was fixed during contrastive training. A prefix the
@@ -248,6 +264,22 @@ model never saw in training moves every vector by a large, roughly common
 displacement (our ER sentence shifts vectors by `0.20`–`0.38`, versus `0.02`–`0.10`
 for the models' own prefixes) and that displacement crowds out the
 record-specific signal blocking depends on.
+
+**But the honest version of this has three tiers, not two.** Qwen3 forced the
+distinction, and it is the more useful result:
+
+| what you do | outcome | evidence |
+|---|---|---|
+| Use the checkpoint's **documented retrieval prompt** | **Reliable win.** Significantly positive on ≥1 benchmark for all four instruction-trained models; never significantly negative. | Gemma +0.0394, bge +0.1224, Qwen3 +0.0646, e5 +0.0152 (all `wdc_computers`) |
+| Substitute **your own task text into its template shape** | **Coin flip, and model-specific.** Never beat the model's own default. | Qwen3 +0.0388 (helped, 3/3 benchmarks); Gemma **−0.1589** (hurt badly) |
+| Use a **raw English sentence outside any template** | **Reliably harmful.** | −0.1038 e5, −0.0907 Qwen3, −0.0775 bge, −0.0632 MiniLM (all `wdc_computers`) |
+
+So the answer to *"can we pick good ones rather than guessing?"* is: **yes, by
+taking the checkpoint's own retrieval prompt — not by writing a better one.**
+Authoring your own task description is at best a wash against the model's
+default and at worst catastrophic, and *which* it is cannot be predicted from
+the text: our ER description is equally accurate prose in both the Qwen3 case
+where it helped and the Gemma case where it cost 16 recall points.
 
 ### 4.3 The control behaved as a control should
 
@@ -272,3 +304,31 @@ plainly rather than repeating the folk rule:
 So "always drive both halves" is the wrong rule. The right rule is **drive both
 halves the way the checkpoint was trained**, which for two of these four models
 means deliberately leaving the document side bare.
+
+### 4.5 Does #242's warning false-fire on the documented query-only recipes?
+
+This matters because §4.4 says a one-sided recipe is *correct* for bge and Qwen3,
+while PR #242 added a `VectorBlocker` warning about half-driven recipes. A
+warning that fires on the correct configuration trains users to ignore warnings.
+
+**Settled by construction, not by reading the changelog.** Each configuration was
+built through the real public API (`SentenceTransformerEmbedder` → `FAISSIndex` →
+`VectorBlocker`) with a log handler attached to
+`langres.core.blockers.vector`:
+
+| configuration | result |
+|---|---|
+| bge documented — `query_prompt` set, no `prompt_name` | **silent** |
+| Qwen3 documented — `query_prompt` set, no `prompt_name` | **silent** |
+| Gemma documented — `prompt_name="document"` + `query_prompt` | **silent** |
+| the actual trap — `prompt_name="document"`, `query_prompt=None` | **WARNED** |
+
+**No false positive, and the warning still fires on the case it exists for.** The
+condition (`vector.py:557`) requires a bound `prompt_name` *and* `query_prompt is
+None`; the documented query-only shape is the mirror image, so it cannot trigger.
+
+This invariant is already regression-tested — `tests/core/blockers/
+test_asymmetric_prompt_recipe.py::TestCoherenceWarning::
+test_silent_when_only_the_query_side_is_driven` pins exactly this shape — so no
+new test was added. The probe above confirms the existing coverage holds with the
+real documented prompt strings rather than synthetic ones.
