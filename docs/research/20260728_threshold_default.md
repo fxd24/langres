@@ -103,10 +103,10 @@ it is on. Each is a code read, not a guess:
 | `fit(records, pairs=…)` with a **decider** matcher (`LLMMatcher(response_parser="binary_yes_no")`) | `ValueError` from `_refuse_deciders` | `resolver.py` |
 | `fit(records, pairs=…)` on an explicit `_ops` chain with no `ThresholdSelect` | `ValueError: found no decision threshold to fit` | `resolver.py::_fit_chain_threshold` |
 
-This is not hypothetical breakage measured against imagined users: the repo's own
-tests, examples and docs are full of exactly these call shapes — `.fit(records)`
-(6), `.fit(records, labels=…)` (4), `.fit(…, method=…)` (20+ across `Platt`,
-`Bootstrap` and the finetune methods).
+This is not breakage imagined against hypothetical users. `grep -rn "\.fit("
+tests examples docs src` finds dozens of call sites in exactly these shapes —
+`.fit(records)`, `.fit(records, labels=…)`, and `.fit(…, method=…)` across
+`Platt`, `Bootstrap` and the finetune methods — inside this repo alone.
 
 So the honest framing of the question is **two** questions, and they have
 different answers:
