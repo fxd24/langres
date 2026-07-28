@@ -1266,6 +1266,83 @@ class TestRecommendationSplitsOnLicence:
         assert "**Best OSI-licensed candidate: `BAAI/bge-small-en-v1.5`**" in section
         assert "Best of 1 of the 2 OSI models" in section
 
+    def test_the_winner_is_chosen_on_the_shared_benchmark_set(self) -> None:
+        """More coverage must not win by having had more chances.
+
+        A model with 2 wins from 5 attempts outranks one with 1 from 1 on raw
+        counts alone, which ranks the size of the experiment rather than the
+        model. The ranking therefore runs on the benchmarks every compared model
+        shares.
+        """
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            # Broad: two wins, but only ONE of them on the shared benchmark.
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.02,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="b",
+                vs_reference_delta=0.02,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            # Narrow: compared only on "a", and wins it by more.
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.30,
+                vs_reference_ci_low=0.25,
+                vs_reference_ci_high=0.35,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        # On the shared set {"a"} both have one win, and e5 wins it by more.
+        assert "**Best OSI-licensed candidate: `intfloat/e5-base-v2`**" in section
+        assert "1 of the 1 benchmark(s) all 2 compared models share" in section
+
+    def test_no_shared_benchmark_means_no_winner_is_named(self) -> None:
+        """Disjoint coverage is not a ranking problem to solve, it is no ranking."""
+        rows = [
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="a"),
+            _cell(LADDER.REFERENCE_MODEL, "none", benchmark="b"),
+            _cell(
+                "BAAI/bge-small-en-v1.5",
+                "none",
+                benchmark="a",
+                vs_reference_delta=0.02,
+                vs_reference_ci_low=0.01,
+                vs_reference_ci_high=0.03,
+            ),
+            _cell(
+                "intfloat/e5-base-v2",
+                "none",
+                benchmark="b",
+                vs_reference_delta=0.30,
+                vs_reference_ci_low=0.25,
+                vs_reference_ci_high=0.35,
+            ),
+        ]
+        report = LADDER.render_report(rows)
+        section = report[
+            report.index("## Recommendation") : report.index("## The recall/cost frontier")
+        ]
+
+        assert "share no common benchmark, so no winner is named" in section
+        assert "Best OSI-licensed candidate" not in section
+
     def test_the_coverage_denominator_counts_the_whole_ladder(self) -> None:
         """ "3 of 14", never "3 of 3" -- a partial field must read as partial."""
         section = self._section()

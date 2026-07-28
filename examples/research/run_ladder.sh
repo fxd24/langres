@@ -236,9 +236,15 @@ for model in "${MODELS[@]}"; do
     log "$model: cache-integrity refusal (exit 3). NOT recording a failure row --"
     log "  the recorded rows are fine; the embedding cache is not. See $LOG_DIR/$safe.log."
     log "  Delete that model's cache namespace and re-run, or re-run this driver as"
-    log "  LADDER_TRUST_EXISTING_CACHE=1 $0 -- if you know the cache matches the"
-    log "  loaded checkpoint. (The driver takes no such flag: its only positional"
-    log "  argument is a wait PID, so --trust-existing-cache would be read as one.)"
+    # LADDER_MODELS is not optional in this suggestion: trust requires exactly one
+    # model, and this message normally fires mid-sweep where MODELS is all 14. The
+    # earlier version omitted it, so the advertised recovery command hit the
+    # single-model guard and exited 2 -- an unusable escape hatch printed at the
+    # exact moment it is needed. (Cross-model review.)
+    log "    LADDER_MODELS='$model' LADDER_TRUST_EXISTING_CACHE=1 $0"
+    log "  -- if you know the cache matches the loaded checkpoint. (The driver takes"
+    log "  no such flag: its only positional argument is a wait PID, so"
+    log "  --trust-existing-cache would be read as one.)"
     exit 3
   fi
 

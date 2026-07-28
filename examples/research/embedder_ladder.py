@@ -1368,16 +1368,19 @@ def _render_recommendation(
         """
         return comparable_count(model) > 0
 
-    def comparable_count(model: str) -> int:
-        """How many benchmarks ``model`` actually has an interval on.
+    def comparable_benchmarks(model: str) -> set[str]:
+        """Which benchmarks ``model`` actually has an interval on.
 
         The denominator matters as much as the numerator. "1 of 5" read off a
         model with intervals on two benchmarks is not the same claim as "1 of 5"
         from a model compared on all five, and ranking the two against each other
-        compares different experiments. (Cross-model review.)
+        compares different experiments. Returned as a SET rather than a count
+        because "how many did each have" cannot answer "which did they share",
+        and it is the shared ones a winner has to be chosen on. (Cross-model
+        review.)
         """
-        return sum(
-            1
+        return {
+            benchmark
             for benchmark in benchmarks
             if any(
                 r.model == model
@@ -1389,7 +1392,11 @@ def _render_recommendation(
                 and r.vs_reference_ci_high is not None
                 for r in ok
             )
-        )
+        }
+
+    def comparable_count(model: str) -> int:
+        """How many benchmarks ``model`` has an interval on."""
+        return len(comparable_benchmarks(model))
 
     measured = sorted({row.model for row in ok})
     candidates = [name for name in models if name != REFERENCE_MODEL and name in measured]
@@ -1467,6 +1474,18 @@ def _render_recommendation(
             else:
                 out.append(f"| `{name}` | {spec.license} | 0 of {comparable} | — | — |\n")
         compared = [name for name in osi if has_comparison(name)]
+        # The set of benchmarks EVERY compared model has an interval on. Raw win
+        # counts are not comparable across different coverage -- 2 wins out of 5
+        # attempts outranks 1 out of 1 purely by having had more chances -- so the
+        # ranking runs on the shared subset, where every model faced the same
+        # benchmarks. A partial rerun is the normal way coverage diverges, so this
+        # is not a corner case. (Cross-model review.)
+        common = (
+            set.intersection(*(comparable_benchmarks(name) for name in compared))
+            if compared
+            else set()
+        )
+
         # Rank on wins first, then on the largest single win, then on the name so
         # the file is byte-stable across re-renders. A tie broken by name alone
         # would silently promote a model for being alphabetically early.
@@ -1474,10 +1493,15 @@ def _render_recommendation(
         # Only COMPARED models are ranked. An uncompared model entering with zero
         # wins is indistinguishable from one that lost every benchmark, so it
         # would silently pad the field a "best candidate" is declared best of.
+        def common_wins(model: str) -> list[LadderRow]:
+            return [row for row in wins(model) if row.benchmark in common]
+
         ranked = [
             (
-                len(wins(name)),
-                max((r.vs_reference_delta or 0.0) for r in wins(name)) if wins(name) else 0.0,
+                len(common_wins(name)),
+                max((r.vs_reference_delta or 0.0) for r in common_wins(name))
+                if common_wins(name)
+                else 0.0,
                 name,
             )
             for name in compared
@@ -1493,6 +1517,16 @@ def _render_recommendation(
                 "the challengers against the current reference before reading anything "
                 "into this section — and in particular do not read it as a reason to "
                 "keep the default, which is a claim this state cannot support.\n"
+            )
+        elif not common:
+            out.append(
+                f"\n**The {len(compared)} compared OSI-licensed models share no common "
+                "benchmark, so no winner is named.** Each was measured against "
+                f"`{REFERENCE_MODEL}` on a different subset, and a win count taken "
+                "across different subsets is not a ranking — a model with more "
+                "benchmarks simply has more chances to win one. The per-model rows "
+                "above still stand individually; re-run the challengers on a shared "
+                "set before comparing them to each other.\n"
             )
         elif best_count == 0:
             out.append(
@@ -1512,21 +1546,24 @@ def _render_recommendation(
                 + "\n"
             )
         else:
-            best_comparable = comparable_count(best_name)
             out.append(
                 f"\n**Best OSI-licensed candidate: `{best_name}`**, ahead of "
-                f"`{REFERENCE_MODEL}` on {best_count} of the {best_comparable} "
-                "benchmark(s) it was compared on, with the interval clear of zero. "
-                "Read it against the same model's row in the table above before "
-                "adopting it: a win on some benchmarks and a loss on others is the "
-                "normal shape here, and this column counts only the wins."
+                f"`{REFERENCE_MODEL}` on {best_count} of the {len(common)} benchmark(s) "
+                f"all {len(compared)} compared models share, with the interval clear of "
+                "zero. The count is taken on that shared set on purpose: raw win "
+                "counts across different coverage are not a ranking, since a model "
+                "measured on more benchmarks has more chances to win one. Read it "
+                "against the same model's row in the table above before adopting it — "
+                "that row reports the model's OWN coverage — because a win on some "
+                "benchmarks and a loss on others is the normal shape here, and both "
+                "columns count only the wins."
                 + (
                     ""
-                    if len(compared) == len(osi) and best_comparable == len(benchmarks)
+                    if len(compared) == len(osi) and common == set(benchmarks)
                     else (
                         f" **Best of {len(compared)} of the {len(osi)} OSI models**, on "
-                        f"{best_comparable} of the {len(benchmarks)} benchmarks — the "
-                        "rest carry no interval at this revision and were not in the "
+                        f"{len(common)} of the {len(benchmarks)} benchmarks — the rest "
+                        "carry no interval at this revision and were not in the "
                         "running, so this is the best of what was measured, not of the "
                         "field."
                     )

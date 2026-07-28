@@ -298,7 +298,7 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
 | `intfloat/e5-base-v2` | mit | 3 of 5 | +0.1528 | wdc_computers |
 | `all-mpnet-base-v2` | apache-2.0 | 0 of 5 | — | — |
 
-**Best OSI-licensed candidate: `intfloat/e5-base-v2`**, ahead of `all-MiniLM-L6-v2` on 3 of the 5 benchmark(s) it was compared on, with the interval clear of zero. Read it against the same model's row in the table above before adopting it: a win on some benchmarks and a loss on others is the normal shape here, and this column counts only the wins.
+**Best OSI-licensed candidate: `intfloat/e5-base-v2`**, ahead of `all-MiniLM-L6-v2` on 3 of the 5 benchmark(s) all 5 compared models share, with the interval clear of zero. The count is taken on that shared set on purpose: raw win counts across different coverage are not a ranking, since a model measured on more benchmarks has more chances to win one. Read it against the same model's row in the table above before adopting it — that row reports the model's OWN coverage — because a win on some benchmarks and a loss on others is the normal shape here, and both columns count only the wins.
 
 ### Use-restricted checkpoints — documented opt-in, never a silent default
 
