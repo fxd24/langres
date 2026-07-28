@@ -231,10 +231,7 @@ class TestPreRegisteredShipRule:
         assert "**DO NOT SHIP**" in to_verdict_markdown(self._report(cells))
 
     def test_a_stable_improving_family_ships(self) -> None:
-        cells = [
-            _cell(name, curve=_peak_at(0.80))
-            for name in ("alpha", "beta", "gamma")
-        ]
+        cells = [_cell(name, curve=_peak_at(0.80)) for name in ("alpha", "beta", "gamma")]
         markdown = to_verdict_markdown(self._report(cells))
         assert "**SHIP**" in markdown
 
