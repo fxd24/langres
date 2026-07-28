@@ -204,10 +204,13 @@ and it emphatically is.
 
 ### Everything below is corrected for multiplicity, and that cost us e5
 
-This sweep produces **80** separate 95% intervals. Read one at a time, each
-controls its own error rate. Read as a set — which is exactly how *"this recipe
-helps this checkpoint"* gets read — they do not, and at α=0.05 you expect a
-handful of spurious exclusions from noise alone.
+This sweep produces **80** separate 95% intervals, **61** of them testable. Read
+one at a time, each controls its own error rate. Read as a set — which is exactly
+how *"this recipe helps this checkpoint"* gets read — they do not: if every arm
+were truly null, α=0.05 over 61 comparisons would still be expected to throw
+about **three** intervals clear of zero on noise alone. (That is an argument for
+correcting, not a claim about *which* three: nothing here identifies a particular
+exclusion as the spurious one.)
 
 So each `(model, arm)` is treated as one **family** across benchmarks and
 corrected with **Holm's step-down** at family-wise α=0.05. Holm is uniformly at
