@@ -61,8 +61,12 @@ order.
 6538 gold match pairs. The 835 singletons are real non-duplicated people, so the
 closed-world partition is complete without any synthetic padding — and the
 multi-record clusters (up to size 6) are what make this a *dedup* benchmark
-rather than a linkage one wearing a different hat: BCubed and the clusterer's
-transitive-closure behaviour are only exercised when a cluster can exceed 2.
+rather than a linkage one wearing a different hat: only a gold entity that spans
+6 records can charge a matcher for assembling 3 of its 15 within-entity pairs and
+stopping. (Over-merging needs no such thing — a false edge between two size-2
+entities already produces an oversized predicted component that BCubed
+penalises — so multi-record gold buys the **under**-merge direction, not the
+over-merge one.)
 
 ## Data is fully synthetic (no PII)
 

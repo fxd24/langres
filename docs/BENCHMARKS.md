@@ -122,8 +122,7 @@ $0 and offline — clusterer threshold tuned on **train** only:
 | `rapidfuzz` | 0.6 | 0.9977 | 0.9935 | **0.9956** | 0.9923 | 0.9777 |
 | `embedding_cosine` | 0.8 | 0.5551 | 0.9415 | 0.6984 | **0.0247** | 0.7240 |
 
-Two things to read here, both of which a size-2-clusters linkage benchmark
-cannot show you:
+Two things to read here:
 
 1. **The sanity floor is 0.5721** — a resolver that merges *nothing* scores that.
    All-singletons BCubed precision is 1.0 and its recall is exactly
@@ -135,8 +134,15 @@ cannot show you:
 2. **`embedding_cosine` collapses under transitive closure** — BCubed F1 0.6984
    but cluster-pairwise F1 **0.0247**. Its pair-level F1 (0.7240) looks merely
    mediocre; what the cluster view exposes is that its false positives *chain*
-   multi-record clusters into giant components. On a linkage benchmark where
-   every gold cluster is a pair, that failure mode is structurally invisible.
+   records into giant components, which the pair track cannot price.
+
+   To be precise about what gold-cluster size does and does not buy: over-merging
+   is **not** hidden by pair-sized gold — a false edge joining two size-2 entities
+   still yields an oversized predicted component that BCubed and cluster-pairwise
+   both penalise. What multi-record *gold* adds is the opposite direction:
+   **under**-merging. Only a benchmark that contains a 6-record entity can charge
+   a matcher for finding 3 of its 15 within-entity pairs and stopping. On
+   pair-only gold there is no such entity to under-assemble.
 
 `rapidfuzz` scoring 0.9956 is a property of the dataset, not a langres result to
 brag about: FEBRL3 is synthetic, and its ten fields include `date_of_birth` and

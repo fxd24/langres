@@ -35,9 +35,10 @@ cross-source linkage, while `dedupe()`, the primary shipped verb, was unmeasured
   clusters, `seed=0`, $0 offline): `rapidfuzz` BCubed F1 **0.9956**
   (P 0.9977 / R 0.9935), cluster-pairwise F1 0.9923, against an all-singletons
   sanity floor of 0.5721. `embedding_cosine` reaches BCubed F1 0.6984 but
-  cluster-pairwise F1 **0.0247** — its false positives chain multi-record
-  clusters into giant components, a failure mode that is structurally invisible
-  on a linkage benchmark whose every gold cluster is a pair. Blocking
+  cluster-pairwise F1 **0.0247** — its false positives chain records into giant
+  components, which its pair-level F1 (0.7240) prices as merely mediocre. (Note
+  over-merging is *not* hidden by pair-sized gold; what multi-record gold adds is
+  the ability to charge for **under**-merging a 6-record entity.) Blocking
   Pair-Completeness 0.9552 at the pinned `k=50` caps recall before any matcher
   runs. See `docs/BENCHMARKS.md` §2a.
 

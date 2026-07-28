@@ -43,7 +43,14 @@ metric (see §4) — which is exactly why the verdict has to name its metric.
 | `fodors_zagat` | linkage | **yes** | 864 | **112** | 3.00e-04 | 2 | 0.998 | 0.285 | 0.708 | 1.0000 | no literature split | 1.00 (ZeroER) | † **YES** — see §4 | **tiny-gold** |
 | `febrl_person` | linkage | **yes** | 1,000 | 500 | 1.00e-03 | 2 | 1.000 | 0.682 | 0.851 | 1.0000 | no literature split | not recorded | **?** | **one-to-one by construction** |
 | `tiny_fixture` | linkage | **yes** | 12 | 3 | 4.55e-02 | 2 | 0.989 | 0.269 | 0.447 | 1.0000 | 0.0000 | n/a — not a benchmark | n/a | tiny-gold, lexical-gap |
+| `febrl_dedup` | **dedup** | **yes** | 5,000 | 6,538 | 5.23e-04 | 6 | 1.000 | n/a | n/a | n/a — single source | no literature split | not recorded | **?** | — |
 | `opensanctions` | linkage | not vendored | — | — | — | — | — | — | — | — | not loadable | † 98.95 (GPT-4o, 0–100) | **?** | external-only (CC-BY-NC) |
+
+**`febrl_dedup` was added after this document's first publication** (2026-07-28);
+its row is rendered from the same regenerated `portfolio_profile.json`. Its four
+`n/a` cells are structural, not missing measurements: vocabulary overlap and the
+cross-source recall ceiling are both defined *between two sources*, and this
+benchmark has one. See §7.
 
 **† = written by hand, not produced by the harness.** Four cells, and they are
 marked because everything else in this table is a rendering of
@@ -77,7 +84,7 @@ marked because everything else in this table is a rendering of
   perfect precision and recall capped at `r`, F1 reaches `2r/(1+r)`, so
   `amazon_google`'s 0.8396 still permits an F1 of 0.9128. Read this column as a
   recall/PC ceiling; treating it as an F1 bound would mark achievable scores
-  impossible. Four of the nine loadable
+  impossible. Four of the ten loadable
   benchmarks are capped: `amazon_google` at 0.8396, `wdc_computers` 0.9001,
   `walmart_amazon` 0.8837, and `dblp_scholar` at **0.3977**. A "0.84 recall" on
   `amazon_google` is therefore a **perfect** score, not an 84% one — see §8.
@@ -87,7 +94,7 @@ marked because everything else in this table is a rendering of
   `[tool.hatch.build] exclude` drops **none** of them. `abt_buy`/`amazon_google`
   ship their `peeters_sampled_test.csv` pair set but *not* their corpus tables,
   so they are partially shipped and still raise `BenchmarkDataNotFoundError`.
-  This is reproduction status, not quality — but it does mean six of nine
+  This is reproduction status, not quality — but it does mean six of ten
   loadable benchmarks exist only in a git checkout.
 - **gold pairs** — within-cluster pairs of the **closure** gold partition, which
   is larger than the literature's positive count wherever the labels chain:
@@ -100,7 +107,7 @@ marked because everything else in this table is a rendering of
   dataset ships no literature split.
 - **published F1** — only numbers already recorded in this repository, each with
   a file citation in `PUBLISHED_SOTA` (`examples/research/portfolio_profile.py`).
-  Four loadable sets have **no** published number written down anywhere here, so
+  Five loadable sets have **no** published number written down anywhere here, so
   they get no verdict — reported as `?`, never silently read as "unsaturated".
 - **vocab Jaccard / min token coverage** — the new `VocabularyOverlapSection`
   (§6). Jaccard is over token *types*; coverage is the share of a side's token
@@ -244,9 +251,10 @@ So `amazon_google`'s published 0.756 Ditto F1 sits under a 0.9128 ceiling, not a
 0.8396 one — there is real headroom, just less than 1.0 of it.
 
 This also flags a live claim in shipped source: `src/langres/optimize.py:135-139`
-asserts that all gold matches are inter-source. On four of the nine loadable
+asserts that all gold matches are inter-source. On four of the ten loadable
 benchmarks that is false, and on `dblp_scholar` it is false for the *majority* of
-gold pairs. Out of scope for this PR (a source fix with its own blast radius),
+gold pairs. `febrl_dedup` makes it a fifth, and the starkest: it is single-source,
+so **every** one of its 6,538 gold pairs is intra-source and none is inter-source. Out of scope for this PR (a source fix with its own blast radius),
 recorded here as the measurement that settles it.
 
 Independently corroborated: stream A derived the same four ceilings
