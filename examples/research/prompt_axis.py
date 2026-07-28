@@ -581,7 +581,12 @@ def _paired_interval(
 
 
 def _build_embedder(
-    spec: ModelSpec, document_prompt: str | None, cache_dir: Path, *, texts: Sequence[str] = ()
+    spec: ModelSpec,
+    document_prompt: str | None,
+    cache_dir: Path,
+    *,
+    texts: Sequence[str] = (),
+    query_prompts: Sequence[str | None] = (),
 ) -> Any:
     """An embedder whose *document* side carries ``document_prompt``.
 
@@ -623,7 +628,7 @@ def _build_embedder(
         f"{spec.name.replace('/', '__')}__{revision[:12]}__{spec.dtype or 'default'}__doc{digest}"
     )
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
-    _assert_cache_matches_checkpoint(base, cached, texts)
+    _assert_cache_matches_checkpoint(base, cached, texts, query_prompts)
     return cached
 
 
@@ -665,31 +670,51 @@ def _resolve_checkpoint_revision(spec: ModelSpec) -> tuple[str, str]:
     return spec.revision, path
 
 
-def _assert_cache_matches_checkpoint(base: Any, cached: Any, texts: Sequence[str]) -> None:
-    """Refuse a cache partition whose vectors the current checkpoint disagrees with.
+def _assert_cache_matches_checkpoint(
+    base: Any,
+    cached: Any,
+    texts: Sequence[str],
+    query_prompts: Sequence[str | None] = (),
+) -> None:
+    """Refuse any cache partition whose vectors the live checkpoint disagrees with.
 
-    The namespace keys on the *mutable* model name, dtype and document prompt --
-    not on an immutable revision -- so a cache surviving a checkpoint or
-    sentence-transformers upgrade would keep hitting. A resumed sweep would then
-    mix stale vectors with fresh misses, or silently measure the old checkpoint
-    entirely, **while every prompt-reach guard still passed**: the guards compare
-    arms against each other, so uniformly stale vectors look perfectly consistent.
+    The namespace now pins the checkpoint revision, so a partition cannot outlive
+    the *weights* that wrote it. It can still outlive the **runtime**: a
+    sentence-transformers change to how ``prompt=`` is applied would leave the
+    weights identical and the prompted vectors wrong. So this re-encodes one real
+    corpus text through the raw checkpoint and compares it to what the cache
+    serves.
 
-    So re-encode one real corpus text through the raw checkpoint and compare it to
-    what the cache serves. ``embedder_ladder.py`` guards the identical hazard with
-    the same canary technique. (Found by automated review on PR #252.)
+    Two properties this needs, both learned the hard way:
+
+    1. **Every partition, not just the document one.** ``DiskCachedEmbedder`` keys
+       each explicit query prompt separately, so checking only the default/document
+       partition left every bge / Qwen3 / ER query-prompt partition unvalidated --
+       and stale prompted vectors still *differ* from the baseline, so the
+       prompt-reach guards pass on them too.
+    2. **Never a vacuous pass.** On a cache miss the wrapper delegates to ``base``
+       and stores the result, so comparing a miss to a fresh encode is comparing a
+       value to itself -- a check that cannot fail. Only *populated* entries are
+       probed, looked up directly rather than through ``encode``.
+
+    (Found by automated review on PR #252, across two rounds.)
     """
     if not texts:
         return
-    fresh = base.encode([texts[0]])
-    served = cached.encode([texts[0]])
-    if not np.allclose(fresh, served, atol=_CANARY_TOLERANCE):
+    text = texts[0]
+    for prompt in dict.fromkeys((None, *query_prompts)):
+        if cached._get_from_db(cached._hash_text(text, prompt)) is None:
+            continue  # nothing stored for this partition: nothing to validate
+        fresh = base.encode([text]) if prompt is None else base.encode([text], prompt=prompt)
+        served = cached.encode([text]) if prompt is None else cached.encode([text], prompt=prompt)
+        if np.allclose(fresh, served, atol=_CANARY_TOLERANCE):
+            continue
         raise RuntimeError(
-            f"embedding cache {cached.db_path} disagrees with the live checkpoint "
+            f"embedding cache {cached.db_path} disagrees with the live checkpoint on the "
+            f"{'document/default' if prompt is None else repr(prompt)} partition "
             f"(max |delta| = {float(np.max(np.abs(fresh - served))):.3g}). It was written "
-            "by a different checkpoint or embedding runtime, and its namespace pins "
-            "neither. Delete the cache directory and re-run rather than publishing a "
-            "measurement of a model you are no longer loading."
+            "by a different embedding runtime. Delete the cache directory and re-run rather "
+            "than publishing a measurement of a model you are no longer loading."
         )
 
 
@@ -754,7 +779,16 @@ def evaluate_model_on_benchmark(
     # allocations, enough to OOM an 8 GB GPU even though the arms run
     # sequentially. (Found by automated review on PR #252.)
     for document_prompt in _document_prompt_order(recipes):
-        embedder = _build_embedder(spec, document_prompt, cache_dir, texts=texts)
+        group = [r for r in recipes if r.document_prompt == document_prompt]
+        embedder = _build_embedder(
+            spec,
+            document_prompt,
+            cache_dir,
+            texts=texts,
+            # Every query prompt this group will actually use, so the canary
+            # validates the partitions the run is about to read.
+            query_prompts=list(dict.fromkeys(r.query_prompt for r in group)),
+        )
         index = FAISSIndex(embedder=embedder, metric="cosine")
         index.create_index(texts)
         doc_vectors = embedder.encode(texts)
@@ -762,7 +796,7 @@ def evaluate_model_on_benchmark(
             facts["parameter_count"] = getattr(embedder.embedder, "parameter_count", None)
             facts["embedding_dim"] = int(doc_vectors.shape[1])
 
-        for recipe in [r for r in recipes if r.document_prompt == document_prompt]:
+        for recipe in group:
             started = time.perf_counter()
             query_vectors = embedder.encode(texts, prompt=recipe.query_prompt)
             if recipe.arm == "none":
@@ -883,11 +917,6 @@ def merge_rows(existing: Iterable[Row], fresh: Iterable[Row]) -> list[Row]:
     merged = {(row.model, row.benchmark, row.arm, row.k): row for row in existing}
     merged.update({(row.model, row.benchmark, row.arm, row.k): row for row in fresh})
     return sorted(merged.values(), key=lambda r: (r.model, r.benchmark, r.arm, r.k))
-
-
-def _drop_cell(rows: Iterable[Row], spec: ModelSpec, benchmark: str) -> list[Row]:
-    """Every row except this (model, benchmark) cell's, which is about to be recomputed."""
-    return [r for r in rows if not (r.model == spec.name and r.benchmark == benchmark)]
 
 
 def write_rows(rows: Sequence[Row], path: Path) -> None:
@@ -1103,16 +1132,14 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.render_only:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(render_report(read_rows(args.rows)))
         return 0
 
-    # Reject an unknown --arms BEFORE anything touches --rows. `_drop_cell` clears
-    # a cell up front so a crashed rerun looks partial, which means a typo like
-    # `--arms offical_asymmetric` would otherwise select nothing, clear every
-    # requested cell, evaluate nothing, and exit 0 -- silently deleting committed
-    # measurements. Validation has to precede the first write, not the first
-    # evaluation. (Found by automated review on PR #252, on the fix that
-    # introduced the hazard.)
+    # Reject an unknown --arms up front. Nothing downstream deletes rows any more,
+    # so a typo is no longer destructive -- but it would still silently produce a
+    # narrower sweep than asked for, and a study that quietly measures less than
+    # its command says is its own failure. Fail loudly instead.
     if args.arms is not None:
         known = {recipe.arm for spec in MODELS for recipe in spec.recipes}
         unknown = sorted(set(args.arms) - known)
@@ -1133,14 +1160,24 @@ def main() -> int:
             ):
                 logger.info("skipping %s | %s -- already complete", spec.name, benchmark)
                 continue
-            # Drop this cell's previous rows BEFORE the first arm lands. Merging
-            # fresh arms into stale ones leaves a mixed cell if the run dies
-            # part-way, and `--resume` then sees every (arm, k) key present and
-            # skips it -- publishing a table whose arms came from two different
-            # runs while reporting the cell complete. Clearing first makes a
-            # partial cell *look* partial, which is what `--resume` needs to see.
-            # (Found by automated review on PR #252.)
-            write_rows(_drop_cell(read_rows(args.rows), spec, benchmark), args.rows)
+            # NOTE: nothing is deleted up front. An earlier revision cleared the
+            # cell here so a crashed rerun would look partial to `--resume`, and
+            # that one destructive write produced a bug in every subsequent review
+            # round: an unknown `--arms` value wiped cells and exited 0; a *valid*
+            # narrowing selector like `--arms none --k 20` silently deleted every
+            # unselected measurement; and a failure to load the pinned snapshot or
+            # the benchmark destroyed the cell before anything could replace it.
+            #
+            # The provenance fields subsume what the deletion was for. A row is
+            # only reusable if its `revision` and `recipe_fingerprint` match, so a
+            # cell rebuilt under changed weights or edited prompts is rejected by
+            # `_cell_complete` regardless of what is left lying beside it, and rows
+            # that survive are by construction measurements of the *same* treatment
+            # on the same weights. `merge_rows` then replaces each
+            # (model, benchmark, arm, k) as its replacement actually arrives.
+            # Deleting data to keep a bookkeeping invariant was the wrong trade;
+            # recording what the data *is* costs nothing and cannot lose a row.
+            # (Found by automated review on PR #252, across three rounds.)
             for arm_rows in evaluate_model_on_benchmark(
                 spec,
                 benchmark,
@@ -1152,6 +1189,7 @@ def main() -> int:
                 # spend minutes per arm and a crash must not cost the whole cell.
                 rows = merge_rows(read_rows(args.rows), arm_rows)
                 write_rows(rows, args.rows)
+            args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(render_report(read_rows(args.rows)))
             logger.info("wrote rows -> %s", args.rows)
     return 0

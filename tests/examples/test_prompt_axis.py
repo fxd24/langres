@@ -133,13 +133,63 @@ def test_a_cache_disagreeing_with_the_checkpoint_is_refused() -> None:
             return np.array([[1.0, 0.0]], dtype=np.float32)
 
     class _StaleCache:
+        """A cache with entries stored for both the document and a query partition."""
+
         db_path = "stale.db"
+
+        def __init__(self, populated: set[str | None]) -> None:
+            self.populated = populated
+
+        def _hash_text(self, text, prompt=None):  # noqa: ANN001, ANN202
+            return f"{text}|{prompt}"
+
+        def _get_from_db(self, key):  # noqa: ANN001, ANN202
+            prompt = key.split("|", 1)[1]
+            stored = None if prompt == "None" else prompt
+            return object() if stored in self.populated else None
 
         def encode(self, texts, prompt=None):  # noqa: ANN001, ANN202, ARG002
             return np.array([[0.0, 1.0]], dtype=np.float32)
 
-    with pytest.raises(RuntimeError, match="disagrees with the live checkpoint"):
-        harness._assert_cache_matches_checkpoint(_Base(), _StaleCache(), ["a text"])
+    with pytest.raises(RuntimeError, match="document/default"):
+        harness._assert_cache_matches_checkpoint(_Base(), _StaleCache({None}), ["a text"])
+
+    # The document partition can be fine while a QUERY partition is stale. Checking
+    # only the default partition missed exactly this, and the prompt-reach guards
+    # cannot see it either -- stale prompted vectors still differ from the baseline.
+    with pytest.raises(RuntimeError, match="'q: '"):
+        harness._assert_cache_matches_checkpoint(_Base(), _StaleCache({"q: "}), ["a text"], ["q: "])
+
+
+def test_an_unpopulated_cache_partition_is_not_a_vacuous_pass() -> None:
+    """A partition with nothing stored must be skipped, never "verified".
+
+    On a miss the wrapper delegates to the base embedder and stores the result,
+    so comparing a miss against a fresh encode compares a value to itself -- a
+    check that cannot fail. Probing only populated entries is what keeps the
+    canary honest.
+    """
+    calls: list[str | None] = []
+
+    class _Base:
+        def encode(self, texts, prompt=None):  # noqa: ANN001, ANN202, ARG002
+            calls.append(prompt)
+            return np.array([[1.0, 0.0]], dtype=np.float32)
+
+    class _EmptyCache:
+        db_path = "empty.db"
+
+        def _hash_text(self, text, prompt=None):  # noqa: ANN001, ANN202
+            return f"{text}|{prompt}"
+
+        def _get_from_db(self, key):  # noqa: ANN001, ANN202, ARG002
+            return None  # nothing cached anywhere
+
+        def encode(self, texts, prompt=None):  # noqa: ANN001, ANN202, ARG002
+            raise AssertionError("must not encode through the cache on an empty partition")
+
+    harness._assert_cache_matches_checkpoint(_Base(), _EmptyCache(), ["a text"], ["q: "])
+    assert calls == [], "an empty cache must not be probed at all"
 
 
 def test_tolerance_still_rejects_the_smallest_real_divergence_measured() -> None:
@@ -207,22 +257,26 @@ def test_cell_complete_requires_every_arm_and_k() -> None:
     legacy = [dataclasses.replace(r, revision=None, recipe_fingerprint=None) for r in rows]
     assert not harness._cell_complete(legacy, spec, "abt_buy", recipes, [20])
 
-    # Dropping the cell first is what stops a crashed rerun from LOOKING
-    # complete: merging one fresh arm into the stale ones would leave every
-    # (arm, k) key present, so --resume would skip a cell built from two runs.
-    survivors = harness._drop_cell(rows, spec, "abt_buy")
-    assert survivors == []
-    assert not harness._cell_complete(survivors, spec, "abt_buy", recipes, [20])
+    # Mixed provenance in one cell: a crashed rerun under NEW weights leaves
+    # fresh rows beside stale ones. Provenance is what makes that visible --
+    # the cell is incomplete because the stale rows no longer match, so resume
+    # recomputes instead of publishing a table built from two runs. This is the
+    # invariant that replaced deleting the cell up front.
+    mixed = [
+        rows[0],
+        *[dataclasses.replace(r, revision="0" * 40) for r in rows[1:]],
+    ]
+    assert not harness._cell_complete(mixed, spec, "abt_buy", recipes, [20])
 
 
-def test_a_typo_in_arms_is_refused_before_anything_is_written(
+def test_a_typo_in_arms_is_refused_and_nothing_is_deleted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--arms offical_asymmetric` must not silently erase committed cells.
+    """An unknown `--arms` value must fail loudly and leave every row intact.
 
-    `_drop_cell` clears a cell up front so a crashed rerun looks partial. That
-    made an unknown arm name destructive: it selected nothing, cleared every
-    requested cell, evaluated nothing and exited 0.
+    This once cleared each requested cell, evaluated nothing and exited 0,
+    because the cell was emptied before evaluation. Nothing deletes rows now,
+    and the selector is rejected outright.
     """
     rows_path = tmp_path / "rows.jsonl"
     # Real committed-looking content, so the assertion is about DATA SURVIVING,
@@ -239,8 +293,14 @@ def test_a_typo_in_arms_is_refused_before_anything_is_written(
     assert rows_path.read_text() == original, "a typo in --arms destroyed committed rows"
 
 
-def test_drop_cell_only_removes_the_named_cell() -> None:
-    """Clearing one cell must not disturb another model's or benchmark's rows."""
+def test_merging_replaces_only_the_rows_it_actually_recomputed() -> None:
+    """A narrow rerun must never cost an unselected measurement.
+
+    Rows are now replaced key-by-key as replacements arrive, instead of the cell
+    being cleared first. A selective run such as `--arms none --k 20` therefore
+    updates that one key and leaves every other arm and k untouched -- the
+    earlier clear-then-refill deleted all of them.
+    """
     spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
     other = harness.MODELS_BY_NAME["BAAI/bge-base-en-v1.5"]
 
@@ -271,11 +331,16 @@ def test_drop_cell_only_removes_the_named_cell() -> None:
         row(spec.name, "amazon_google"),
         row(other.name, "abt_buy"),
     ]
-    kept = harness._drop_cell(rows, spec, "abt_buy")
-    assert {(r.model, r.benchmark) for r in kept} == {
-        (spec.name, "amazon_google"),
-        (other.name, "abt_buy"),
-    }
+    fresh = dataclasses.replace(rows[0], candidate_recall=0.5, revision=spec.revision)
+    merged = harness.merge_rows(rows, [fresh])
+
+    # Same number of rows: a rerun replaces, it never removes.
+    assert len(merged) == len(rows)
+    by_key = {(r.model, r.benchmark): r for r in merged}
+    assert by_key[(spec.name, "abt_buy")].candidate_recall == 0.5
+    # The measurements that were NOT recomputed survive untouched.
+    assert by_key[(spec.name, "amazon_google")].candidate_recall == 1.0
+    assert by_key[(other.name, "abt_buy")].candidate_recall == 1.0
 
 
 def test_every_model_pins_the_revision_it_was_measured_on() -> None:
