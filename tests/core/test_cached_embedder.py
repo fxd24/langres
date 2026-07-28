@@ -790,3 +790,55 @@ class TestCacheKeyCoversEmbedderSettings:
         """
         cached = self._cached(tmp_path, prompts="not a mapping")
         assert cached._embedder_discriminator() == ""
+
+
+class TestCacheKeyCoversTheModelItself:
+    """The wrapped MODEL is part of the key — the setting that changes vectors most.
+
+    ``namespace`` defaults to ``"default"``, so the ordinary
+    ``DiskCachedEmbedder(embedder=SentenceTransformerEmbedder(), cache_dir=...)``
+    writes into one shared DB. Before the model reached the key, swapping the
+    wrapped model — including by upgrading langres, which moved
+    ``DEFAULT_EMBEDDING_MODEL`` from a 384-dim checkpoint to a 768-dim one — hit
+    the old entries and served the *previous* model's vectors under the new one.
+    """
+
+    def _cached(self, tmp_path, embedder):
+        return DiskCachedEmbedder(
+            embedder=embedder, cache_dir=tmp_path / "cache", namespace="shared"
+        )
+
+    def _named(self, name, ref=None):
+        embedder = FakeEmbedder(embedding_dim=8)
+        embedder.model_name = name
+        if ref is not None:
+            embedder.model_ref = ref
+        return embedder
+
+    def test_two_models_in_one_namespace_do_not_share_entries(self, tmp_path):
+        old = self._cached(tmp_path, self._named("all-MiniLM-L6-v2"))
+        new = self._cached(tmp_path, self._named("intfloat/e5-base-v2"))
+        assert old._hash_text("acme") != new._hash_text("acme")
+
+    def test_the_same_model_still_shares_entries(self, tmp_path):
+        one = self._cached(tmp_path, self._named("intfloat/e5-base-v2"))
+        other = self._cached(tmp_path, self._named("intfloat/e5-base-v2"))
+        assert one._hash_text("acme") == other._hash_text("acme")
+
+    def test_a_revision_pin_changes_the_key(self, tmp_path):
+        """Same name, different Hub revision, different checkpoint — different vectors."""
+        from langres.core.model_ref import ModelRef
+
+        base = "intfloat/e5-base-v2"
+        one = self._cached(
+            tmp_path, self._named(base, ModelRef(base=base, kind="hf", revision="aaa"))
+        )
+        other = self._cached(
+            tmp_path, self._named(base, ModelRef(base=base, kind="hf", revision="bbb"))
+        )
+        assert one._hash_text("acme") != other._hash_text("acme")
+
+    def test_an_embedder_with_no_model_identity_keeps_its_entries(self, tmp_path):
+        """A FakeEmbedder carries no model name, so its caches keep hitting."""
+        cached = self._cached(tmp_path, FakeEmbedder(embedding_dim=8))
+        assert cached._embedder_discriminator() == ""
