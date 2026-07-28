@@ -760,6 +760,44 @@ def render(rows: Sequence[dict[str, Any]], reference: dict[str, Any]) -> str:
     if VERDICT.strip():
         add(VERDICT.strip())
         add("")
+
+    add("## References")
+    add("")
+    add(
+        "Every paper below was downloaded as a PDF and converted locally with "
+        "`pdftotext -layout`; every number quoted in this document was read off a "
+        "table in that text and is tagged with the table it came from in "
+        "`20260728_external_reproduction_reference.json`. No number here comes from a "
+        "blog post, an abstract, another paper's description of a result, or recall."
+    )
+    add("")
+    for key in ("deepblocker", "uniblocker", "scblock", "sudowoodo"):
+        paper = reference["papers"][key]
+        add(
+            f"- **{paper['title']}** — {paper['authors']}, {paper['venue']}. "
+            f"[PDF]({paper['pdf']}) *(retrieved {paper['retrieved']})*"
+        )
+    add(
+        "- **Pre-trained Embeddings for Entity Resolution: An Experimental Analysis** — "
+        "Zeakis, Papadakis, Skoutas, Koubarakis, PVLDB 16(9), 2023. "
+        "[arXiv:2304.12329](https://arxiv.org/abs/2304.12329) *(retrieved 2026-07-28)*. "
+        "This is UniBlocker's citation [63] for STransformer being \"the best blocking "
+        "solution with pre-trained embeddings\", and it benchmarks sentence-transformer "
+        "models for blocking on these same datasets. **We quote no number from it**: "
+        "its blocking recall is published only as plots (Figure 3), and reading values "
+        "off a figure is not a citation. Its protocol also differs — it queries with "
+        "*the smaller* of the two tables, which on `dblp_acm` is ACM (2,294), not the "
+        "DBLP side the other two papers query with."
+    )
+    add("")
+    add(
+        "**Retrieved but yielding no usable number:** DeepBlocker's technical report "
+        "(the `[1]` Dropbox link in the paper's references) downloads and contains the "
+        "same Tables 4-6 as the PVLDB version — its per-solution R-C curves, which are "
+        "where an SBERT number would live, are figures. So DeepBlocker publishes **no "
+        "numeric off-the-shelf sentence-encoder baseline** anywhere we could find."
+    )
+    add("")
     return "\n".join(out)
 
 
