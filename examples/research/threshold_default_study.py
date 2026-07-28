@@ -1,4 +1,9 @@
-"""B2 -- should ``fit(derive_threshold=True)`` be the DEFAULT?
+"""The threshold-default study -- should ``fit(derive_threshold=True)`` be the DEFAULT?
+
+(A $0 diagnostic in the spirit of the agenda's B thread, but NOT agenda item B1
+or B2 -- both of those are answered elsewhere
+(``docs/research/20260727_closure_diagnostic.md`` /
+``20260727_portfolio_annotation.md``). This question came out of PR #241.)
 
 The front door hard-codes ``threshold: float = 0.5`` in six places
 (``architectures/fuzzy_string.py``, ``architectures/retrieval.py`` x4,
