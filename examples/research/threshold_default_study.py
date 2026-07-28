@@ -362,14 +362,15 @@ def to_markdown(results: list[CellResult]) -> str:
     Never an average: an average hides the single cell that motivated the race.
     """
     header = (
-        "| benchmark | method | seed | train pairs | test pairs | incumbent t | "
-        "incumbent F1 | derived t | derived F1 | kept | Δ F1 |"
+        "| benchmark | method | seed | train pairs | test pairs | held-out gold | "
+        "incumbent t | incumbent F1 | derived t | derived F1 | kept | Δ F1 |"
     )
-    lines = [header, "|" + "---|" * 11]
+    lines = [header, "|" + "---|" * 12]
     for r in results:
         lines.append(
             f"| {r.benchmark} | {r.method} | {r.seed} | {r.n_train_pairs:,} | "
-            f"{r.n_test_pairs:,} | {r.incumbent_threshold:.2f} | "
+            f"{r.n_test_pairs:,} | {r.n_test_gold_blocked:,} | "
+            f"{r.incumbent_threshold:.2f} | "
             f"{r.incumbent_f1_blocked:.4f} | {r.derived_threshold:.4f} | "
             f"{r.derived_f1_blocked:.4f} | {r.kept} | {r.delta_f1_blocked:+.4f} |"
         )
