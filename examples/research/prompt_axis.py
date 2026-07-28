@@ -1143,20 +1143,32 @@ def _is_degenerate(row: Row) -> bool:
     return row.delta_per_record_recall == 0.0 and row.ci_low == 0.0 and row.ci_high == 0.0
 
 
-def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
-    """Keys Holm's step-down rejects at family-wise ``alpha``.
+def _holm_steps(p_values: dict[str, float], alpha: float = ALPHA) -> list[tuple[str, float, float]]:
+    """``(key, p, threshold)`` in Holm's step-down order.
 
-    Holm sorts the family ascending and rejects ``H(i)`` while
-    ``p(i) <= alpha / (m - i + 1)``, stopping at the first failure. It is
-    uniformly at least as powerful as Bonferroni and needs no independence
-    assumption, which matters here: the arms of one model share a baseline and a
-    corpus, so their comparisons are strongly dependent.
+    Holm sorts a family ascending and tests ``p(i)`` against
+    ``alpha / (m - i + 1)``. Both the verdicts and the resolution check need
+    those thresholds, and computing them twice would let the two drift into
+    disagreeing about which comparison was tested against what -- so they are
+    produced once, here.
     """
     ordered = sorted(p_values.items(), key=lambda item: item[1])
     total = len(ordered)
+    return [(key, p_value, alpha / (total - index)) for index, (key, p_value) in enumerate(ordered)]
+
+
+def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
+    """Keys Holm's step-down rejects at family-wise ``alpha``.
+
+    Stops at the first failure -- a comparison is only rejected if every smaller
+    p-value in its family was rejected too. Holm is uniformly at least as
+    powerful as Bonferroni and needs no independence assumption, which matters
+    here: the arms of one model share a baseline and a corpus, so their
+    comparisons are strongly dependent.
+    """
     rejected: set[str] = set()
-    for index, (key, p_value) in enumerate(ordered):
-        if p_value > alpha / (total - index):
+    for key, p_value, threshold in _holm_steps(p_values, alpha):
+        if p_value > threshold:
             break
         rejected.add(key)
     return rejected
@@ -1176,16 +1188,14 @@ def _resolution_limited(
     those is the difference between a correction that reports its own resolution
     and one that launders sampling noise into a finding.
     """
-    by_family: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    by_family: dict[tuple[str, str], dict[str, float]] = {}
     for (model, arm, benchmark), (p_value, _) in verdicts.items():
         if p_value is not None:
-            by_family.setdefault((model, arm), []).append((benchmark, p_value))
+            by_family.setdefault((model, arm), {})[benchmark] = p_value
     errors = {(row.model, row.arm, row.benchmark): row.p_value_standard_error for row in headline}
     limited: list[tuple[str, str, str]] = []
     for (model, arm), family in by_family.items():
-        total = len(family)
-        for index, (benchmark, p_value) in enumerate(sorted(family, key=lambda item: item[1])):
-            threshold = ALPHA / (total - index)
+        for benchmark, p_value, threshold in _holm_steps(family):
             error = errors.get((model, arm, benchmark))
             if error and abs(p_value - threshold) < margin * error:
                 limited.append((model, arm, benchmark))
