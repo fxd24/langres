@@ -1557,6 +1557,36 @@ class ERModel(ModelRun, ModelPersistence):
                 "the clusterer). Nothing was scored: this is checked before the "
                 "chain runs, so a paid Score in the chain has not been billed."
             )
+        # Same rule, same reason. Whether the chain gates twice is decidable from
+        # the topology alone, so it must be decided here rather than after the
+        # scoring pass -- a guard placed below turns "we cannot fit this" into
+        # "we billed you, then could not fit this". (The unscored-rows guard
+        # further down genuinely needs the rows and cannot be hoisted.)
+        #
+        # ``getattr``: ClusterStage is the abstract contract and carries no
+        # clusterer; only the ClustererStage adapter wraps a legacy one. A custom
+        # ClusterStage has no second threshold to conflict with, so absent means
+        # "no independent cut", not "unknown".
+        stage_clusterer = getattr(self._chain_cluster_stage(), "clusterer", None)
+        cluster_cut = None if stage_clusterer is None else stage_clusterer.threshold
+        if cluster_cut:
+            # A chain can gate TWICE: the ThresholdSelect this fit writes, and the
+            # nested clusterer, which "keeps thresholding on the projected
+            # judgements". Fitting only the first would let a winning cut of 0.80
+            # be reported as applied while a clusterer cut of 0.90 still rejects
+            # every pair between them -- a held-out improvement resolve() never
+            # realizes. The shipped research recipes build this stage
+            # threshold-free for exactly that reason; refuse rather than silently
+            # fit one of two gates.
+            raise ValueError(
+                "fit(derive_threshold=True) cannot fit this chain: its ClusterStage "
+                f"clusterer carries its own threshold ({cluster_cut}), so the chain "
+                "gates twice and fitting the ThresholdSelect alone would report an "
+                "improvement that resolve() cannot deliver. Build the stage "
+                "threshold-free -- ClustererStage(Clusterer(threshold=0.0)) -- and "
+                "let the ThresholdSelect own the match cut. Nothing was scored: "
+                "this is checked before the chain runs."
+            )
         scored = self._prethreshold_pairs(data)
         score_by_pair = {_row_key(row): row.score for row in scored.rows}
         judgement_by_pair = {
@@ -1580,29 +1610,6 @@ class ERModel(ModelRun, ModelPersistence):
                 "them regardless of the cut and this fit would be silently inert. "
                 "Add a Score (e.g. MatcherScore) to the chain before the "
                 "ThresholdSelect."
-            )
-        # ``getattr``: ClusterStage is the abstract contract and carries no
-        # clusterer; only the ClustererStage adapter wraps a legacy one. A custom
-        # ClusterStage has no second threshold to conflict with, so absent means
-        # "no independent cut", not "unknown".
-        cluster_cut = getattr(self._chain_cluster_stage(), "clusterer", None)
-        cluster_cut = None if cluster_cut is None else cluster_cut.threshold
-        if cluster_cut:
-            # A chain can gate TWICE: the ThresholdSelect this fit writes, and the
-            # nested clusterer, which "keeps thresholding on the projected
-            # judgements". Fitting only the first would let a winning cut of 0.80
-            # be reported as applied while a clusterer cut of 0.90 still rejects
-            # every pair between them -- a held-out improvement resolve() never
-            # realizes. The shipped research recipes build this stage
-            # threshold-free for exactly that reason; refuse rather than silently
-            # fit one of two gates.
-            raise ValueError(
-                "fit(derive_threshold=True) cannot fit this chain: its ClusterStage "
-                f"clusterer carries its own threshold ({cluster_cut}), so the chain "
-                "gates twice and fitting the ThresholdSelect alone would report an "
-                "improvement that resolve() cannot deliver. Build the stage "
-                "threshold-free -- ClustererStage(Clusterer(threshold=0.0)) -- and "
-                "let the ThresholdSelect own the match cut."
             )
         aligned = align_pairs(scored.to_candidates(), pairs, split=split, seed=seed)
 

@@ -799,18 +799,25 @@ def test_a_chain_that_gates_twice_refuses_to_derive() -> None:
     everything between them yields a held-out "improvement" that never reaches
     ``resolve()``. The shipped research recipes build the stage threshold-free for
     this reason; a chain that does not is refused rather than half-fitted.
+
+    Like the no-``ThresholdSelect`` refusal, this is decidable from the topology
+    alone, so it must be decided **before** the scoring pass -- a guard below it
+    would bill a paid chain and only then refuse. The counter is what observes
+    that; asserting the exception alone would pass either way.
     """
     records, pairs = _dataset()
+    counting = _CountingMatcher()
     model = ERModel.from_topology(
         ops=[
             BlockerSource(AllPairsBlocker(schema=CompanySchema)),
-            MatcherScore(_matcher(), out_space="heuristic"),
+            MatcherScore(counting, out_space="heuristic"),
             ThresholdSelect(0.9),
             ClustererStage(Clusterer(threshold=0.9)),
         ]
     )
     with pytest.raises(ValueError, match="gates twice"):
         model.fit(records, pairs=pairs, split=_SPLIT, seed=_SEED, derive_threshold=True)
+    assert counting.calls == 0
 
 
 def test_threshold_seam_reports_where_each_topology_keeps_its_cut() -> None:
