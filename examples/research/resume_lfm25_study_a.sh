@@ -109,11 +109,19 @@ commit_only "chore(lfm25): open a provenance window for the study-A resume" \
   exit 1
 }
 
+# LADDER_NO_PUSH: this resume owns publication, and it cannot decide until the
+# window is closed and the write-up re-rendered. Left to publish for itself, the
+# driver pushed the row the moment it was committed -- so a later --finish
+# rejection or render failure left origin holding the new row beside an OPEN
+# provenance window, with the closing evidence withheld and this script printing
+# "everything is committed locally". Suppressing the child's push is what makes
+# the single publish at the end actually mean something. (Cross-model review.)
 LADDER_ARTIFACT="docs/research/20260729_lfm25_tuned" \
 LADDER_REFERENCE_MODEL="intfloat/e5-base-v2" \
 LADDER_ALL_MODELS="$STUDY_A_MODELS" \
 LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M" \
 LADDER_BENCHMARKS="walmart_amazon" \
+LADDER_NO_PUSH=1 \
   bash examples/research/run_ladder.sh
 code=$?
 

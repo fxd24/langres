@@ -2521,3 +2521,43 @@ class TestTheArmClaimReadsRowsNotConfiguration:
         caveat = _caveat(LADDER.render_report(rows))
 
         assert "all-MiniLM-L6-v2" not in caveat
+
+
+class TestTheArmClaimIsPerArmNotPerModel:
+    """`measure_one` records failures per ARM, so model presence is too coarse.
+
+    A model whose `documented` arm failed while another arm succeeded was still
+    listed under "whose OWN recipe this sweep did run"; a model whose `instruct`
+    arm failed was still described as having had the generic instruction run
+    against it.
+    """
+
+    def test_a_failed_documented_arm_is_not_a_recipe_that_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
+        monkeypatch.setattr(LADDER, "LADDER", (spec,))
+        rows = [
+            _cell(spec.name, "none"),
+            _cell(spec.name, "instruct"),
+            _cell(spec.name, "documented", status="failed", error="OOM"),
+        ]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "No model here had its own recipe measured" in caveat
+        # It DID run the generic arms, so it belongs in that list instead.
+        assert "google/embeddinggemma-300m" in caveat.split("This list is about")[0]
+
+    def test_a_successful_documented_arm_is_a_recipe_that_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: the ordinary case must still be reported."""
+        spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
+        monkeypatch.setattr(LADDER, "LADDER", (spec,))
+        rows = [_cell(spec.name, arm) for arm in ("none", "instruct", "documented")]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "whose OWN recipe this sweep did run" in caveat
+        assert "google/embeddinggemma-300m" in caveat

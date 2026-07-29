@@ -204,6 +204,18 @@ push_results() {
     log "  Rows are COMMITTED and safe. Re-measure on a stable tree before publishing."
     return 0
   fi
+  # LADDER_NO_PUSH: commit as usual, publish nothing. For a WRAPPER that cannot
+  # know whether the run succeeded until after this driver returns. The study-A
+  # resume is one: this function pushed the row the moment it was committed, so a
+  # later --finish rejection or render failure left origin holding that row and an
+  # OPEN provenance window while the wrapper withheld the closing evidence and
+  # printed "everything is committed locally". The wrapper suppresses this push and
+  # performs the only one after its own success. Durability is unaffected -- the
+  # commit above already happened. (Cross-model review.)
+  if [ "${LADDER_NO_PUSH:-0}" = "1" ]; then
+    log "not pushing: the caller owns publication for this run."
+    return 0
+  fi
   branch=$(git rev-parse --abbrev-ref HEAD)
   default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
   default=${default#origin/}

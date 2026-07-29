@@ -909,39 +909,121 @@ class TestThePartialWindowWordingDoesNotGuessACause:
         assert "aborted before finishing" not in warning
 
 
-class TestTheRendererInputsAreRecheckedAtRenderTime:
-    """Startup cannot answer a question about now.
+class TestARefusedRenderStillKeepsItsProvenance:
+    """The renderer's input refusal is a non-zero exit, and that must not lose the window.
 
-    The two studies are checked once, potentially hours before the render. Under
-    `LFM25_STUDY=a` the study-B rows are inputs this run never touches, so nothing
-    would notice them changing -- and the final commit covers only the write-up and
-    its provenance, so the published document would be unreproducible from the
-    commit that carries it.
+    Round 24 implemented this check in the shell, where the refusal branch called
+    `commit_provenance` explicitly. Round 25 moved the check into the renderer --
+    so the property now depends on the driver treating ANY render failure as a
+    close-and-commit, which is the branch that was already there. Asserted rather
+    than assumed, because moving a guard silently changed which code path carries
+    this guarantee.
     """
 
     @staticmethod
     def _driver() -> str:
         return (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_lfm25.sh").read_text()
 
-    def test_both_studies_rows_are_rechecked_before_rendering(self) -> None:
+    def test_a_failed_render_commits_the_closed_window(self) -> None:
         driver = self._driver()
 
-        recheck = driver.index("RENDER_INPUTS=")
-        assert recheck < driver.index("uv run python examples/research/lfm25_report.py")
-        # Both studies, not just the one this run measured.
-        block = driver[recheck : driver.index("MOVED_INPUTS=")]
-        assert "for study in a b" in block
+        block = driver[driver.index("uv run python examples/research/lfm25_report.py") :][:500]
+        assert "commit_provenance 1" in block
 
-    def test_a_moved_input_stops_the_render_and_keeps_the_window(self) -> None:
-        """Refusing without committing the closed window would lose the provenance."""
-        driver = self._driver()
 
-        block = driver[driver.index("REFUSING to render") :]
-        assert "commit_provenance 1" in block[:800]
+class TestTheRendererRefusesUncommittedInputs:
+    """The renderer owns this check because it is the only thing that knows every
+    file it reads.
 
-    def test_the_recheck_shares_the_driver_s_force_flag(self) -> None:
-        """A separate escape hatch would be one more thing to remember."""
-        driver = self._driver()
-        block = driver[driver.index("MOVED_INPUTS=") : driver.index("REFUSING to render")]
+    `run_lfm25.sh` grew it inline in round 24, which left the study-A resume --
+    whose preflight covers only the TUNED artifacts -- reaching the same renderer
+    unguarded, while it also reads the base rows and the load probe. Two drivers,
+    one guarded, is how the earlier findings in this series happened.
+    """
 
-        assert "LFM25_FORCE:-0" in block
+    @staticmethod
+    def _report() -> ModuleType:
+        name = "example_lfm25_report_inputs"
+        path = ROOT / "examples" / "research" / "lfm25_report.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_an_uncommitted_base_rows_file_stops_the_render(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The input the resume's own preflight cannot see."""
+        report = self._report()
+        stranded = tmp_path / "base_rows.jsonl"
+        stranded.write_text("{}\n")
+        monkeypatch.setattr(report, "BASE_ROWS", stranded)
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+
+        with pytest.raises(SystemExit, match="REFUSING to render"):
+            report._refuse_uncommitted_inputs()
+
+    def test_an_uncommitted_load_probe_stops_the_render(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = self._report()
+        stranded = tmp_path / "probe.json"
+        stranded.write_text("{}")
+        monkeypatch.setattr(report, "LOAD_PROBE", stranded)
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+
+        with pytest.raises(SystemExit, match="REFUSING to render"):
+            report._refuse_uncommitted_inputs()
+
+    def test_committed_inputs_render_normally(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control, on committed tracked files rather than the live artifacts."""
+        report = self._report()
+        licence = Path(PROV.REPO_ROOT) / "LICENSE"
+        for field in ("TUNED_ROWS", "BASE_ROWS", "LOAD_PROBE"):
+            monkeypatch.setattr(report, field, licence)
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+
+        report._refuse_uncommitted_inputs()
+
+    def test_the_driver_does_not_keep_a_second_copy(self) -> None:
+        """Round 24 put this in the shell; a copy in both is the drift disease."""
+        driver = (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_lfm25.sh").read_text()
+
+        assert "MOVED_INPUTS" not in driver
+        assert "REFUSING to render" not in driver
+
+
+class TestTheResumeOwnsPublication:
+    """`run_ladder.sh` pushes each row the moment it is committed.
+
+    So the wrapper's "publish only on success" guard covered only its OWN push: a
+    later --finish rejection or render failure still left origin holding the new
+    row beside an OPEN provenance window, with the closing evidence withheld.
+    """
+
+    @staticmethod
+    def _resume() -> str:
+        return (
+            Path(PROV.REPO_ROOT) / "examples" / "research" / "resume_lfm25_study_a.sh"
+        ).read_text()
+
+    def test_the_child_push_is_suppressed(self) -> None:
+        assert "LADDER_NO_PUSH=1" in self._resume()
+
+    def test_the_driver_honours_the_suppression(self) -> None:
+        driver = (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert "LADDER_NO_PUSH:-0" in driver
+        # ...and it withholds only the PUSH; the commit above it still happens.
+        block = driver[driver.index("LADDER_NO_PUSH:-0") :][:400]
+        assert "return 0" in block
+
+    def test_suppression_is_set_on_the_measuring_call(self) -> None:
+        """Set after the preflight call would leave the real run publishing itself."""
+        resume = self._resume()
+        measuring = resume.index("LADDER_NO_PUSH=1")
+
+        assert resume.index("LADDER_PREFLIGHT_ONLY=1") < measuring
+        assert measuring < resume.index("code=$?")

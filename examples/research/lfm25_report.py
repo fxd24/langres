@@ -2042,8 +2042,41 @@ def _refuse_to_overwrite_uncommitted() -> None:
     )
 
 
+def _refuse_uncommitted_inputs() -> None:
+    """Refuse to quote bytes that no commit holds.
+
+    This lives HERE, not in the drivers, for the reason the writer guard does:
+    the renderer is the one thing that knows every file it reads. `run_lfm25.sh`
+    grew this check inline, and the study-A resume then reached the same renderer
+    without it — its preflight covers only the tuned artifacts, while this reads
+    the base rows and the load probe too. Two drivers, one of them guarded, is
+    how the first five of these findings happened. (Cross-model review.)
+
+    The failure it prevents is quiet: the generated document quotes uncommitted
+    numbers, and the commit carrying it holds only the document, so the published
+    file cannot be regenerated from the commit it ships in.
+    """
+    if os.environ.get(FORCE_ENV) == "1":
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from write_provenance import _uncommitted
+
+    moved = [name for path in (TUNED_ROWS, BASE_ROWS, LOAD_PROBE) for name in _uncommitted(path)]
+    if not moved:
+        return
+    raise SystemExit(
+        "REFUSING to render: these inputs hold uncommitted changes right now "
+        f"({', '.join(moved)}).\n"
+        "  The write-up would quote bytes no commit holds, so it could not be "
+        "regenerated from\n"
+        "  the commit that carries it. Commit them, then re-render. To render anyway:\n"
+        f"    {FORCE_ENV}=1 uv run python examples/research/lfm25_report.py"
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _refuse_uncommitted_inputs()
     _refuse_to_overwrite_uncommitted()
     OUTPUT.write_text(render())
     logger.info("wrote %s", OUTPUT)

@@ -2976,10 +2976,22 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # whose next section says "7 of the 14 models in the ladder have a row" and
     # lists all seven under "What did not run". A sentence about what a sweep ran
     # has to read the rows, not the configuration. (Cross-model review.)
-    measured = {row.model for row in ok}
-    trainable = [spec for spec in LADDER if not spec.random_init and spec.name in measured]
-    generic_only = [spec.name for spec in trainable if spec.documented_arm is None]
-    own_recipe = [spec.name for spec in trainable if spec.documented_arm is not None]
+    # Keyed on successful (model, ARM) pairs, because that is the granularity at
+    # which measurement succeeds or fails. Model presence was not enough:
+    # `measure_one` records failures per arm, so a model whose `documented` arm
+    # failed while another arm succeeded was still listed under "whose OWN recipe
+    # this sweep did run", and a model whose `instruct` arm failed was still
+    # described as having had the generic instruction run against it. Configuration
+    # decided nothing here any more. (Cross-model review.)
+    measured_arms = {(row.model, row.prompt_arm) for row in ok}
+    trainable = [spec for spec in LADDER if not spec.random_init]
+    own_recipe = [spec.name for spec in trainable if (spec.name, "documented") in measured_arms]
+    generic_only = [
+        spec.name
+        for spec in trainable
+        if spec.name not in own_recipe
+        and any((spec.name, arm) in measured_arms for arm in ("none", "instruct"))
+    ]
     names = lambda group: ", ".join(f"`{n}`" for n in group)  # noqa: E731
     out.append(
         "\n> ### Do not read this table as 'instructions do not help retrieval'\n"
