@@ -491,7 +491,91 @@ def _assert_comparable_cohorts(tuned: list[dict[str, Any]], base: list[dict[str,
             "subtraction is per benchmark. Re-measure both studies (LFM25_STUDY=both) "
             "before generating this report."
         )
+    _assert_same_populations(tuned, base)
     return ", ".join(sorted(str(r) for r in tuned_revs | base_revs)) or "unrecorded"
+
+
+def _population(rows: list[dict[str, Any]]) -> dict[str, tuple[Any, ...]]:
+    """Per benchmark, the dataset's own size — the cohort the recalls describe."""
+    sizes: dict[str, tuple[Any, ...]] = {}
+    for row in rows:
+        if row.get("status") != "ok":
+            continue
+        sizes.setdefault(row["benchmark"], (row.get("n_records"), row.get("n_gold_pairs")))
+    return sizes
+
+
+def _assert_same_populations(tuned: list[dict[str, Any]], base: list[dict[str, Any]]) -> None:
+    """``metric_revision`` is not cohort identity, so check the cohort itself.
+
+    That field tracks changes to how a metric is *computed*. A benchmark's
+    records or gold pairs can change underneath it — a dataset refresh, a
+    preprocessing fix, a different split — and both files keep revision 1 while
+    describing different populations. The guard above would pass and the noise
+    floor would subtract recalls measured over different denominators, in a
+    document whose own text says cross-cohort subtraction is refused.
+
+    No new measurement is needed to catch it: every row already records
+    ``n_records`` and ``n_gold_pairs``, which are properties of the dataset and
+    not of the model. Compared per benchmark, across the two studies.
+    (Cross-model review.)
+    """
+    tuned_pop = _population(tuned)
+    base_pop = _population(base)
+    mismatched = [
+        f"`{b}` (study A {tuned_pop[b][0]} records / {tuned_pop[b][1]} gold pairs, "
+        f"study B {base_pop[b][0]} / {base_pop[b][1]})"
+        for b in sorted(set(tuned_pop) & set(base_pop))
+        if tuned_pop[b] != base_pop[b]
+    ]
+    if mismatched:
+        raise SystemExit(
+            "Refusing to render: the two studies measured different populations on "
+            f"{', '.join(mismatched)}. The metric revision matches, but that field tracks "
+            "how a metric is COMPUTED, not which records it was computed over — so the "
+            "noise floor would subtract recalls with different denominators. Re-measure "
+            "both studies (LFM25_STUDY=both) over the same data before generating this "
+            "report."
+        )
+
+
+def _installed_transformers() -> str | None:
+    """The transformers version in THIS environment, or None if absent."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("transformers")
+    except PackageNotFoundError:
+        return None
+
+
+def _probe_staleness(probe: dict[str, Any]) -> list[str]:
+    """Disclose a load probe captured under a different transformers than this one.
+
+    Everything in the section below — which class is instantiated, how many keys
+    fail to load, whether unrelated records collapse onto one vector — is a
+    property of the *installed* transformers, not of the checkpoint alone. But
+    ``run_lfm25.sh`` re-measures rows without re-running the probe, so a rerun
+    after a dependency bump commits fresh recalls beside loading claims captured
+    under a different library. The rows and the probe are two artifacts with two
+    lifetimes and no link between them; this is the link. Disclosed rather than
+    fatal — the probe is still the best record there is, and refusing the render
+    would delete the disclosure along with the report. (Cross-model review.)
+    """
+    recorded = probe.get("transformers_version")
+    installed = _installed_transformers()
+    if installed is None or installed == recorded:
+        return []
+    return [
+        f"⚠️ **This section was captured under transformers `{recorded}`; the environment "
+        f"rendering this document has `{installed}`.** Which class is instantiated, how "
+        "many weights fail to load and whether the untrusted load collapses are all "
+        "properties of the installed library, so these findings may no longer describe "
+        "what a reader would see. Re-run `uv run python examples/research/"
+        "lfm25_load_probe.py` to refresh them. The *scores* are unaffected: they carry "
+        "their own provenance and were measured under the sweep's own environment.",
+        "",
+    ]
 
 
 def _cross_study_caveat() -> list[str]:
@@ -1165,8 +1249,9 @@ def render() -> str:
         "",
         "## Was the checkpoint even the thing measured?",
         "",
+        *_probe_staleness(probe),
         "This has to come before any score. All three checkpoints declare "
-        f'`model_type: "lfm2"`, which the installed transformers '
+        f'`model_type: "lfm2"`, which the transformers the probe ran under '
         f"({probe['transformers_version']}) implements natively "
         f"(`lfm2` in `CONFIG_MAPPING_NAMES`: **{probe['lfm2_natively_implemented']}**) as a "
         "**causal decoder**, while pointing `auto_map.AutoModel` at their own "
@@ -1429,10 +1514,17 @@ def render() -> str:
         "## Reproduce",
         "",
         "```bash",
-        "bash examples/research/run_lfm25.sh          # both sweeps + this write-up",
+        "bash examples/research/run_lfm25.sh          # both sweeps, load probe + this write-up",
         "LFM25_STUDY=b bash examples/research/run_lfm25.sh     # just the base-encoder study",
-        "uv run python examples/research/lfm25_load_probe.py   # the loading artifact",
+        "uv run python examples/research/lfm25_load_probe.py   # the loading artifact, on its own",
         "```",
+        "",
+        "The driver refreshes the load probe **before** rendering, inside the same "
+        "measurement window as the rows, so the loading section and the scores describe "
+        "one environment. The standalone command exists for re-checking a checkpoint "
+        "without re-measuring; listing it *after* the render, as this block used to, told "
+        "readers to refresh the probe once the document quoting it had already been "
+        "written.",
         "",
         "There is **no skip-completed logic**: `merge_rows()` replaces a re-measured "
         "cell, and re-measuring the reference model clears every other model's "

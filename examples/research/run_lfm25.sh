@@ -168,13 +168,64 @@ fi
 # measured the rows; the first commit touching the harness would silently
 # reattribute every row to code that never ran. Not stale: false.
 # ---------------------------------------------------------------------------
-say "opening the provenance window (studies: $STUDY)"
 case "$STUDY" in
   both) PROVENANCE_STUDIES="a b" ;;
   *) PROVENANCE_STUDIES="$STUDY" ;;
 esac
+
+# ---------------------------------------------------------------------------
+# The sidecar is not the only thing a new sweep overwrites.
+#
+# A granular sweep killed after a benchmark subprocess wrote rows but before the
+# model-level commit leaves the ROWS, the REPORT and the REFERENCE sidecar dirty
+# while the provenance file is clean -- it was committed at startup. run_ladder.sh
+# then rewrites and commits all three under the new window, so measured-but-
+# unsaved cells, and any hand edit, are published as this run's or replaced
+# outright. Same rule as the provenance guard, same escape. (Cross-model review.)
+# ---------------------------------------------------------------------------
+study_artifacts() {
+  case "$1" in
+    a) echo "docs/research/20260729_lfm25_tuned" ;;
+    b) echo "docs/research/20260729_lfm25_base_encoders" ;;
+  esac
+}
+DIRTY_ARTIFACTS=""
+for study in $PROVENANCE_STUDIES; do
+  prefix="$(study_artifacts "$study")"
+  for artifact in "${prefix}_rows.jsonl" "${prefix}.md" "${prefix}_reference_recall.json"; do
+    [ -e "$artifact" ] || continue
+    if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
+      DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
+    fi
+  done
+done
+if [ -n "${DIRTY_ARTIFACTS// /}" ] && [ "${LFM25_FORCE:-0}" != "1" ]; then
+  say "REFUSING to start: these study artifacts have uncommitted changes:"
+  for artifact in $DIRTY_ARTIFACTS; do say "    $artifact"; done
+  say "  A killed sweep leaves measured cells here that no commit holds. This run would"
+  say "  rewrite and commit them under its own provenance. Commit them, or copy them"
+  say "  outside this worktree, then re-run. To discard them deliberately:"
+  say "    LFM25_FORCE=1 LFM25_STUDY=$STUDY bash $0${1:+ $1}"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Provenance is captured HERE, in the measurement path, before a single row is
+# written -- not at render time. A provenance line derived from HEAD names
+# whatever is checked out when the report is generated, which is not what
+# measured the rows; the first commit touching the harness would silently
+# reattribute every row to code that never ran. Not stale: false.
+# ---------------------------------------------------------------------------
+say "opening the provenance window (studies: $STUDY)"
+# LFM25_FORCE forwards to --force. Without it the advertised escape was a DEAD
+# END: running `write_provenance.py --start --force` by hand opens a window and
+# exits, leaving the sidecar dirty, so the very next `run_lfm25.sh` refused the
+# file it had just been told to write. The force decision has to travel with the
+# run that acts on it. (Cross-model review.)
+FORCE_ARG=""
+[ "${LFM25_FORCE:-0}" = "1" ] && FORCE_ARG="--force"
 # shellcheck disable=SC2086  # word splitting is the interface here
-uv run python examples/research/write_provenance.py --start --studies $PROVENANCE_STUDIES || {
+uv run python examples/research/write_provenance.py --start $FORCE_ARG --studies $PROVENANCE_STUDIES || {
   # --start refuses when the existing sidecar has uncommitted changes: a run
   # killed between --finish and its commit leaves the ONLY description of rows
   # that ARE committed sitting in that file, and opening a window would replace
@@ -184,7 +235,7 @@ uv run python examples/research/write_provenance.py --start --studies $PROVENANC
   say "  If it refused because $PROVENANCE_JSON has uncommitted changes, those bytes may"
   say "  be the only record of rows a killed run already committed. Commit them, or"
   say "  copy the file outside this worktree, then re-run. To discard them deliberately:"
-  say "    uv run python examples/research/write_provenance.py --start --force --studies $PROVENANCE_STUDIES"
+  say "    LFM25_FORCE=1 LFM25_STUDY=$STUDY bash $0${1:+ $1}"
   exit 1
 }
 
@@ -247,6 +298,47 @@ if [ "$STUDY" = "b" ] || [ "$STUDY" = "both" ]; then
     say "study B exited $code"
     abort_with_provenance $code
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# Refresh the load probe INSIDE the measurement window, before the render.
+#
+# The write-up's "was the checkpoint even the thing measured?" section is built
+# from this probe: which class transformers instantiates, how many weights fail
+# to load, whether the untrusted load collapses every text onto one vector. All
+# of that is a property of the INSTALLED library, and a rerun after a dependency
+# bump used to commit fresh rows beside loading claims captured under a different
+# transformers -- two artifacts, two lifetimes, no link. The documented reproduce
+# block made it worse by listing the probe AFTER the render.
+#
+# Non-fatal: the probe downloads checkpoints and can fail offline or on a rate
+# limit, and killing a completed sweep over its explanatory section would trade a
+# large loss for a small one. The report cross-checks the recorded transformers
+# version against the installed one and says so when they differ, so a probe that
+# could not be refreshed is disclosed rather than passed off as current.
+# (Cross-model review.)
+# ---------------------------------------------------------------------------
+say "refreshing the load probe"
+LOAD_PROBE_JSON="docs/research/20260729_lfm25_load_probe.json"
+if uv run python examples/research/lfm25_load_probe.py; then
+  # Committed the moment it exists, not bundled into the final commit: an abort
+  # between here and the render would otherwise leave the refreshed probe as
+  # uncommitted output, which dies with the worktree.
+  git add "$LOAD_PROBE_JSON" || {
+    say "FATAL: could not stage the refreshed load probe"
+    exit 1
+  }
+  if ! git diff --cached --quiet -- "$LOAD_PROBE_JSON"; then
+    git commit -q --only "$LOAD_PROBE_JSON" \
+      -m "results(lfm25): refresh the checkpoint load probe" \
+      -m "Captured inside this sweep's measurement window, so the write-up's loading claims describe the same environment as its rows." ||
+      {
+        say "FATAL: the refreshed load probe is staged but NOT committed; stopping."
+        exit 1
+      }
+  fi
+else
+  say "the load probe FAILED to refresh; the write-up will disclose it as captured under a different environment"
 fi
 
 # ---------------------------------------------------------------------------

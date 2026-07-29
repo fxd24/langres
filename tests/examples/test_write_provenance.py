@@ -153,9 +153,38 @@ class TestStartDoesNotDestroyUncommittedProvenance:
 
         assert json.loads(path.read_text())["measurement_window"]["finished"] is None
 
-    def test_a_path_outside_the_repo_is_not_blocked_by_git(self, tmp_path: Path) -> None:
-        """`_uncommitted` must not explode on a pathspec git cannot resolve."""
-        assert PROV._uncommitted(tmp_path / "elsewhere.json") == []
+    def test_a_nonexistent_path_has_nothing_to_lose(self, tmp_path: Path) -> None:
+        assert PROV._uncommitted(tmp_path / "absent.json") == []
+
+    def test_an_existing_file_outside_the_repo_counts_as_pending(self, tmp_path: Path) -> None:
+        """The free pass went to exactly the file the refusal tells you to make.
+
+        ``git status`` says nothing about a path outside the repository, and the
+        first version read that silence as "clean" — so ``--output`` pointed at
+        the operator's recovery copy was overwritten without ``--force``.
+        """
+        outside = tmp_path / "recovery_copy.json"
+        outside.write_text("{}")
+
+        pending = PROV._uncommitted(outside)
+
+        assert pending and "outside this repository" in pending[0]
+
+    def test_an_existing_ignored_file_counts_as_pending(self, tmp_path: Path) -> None:
+        """`git status` omits ignored paths entirely, so silence is not safety."""
+        ignored = Path(PROV.REPO_ROOT) / "tmp" / "provenance_guard_probe.json"
+        ignored.parent.mkdir(parents=True, exist_ok=True)
+        ignored.write_text("{}")
+        try:
+            pending = PROV._uncommitted(ignored)
+        finally:
+            ignored.unlink()
+
+        assert pending and "ignored by git" in pending[0]
+
+    def test_a_committed_unmodified_file_is_not_pending(self) -> None:
+        """The guard must not refuse every ordinary run."""
+        assert PROV._uncommitted(Path(PROV.REPO_ROOT) / "pyproject.toml") == []
 
 
 class TestDirtyScopeCoversEveryTrackedFile:

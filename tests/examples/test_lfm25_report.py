@@ -810,6 +810,66 @@ class TestCrossedMetricRevisions:
         assert REPORT._assert_comparable_cohorts(tuned, base) == "1"
 
 
+class TestCohortIsNotMetricRevision:
+    """`metric_revision` tracks how a metric is COMPUTED, not over what."""
+
+    def test_different_populations_are_refused(self) -> None:
+        """A dataset refresh keeps revision 1 and changes the denominator.
+
+        The revision guard passes and the noise floor then subtracts recalls
+        measured over different record counts — in a document whose own text
+        says cross-cohort subtraction is refused.
+        """
+        tuned = [_row("intfloat/e5-base-v2", "abt_buy", n_records=2173, n_gold_pairs=1044)]
+        base = [_row(REPORT.CONTROL, "abt_buy", n_records=2100, n_gold_pairs=1044)]
+
+        assert {r["metric_revision"] for r in tuned} == {r["metric_revision"] for r in base}
+        with pytest.raises(SystemExit, match="different populations"):
+            REPORT._assert_comparable_cohorts(tuned, base)
+
+    def test_a_benchmark_present_in_only_one_study_is_not_compared(self) -> None:
+        """Study B measures fewer benchmarks; that is not a cohort mismatch."""
+        tuned = [
+            _row("intfloat/e5-base-v2", "abt_buy", n_records=2173, n_gold_pairs=1044),
+            _row("intfloat/e5-base-v2", "wdc_computers", n_records=999, n_gold_pairs=100),
+        ]
+        base = [_row(REPORT.CONTROL, "abt_buy", n_records=2173, n_gold_pairs=1044)]
+
+        assert REPORT._assert_comparable_cohorts(tuned, base) == "1"
+
+    def test_the_committed_artifacts_agree(self, artifacts: Path) -> None:
+        """The real rows must pass, or the guard is unshippable."""
+        tuned = REPORT._read_rows(REPORT.TUNED_ROWS)
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        assert REPORT._assert_comparable_cohorts(tuned, base)
+
+
+class TestLoadProbeStaleness:
+    """The loading section is a property of the INSTALLED transformers."""
+
+    def test_a_probe_from_another_environment_is_disclosed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "5.0.0")
+
+        lines = REPORT._probe_staleness({"transformers_version": "4.57.6"})
+
+        assert any("captured under transformers `4.57.6`" in line for line in lines)
+        assert any("`5.0.0`" in line for line in lines)
+
+    def test_a_matching_environment_says_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "4.57.6")
+
+        assert REPORT._probe_staleness({"transformers_version": "4.57.6"}) == []
+
+    def test_transformers_absent_makes_no_claim(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Silence beats asserting a mismatch against a version that is not there."""
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: None)
+
+        assert REPORT._probe_staleness({"transformers_version": "4.57.6"}) == []
+
+
 class TestPartialWindowCaveat:
     """`studies_measured` is intent; `window_complete` is what was reached."""
 

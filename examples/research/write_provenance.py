@@ -252,12 +252,32 @@ def _snapshot() -> dict[str, Any]:
 
 
 def _uncommitted(path: Path) -> list[str]:
-    """Pending changes for ``path``; empty when git cannot describe it at all."""
-    try:
-        rel = path.resolve().relative_to(REPO_ROOT)
-    except ValueError:
+    """What would be LOST by overwriting ``path``; empty only when nothing is.
+
+    "git reports no changes" is not the same as "git could see a change".
+    Returning ``[]`` for anything git cannot describe made the guard hand out a
+    free pass to precisely the files most worth protecting: an ``--output``
+    outside the repository — which is the recovery copy the refusal message
+    itself tells operators to make — and any gitignored in-repo path, both of
+    which `git status` omits entirely. A file whose clean tracked state cannot be
+    ESTABLISHED is treated as pending. Non-existent is the one safe case.
+    (Cross-model review.)
+    """
+    if not path.exists():
         return []
-    return _dirty((str(rel),))
+    try:
+        rel = str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return [f"{path} (outside this repository — git cannot tell whether it is saved)"]
+    pending = _dirty((rel,))
+    if pending:
+        return pending
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", rel], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    if not tracked:
+        return [f"{rel} (ignored by git — its contents exist in no commit)"]
+    return []
 
 
 def start(output: Path, force: bool = False) -> None:

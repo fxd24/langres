@@ -25,7 +25,7 @@ So on any benchmark listed above, the honest statement is *"behind on the arms t
 
 ## Was the checkpoint even the thing measured?
 
-This has to come before any score. All three checkpoints declare `model_type: "lfm2"`, which the installed transformers (4.57.6) implements natively (`lfm2` in `CONFIG_MAPPING_NAMES`: **True**) as a **causal decoder**, while pointing `auto_map.AutoModel` at their own *bidirectional* class. Dropping `trust_remote_code` therefore substitutes a different architecture in silence — no exception, no warning.
+This has to come before any score. All three checkpoints declare `model_type: "lfm2"`, which the transformers the probe ran under (4.57.6) implements natively (`lfm2` in `CONFIG_MAPPING_NAMES`: **True**) as a **causal decoder**, while pointing `auto_map.AutoModel` at their own *bidirectional* class. Dropping `trust_remote_code` therefore substitutes a different architecture in silence — no exception, no warning.
 
 | `trust_remote_code` | class actually instantiated | from checkpoint's code | cos(two unrelated records) | max prompt shift |
 |---|---|---|---|---|
@@ -294,9 +294,11 @@ The resolved **environment** was **not recorded** for this window: `uv.lock` has
 ## Reproduce
 
 ```bash
-bash examples/research/run_lfm25.sh          # both sweeps + this write-up
+bash examples/research/run_lfm25.sh          # both sweeps, load probe + this write-up
 LFM25_STUDY=b bash examples/research/run_lfm25.sh     # just the base-encoder study
-uv run python examples/research/lfm25_load_probe.py   # the loading artifact
+uv run python examples/research/lfm25_load_probe.py   # the loading artifact, on its own
 ```
+
+The driver refreshes the load probe **before** rendering, inside the same measurement window as the rows, so the loading section and the scores describe one environment. The standalone command exists for re-checking a checkpoint without re-measuring; listing it *after* the render, as this block used to, told readers to refresh the probe once the document quoting it had already been written.
 
 There is **no skip-completed logic**: `merge_rows()` replaces a re-measured cell, and re-measuring the reference model clears every other model's `vs_reference_*` on the benchmarks it touches. Re-running a finished study is a re-do, not a resume — use `LFM25_STUDY` to name the part that is missing.
