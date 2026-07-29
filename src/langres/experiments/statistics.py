@@ -58,10 +58,11 @@ class BootstrapInterval(BaseModel):
     #:
     #: Note the ``2 - p`` rather than the ``1 - p`` of an ordinary proportion: the
     #: p-value is a tail proportion **doubled** for two-sidedness, and doubling a
-    #: statistic doubles its standard error. Writing ``p (1 - p)`` here understates
-    #: the error by ~40% at ``p ~ 0.02``, which is exactly the region where a
-    #: correction's thresholds sit and where an understated error would report a
-    #: coin-flip as a settled verdict.
+    #: statistic doubles its standard error. At ``p ~ 0.02`` the correct value is
+    #: **42% larger** than ``sqrt(p (1 - p) / samples)`` (equivalently, the naive
+    #: form sits 30% below the truth) -- and that is exactly the region where a
+    #: correction's thresholds sit, so the naive form would be least accurate
+    #: precisely where it is relied on most, reporting a coin-flip as settled.
     p_value_standard_error: float | None = None
 
 
@@ -123,17 +124,27 @@ def _achieved_significance_level(bootstrap_differences: list[float]) -> float:
     **How exactly it agrees with the interval, stated precisely.**
     ``p <= t`` **implies** the ``1 - t`` percentile interval excludes zero, for
     every ``t``, with no approximation. The converse can fail in a narrow band:
-    :func:`_percentile` interpolates linearly *between order statistics*, so
-    when the interpolation position straddles the block of replicates equal to
-    zero it can return a bound strictly off zero where the counting rule still
-    sees the tail. The disagreement is bounded by ``4 / (samples + 1)`` in
+    :func:`_percentile` interpolates linearly *between order statistics*, so a
+    bound can land strictly off zero where the counting rule still sees the tail
+    -- whether because the interpolation position straddles the block of
+    replicates equal to zero, or because it carries a strictly negative
+    neighbouring replicate across it. Either way the disagreement needs only the
+    one-position shift, and so is bounded by ``4 / (samples + 1)`` in
     p-units -- 4e-3 at the default 1000 replicates, 2e-4 at 20000 -- and always
     in the same direction: **the p-value is the conservative side**, never
     calling significant anything the interval leaves ambiguous. That band is
-    narrower than one Monte-Carlo standard error at every attainable p (the
-    smallest is ``2/(samples+1)``, and ``sqrt(p(2-p)/B) > 4/(B+1)`` there), so a
-    caller already flagging near-threshold verdicts by
-    :attr:`BootstrapInterval.p_value_standard_error` cannot be surprised by it.
+    narrower than **three** Monte-Carlo standard errors at every attainable p,
+    which is the margin a caller flagging near-threshold verdicts by
+    :attr:`BootstrapInterval.p_value_standard_error` should already be using -- so
+    the disagreement cannot reach a verdict that margin has not already flagged.
+
+    The factor matters and *one* would be wrong. ``sqrt(p(2-p)/B)`` is increasing
+    in ``p`` and the two curves cross near ``p = 8B/(B+1)^2``, so at the smallest
+    attainable p-values a single standard error is *smaller* than the band: at
+    ``B = 20000`` the floor ``p = 2/(B+1)`` gives ``1.0e-4`` against a band of
+    ``2.0e-4``. Three standard errors clear it everywhere (``3.0e-4 > 2.0e-4`` at
+    the floor, and the left side only grows). An earlier version of this paragraph
+    asserted the ``> band`` inequality at exactly the point where it fails.
 
     It inherits the percentile method's limits -- no bias or acceleration
     correction (BCa would give both) -- but it is coherent with the intervals

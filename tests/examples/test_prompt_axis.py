@@ -281,7 +281,8 @@ def test_cell_complete_requires_every_arm_and_k() -> None:
     assert not harness._cell_complete(edited_prompt, spec, "abt_buy", recipes, [20])
 
     # And a row recorded before provenance existed counts as unknown, not as a
-    # match -- the committed rows are exactly this case.
+    # match. (The committed rows no longer have this shape -- every one of them
+    # carries a revision and a fingerprint -- so this shape only exists here.)
     legacy = [dataclasses.replace(r, revision=None, recipe_fingerprint=None) for r in rows]
     assert not harness._cell_complete(legacy, spec, "abt_buy", recipes, [20])
 
@@ -584,32 +585,72 @@ def test_a_family_short_of_a_benchmark_is_refused_rather_than_reported() -> None
         harness.render_report(dropped)
 
 
-def test_holm_is_tie_safe_and_agrees_with_the_step_down_form_on_the_real_rows() -> None:
-    """Equal p-values must share a verdict, however `sorted` broke the tie.
+def test_a_family_that_vanishes_entirely_is_refused_too() -> None:
+    """The size check alone cannot see a family that lost *every* benchmark.
 
-    Ties are not hypothetical here: a comparison that moved no record's recall is
-    exactly 1.0, and every sufficiently strong effect is pinned at the resolution
-    floor 2/(B+1), so both ends of the range are atoms. The adjusted-p form gives
-    tied comparisons the same adjusted p by construction.
+    Sizes are counted over the families present in the verdicts, so dropping one
+    model leaves every surviving family the full four benchmarks wide and the
+    size check reads clean -- while the prompt-source and arms tables above still
+    describe all of `MODELS`. Reachable through the documented CLI as
+    `--models <one model>` against a fresh rows file.
     """
-    # Three tied at a p that clears only the LAST threshold in a family of 3.
-    # Stop-at-first-failure would reject none; so does this -- but the point is
-    # that all three get the same answer, which is what a tie must produce.
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    without_e5 = [r for r in rows if r.model != "intfloat/e5-base-v2"]
+
+    verdicts = harness._multiplicity(without_e5)
+    sizes = {sum(1 for k in verdicts if k[:2] == fam) for fam in {k[:2] for k in verdicts}}
+    assert sizes == {len(harness.BENCHMARKS)}, (
+        "the size check must be blind to this, or the new guard proves nothing"
+    )
+
+    with pytest.raises(ValueError, match="must cover every one of them"):
+        harness.render_report(without_e5)
+
+
+def test_holm_matches_an_independently_written_step_down_and_pins_its_thresholds() -> None:
+    """The oracle must not be built from the code it is checking.
+
+    The first version of this test defined its comparison walk on top of
+    `_holm_steps`, so a wrong multiplier or a reversed sort would have corrupted
+    both sides identically and the assertion would still have passed. The oracle
+    below sorts and computes `alpha / (m - i)` itself, and the multipliers are
+    pinned separately -- that is what makes the denominator observable.
+
+    (Note the *equivalence* itself is not in doubt: the adjusted-p form and the
+    threshold form agree for every input, ties included. The value here is that
+    an independent implementation of Holm reproduces this one, not that a tie
+    behaves.)
+    """
+    assert [step.multiplier for step in harness._holm_steps({"a": 0.1, "b": 0.2, "c": 0.3})] == [
+        3,
+        2,
+        1,
+    ]
+    assert [step.key for step in harness._holm_steps({"b": 0.2, "a": 0.1})] == ["a", "b"]
+
+    def independent_holm(p_values: dict[str, float], alpha: float = harness.ALPHA) -> set[str]:
+        ordered = sorted(p_values.items(), key=lambda item: item[1])
+        total = len(ordered)
+        out: set[str] = set()
+        for index, (key, p_value) in enumerate(ordered):
+            if p_value > alpha / (total - index):
+                break
+            out.add(key)
+        return out
+
+    # Ties: equal p-values must land together, never split.
     assert harness._holm({"a": 0.03, "b": 0.03, "c": 0.03}) == set()
-    # Tied at a p every threshold admits: all three, never a prefix of them.
     assert harness._holm({"a": 0.001, "b": 0.001, "c": 0.001}) == {"a", "b", "c"}
-    # Order of insertion must not matter.
     assert harness._holm({"c": 0.001, "a": 0.04, "b": 0.001}) == harness._holm(
         {"a": 0.04, "b": 0.001, "c": 0.001}
     )
-
-    def step_down(p_values: dict[str, float]) -> set[str]:
-        out: set[str] = set()
-        for step in harness._holm_steps(p_values):
-            if step.p_value > step.threshold:
-                break
-            out.add(step.key)
-        return out
+    for case in (
+        {"a": 0.001, "b": 0.03, "c": 0.04},
+        {"a": 0.001, "b": 0.02, "c": 0.04},
+        {"a": 0.03, "b": 0.03, "c": 0.03},
+        {"a": 0.0125, "b": 0.05, "c": 1.0, "d": 1.0},
+    ):
+        assert harness._holm(case) == independent_holm(case), case
 
     rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
     families: dict[tuple[str, str], dict[str, float]] = {}
@@ -620,11 +661,8 @@ def test_holm_is_tie_safe_and_agrees_with_the_step_down_form_on_the_real_rows() 
         if p_value is not None:
             families.setdefault((row.model, row.arm), {})[row.benchmark] = p_value
     assert families
-    # The published verdicts are unchanged by the switch -- the fix removes an
-    # order dependence these rows happen not to trigger, and saying so is the
-    # difference between a verified claim and an assumed one.
     for key, family in families.items():
-        assert harness._holm(family) == step_down(family), key
+        assert harness._holm(family) == independent_holm(family), key
 
 
 def test_withdrawn_means_the_correction_took_something_away() -> None:

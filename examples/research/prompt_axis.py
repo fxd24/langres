@@ -1058,11 +1058,8 @@ def _cell_complete(
     string left the old cell looking complete, so the report kept measurements
     of the previous study under the new definition. A row whose ``revision`` or
     ``recipe_fingerprint`` is absent or different is not a hit -- unknown
-    provenance is treated as *not* matching, never as matching. (The committed
-    rows predate these fields, so ``--resume`` recomputes them rather than
-    asserting a provenance that was never recorded; the vectors come from the
-    embedding cache, so this costs little.) (Found by automated review on
-    PR #252.)
+    provenance is treated as *not* matching, never as matching. (Found by
+    automated review on PR #252.)
     """
     want = {(recipe.arm, k): _recipe_fingerprint(recipe) for recipe in recipes for k in k_values}
     have = {
@@ -1209,10 +1206,14 @@ def _holm_steps(p_values: dict[str, float], alpha: float = ALPHA) -> list[HolmSt
     """The family in Holm's step-down order, with each step's level.
 
     Holm sorts a family ascending and tests ``p(i)`` against
-    ``alpha / (m - i + 1)``. Both the verdicts and the resolution check need
-    those thresholds, and computing them twice would let the two drift into
-    disagreeing about which comparison was tested against what -- so they are
-    produced once, here.
+    ``alpha / (m - i + 1)``. Both the verdicts and the resolution check need to
+    agree on *which comparison was tested against what*, and deriving that order
+    twice would let the two drift -- so the order is produced once, here. (They
+    then read different fields of the same step: :func:`_holm` compares
+    ``multiplier * p`` against ``alpha`` and :func:`_resolution_limited` measures
+    distance to ``threshold``. Equivalent in exact arithmetic; the integer
+    multiplier is preferred where a boundary comparison could turn on float
+    round-off.)
     """
     ordered = sorted(p_values.items(), key=lambda item: item[1])
     total = len(ordered)
@@ -1227,15 +1228,22 @@ def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
 
     Implemented through Holm's **adjusted** p-values,
     ``p~(i) = max(p~(i-1), min(1, (m - i + 1) * p(i)))``, rejecting where
-    ``p~ <= alpha``. That is the same procedure as "walk the sorted family and
-    stop at the first p above its threshold" everywhere the p-values are
-    distinct, and it is **tie-safe** where they are not: the running maximum
-    gives equal p-values equal adjusted p-values, so tied comparisons are
-    rejected or retained together instead of according to how ``sorted`` happened
-    to break the tie. Ties are not hypothetical here -- a comparison that moved
-    no record's recall carries exactly ``p = 1``, and the resolution floor
-    ``2/(B+1)`` is attained exactly by every sufficiently strong effect, so both
-    ends of the range are atoms. (Found by automated review on PR #252.)
+    ``p~ <= alpha``.
+
+    **This is exactly equivalent to "walk the sorted family and stop at the first
+    p above its threshold" -- for every input, not merely for distinct
+    p-values.** Since ``alpha < 1``, ``min(1, mult * p) > alpha`` iff
+    ``mult * p > alpha``, so the running maximum first exceeds ``alpha`` at
+    precisely the index where the threshold form first fails. Ties were never at
+    risk under either form: the thresholds ``alpha / (m - i + 1)`` increase with
+    ``i``, so if the earlier (harder) member of a tie passes, the later one does
+    too, and if it fails the walk stops before reaching the later one. The
+    adjusted-p shape is kept because it makes that behaviour *visible* -- tied
+    comparisons carry equal adjusted p by construction -- rather than leaving it
+    resting on the monotonicity of a threshold sequence a reader has to notice.
+    Ties are common here: ``p = 1`` for a comparison that moved no record's
+    recall, and the floor ``2/(B+1)`` for every sufficiently strong effect, so
+    both ends of the range are atoms.
 
     Holm is uniformly at least as powerful as Bonferroni and needs no
     independence assumption. On where the dependence actually lives, see the
@@ -1512,33 +1520,61 @@ def render_report(rows: Sequence[Row]) -> str:
         "exactly, which is what makes it legitimate to read at the `α/m` levels Holm "
         "tests at. (The converse can fail inside a band of `4/(B+1)` -- "
         f"{4 / ((samples or 20000) + 1):.0e} here -- because the interval interpolates "
-        "between order statistics across the block of replicates equal to zero. The "
+        "between order statistics near the block of replicates equal to zero. The "
         "p-value is the conservative side of that band, and the band is narrower than "
-        "one Monte-Carlo standard error at every attainable p.) "
+        "the **3** Monte-Carlo standard errors the resolution check below already "
+        "flags at -- so it cannot reach a verdict that check has not named. One "
+        "standard error would *not* suffice: at the smallest attainable p-values it "
+        "is smaller than the band, which an earlier version of this sentence claimed "
+        "otherwise.) "
         "(An earlier version recovered p by turning an interval endpoint into a "
         "standard error and assuming normality. That is pinned to agree at 0.95 and "
         "uncalibrated everywhere else -- including at every level Holm actually uses. "
         "Found by automated review on PR #252.)"
     )
     add("")
+    observed_families = {key[:2] for key in verdicts}
     sizes = sorted(
-        {sum(1 for key in verdicts if key[:2] == family) for family in {k[:2] for k in verdicts}}
+        {sum(1 for key in verdicts if key[:2] == family) for family in observed_families}
     )
+    # The paragraph below *claims* the family size is fixed by the design. Nothing made
+    # that true: both the sizes AND the set of families are counted from the verdicts,
+    # so a lost comparison shrinks its family and a wholly lost family simply vanishes
+    # -- and the sentence then reports the survivors' shape as if it were the design.
+    # An expectation regenerated from the thing that broke cannot detect it breaking, so
+    # both halves are checked against the DECLARATION, which is upstream of any
+    # measurement: `BENCHMARKS` for the width, `MODELS` for which families must exist.
+    # An empty set is a different condition (nothing comparable was measured at all,
+    # e.g. a single-arm smoke render) and is not this guard's business.
     if sizes and sizes != [len(BENCHMARKS)]:
-        # The paragraph below *claims* the family size is fixed by the design. Nothing
-        # made that true: the size is counted from the verdicts, so a comparison that
-        # failed to produce a p-value would quietly shrink its family and the sentence
-        # would report the shrunken number as the design. An expectation regenerated
-        # from the thing that broke cannot detect it breaking -- so the declared
-        # benchmark count, which is upstream of any measurement, is the expectation.
-        # An EMPTY set is a different condition (nothing comparable was measured at
-        # all, e.g. a single-arm smoke render) and is not this guard's business.
         raise ValueError(
             f"refusing to render: every Holm family must span all {len(BENCHMARKS)} "
             f"declared benchmarks ({', '.join(BENCHMARKS)}), but the observed family "
             f"sizes are {sizes}. A family that lost a benchmark is corrected against a "
             "smaller denominator than the design -- the data-dependent family size this "
             "section says it avoids. Re-measure the missing cells. Nothing was written."
+        )
+    declared_families = {
+        (spec.name, recipe.arm)
+        for spec in MODELS
+        for recipe in spec.recipes
+        if recipe.arm != "none"
+    }
+    if observed_families and observed_families != declared_families:
+        # Reachable through the documented CLI: `--models <one model>` against a fresh
+        # rows file leaves every surviving family the full four benchmarks wide, so the
+        # size check reads clean -- while "Where each prompt came from" and "The arms"
+        # above still describe all of `MODELS`. That is the caption-and-measurement
+        # drift this whole guard family exists to prevent, one level up from where it
+        # was being checked. (Found by review of the round-6 fixes.)
+        missing = sorted(declared_families - observed_families)
+        extra = sorted(observed_families - declared_families)
+        raise ValueError(
+            "refusing to render: the report describes every arm in MODELS, so the "
+            "results must cover every one of them. "
+            f"Missing from the rows: {missing or 'none'}. Not declared: {extra or 'none'}. "
+            "Render from a complete sweep, or narrow MODELS to match what was measured. "
+            "Nothing was written."
         )
     thresholds = (
         " / ".join(f"{ALPHA / (sizes[0] - i):.4g}" for i in range(sizes[0])) if sizes else "-"
