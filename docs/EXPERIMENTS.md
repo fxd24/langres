@@ -463,17 +463,32 @@ Full per-benchmark table, the caveats, and what deriving does *not* fix:
 > **"Then why not just ship a better constant?"** That question got its own
 > follow-up study, because the first one measured the *derived* cut and never a
 > shared replacement constant — so its medians were a prior, not a finding.
-> Sweeping a **fixed** constant per score family (same portfolio, corpus-disjoint
-> splits, leave-one-benchmark-out selection, pre-registered ship rule) landed
-> split: `sim_cos`'s shipped default moved `0.5` → **`0.90`**, while `heuristic`
+> Sweeping a **fixed** constant per score family (corpus-disjoint splits,
+> leave-one-benchmark-out selection, pre-registered ship rule) landed split:
+> `sim_cos`'s shipped default moved `0.5` → **`0.90`**, while `heuristic`
 > **kept `0.5`** — a better constant exists for it on the median, but it reliably
-> damages `abt_buy`, so the rule rejected it. The practical consequence is the
-> section you are reading: for string-similarity scores there is no free constant
-> that is *safe*. Note the honest scoreboard, though — deriving does **not**
-> simply dominate a constant: on that study's ladder the rejected constant scores
-> higher than the derived cut on 5 of 9 benchmarks. What deriving buys is the
-> case a constant cannot cover (it wins on `abt_buy`, the benchmark that vetoes
-> the constant), not a uniform improvement.
+> damages `abt_buy`, so the rule rejected it. Note the portfolio is the
+> **expanded** one: that follow-up runs 60 cells over 10 benchmarks, including
+> `febrl_dedup`, which landed after the 54-cell study above and is the registry's
+> only deduplication benchmark — a material scope difference, not a re-run.
+>
+> **Read the `heuristic` result precisely.** What was rejected is *the candidate
+> the median-F1 selector chose* (≈`0.74`). The sweep never searched for the best
+> constant **subject to** the safety clause, so it is not evidence that no safe
+> constant exists — review checked the committed artifact and found `t≈0.52`
+> (also `0.51`, `0.54`) satisfies the stated aggregate criteria post hoc. Those
+> are not grounds to ship anything: they were found by inspecting the artifact
+> rather than by a pre-registered safety-constrained selector, which is the
+> difference between a finding and a fishing expedition. But they do mean the
+> honest claim is "the selected candidate was not safe", not "no free constant
+> is safe".
+>
+> Note the honest scoreboard too — deriving does **not** simply dominate a
+> constant: on that study's ladder the rejected constant scores higher than the
+> derived cut on a majority of benchmarks (the exact count is generated beneath
+> that table). What deriving buys is the case a constant cannot cover (it wins on
+> `abt_buy`, the benchmark that vetoes the constant), not a uniform
+> improvement.
 > [`docs/research/20260728_threshold_constant.md`](research/20260728_threshold_constant.md).
 
 > **Do not trust the report's held-out numbers on a *dense* label set.** That

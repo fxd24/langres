@@ -44,6 +44,8 @@ from examples.research.threshold_constant_sweep import (
     dedupe_scores,
     lobo_constants,
     main,
+    read_report,
+    run_benchmark_isolated,
     to_transfer_markdown,
     to_verdict_markdown,
     write_report,
@@ -529,3 +531,142 @@ class TestSourceFingerprintDistinguishesDirtyStates:
 
         monkeypatch.setattr("examples.research.threshold_constant_sweep.subprocess.run", fake_run)
         assert _source_fingerprint().endswith("/abc1234")
+
+
+class TestAdoptingAWorkerArtifactChecksTheWholeInvocation:
+    """A matching CODE fingerprint is not a matching INVOCATION.
+
+    An artifact that survives a parent crash may have been measured with
+    different ``--resamples``, a different ``--embedder``, or a different
+    method/seed matrix. Adopting on the fingerprint alone republishes those
+    measurements under the new run's header -- and if the cell COUNT happens to
+    agree, the final length check waves it through. Found in review.
+    """
+
+    @staticmethod
+    def _args(**over: Any) -> argparse.Namespace:
+        base = {"methods": ["rapidfuzz"], "seeds": [0], "resamples": 1000, "embedder": None}
+        return argparse.Namespace(**{**base, **over})
+
+    def _write(self, tmp_path: Any, **over: Any) -> Any:
+        scratch = tmp_path / "sweep.json.partial"
+        cell = _cell("abt_buy").model_copy(
+            update={"method": "rapidfuzz", "seed": 0, "embedder": over.pop("embedder", None)}
+        )
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=over.pop("resamples", 1000),
+                source_fingerprint=over.pop("fingerprint", _source_fingerprint()),
+                cells=[cell],
+            ),
+            scratch.with_name(f"{scratch.name}.abt_buy.json"),
+        )
+        return scratch
+
+    def test_a_matching_artifact_is_adopted_without_relaunching(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The negative control: without this the rejection tests prove nothing."""
+        scratch = self._write(tmp_path)
+        # BEFORE patching subprocess.run -- _source_fingerprint shells out to git.
+        fingerprint = _source_fingerprint()
+
+        def boom(*_a: Any, **_k: Any) -> Any:
+            raise AssertionError("should have adopted, not relaunched a worker")
+
+        monkeypatch.setattr("examples.research.threshold_constant_sweep.subprocess.run", boom)
+        cells = run_benchmark_isolated("abt_buy", self._args(), scratch, fingerprint)
+        assert [c.benchmark for c in cells] == ["abt_buy"]
+
+    @pytest.mark.parametrize(
+        ("artifact_over", "args_over"),
+        [
+            ({"resamples": 250}, {}),
+            ({"embedder": "intfloat/e5-base-v2"}, {}),
+            ({}, {"seeds": [0, 1]}),
+            ({}, {"methods": ["embedding_cosine"]}),
+            ({"fingerprint": "deadbeef/oldrev"}, {}),
+        ],
+        ids=["resamples", "embedder", "seed-set", "method-set", "source"],
+    )
+    def test_a_mismatched_artifact_is_not_adopted(
+        self,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        artifact_over: dict[str, Any],
+        args_over: dict[str, Any],
+    ) -> None:
+        scratch = self._write(tmp_path, **artifact_over)
+        fingerprint = _source_fingerprint()  # before the patch below
+        relaunched: list[bool] = []
+
+        def fake_run(*_a: Any, **_k: Any) -> Any:
+            relaunched.append(True)
+            return subprocess.CompletedProcess([], 1)
+
+        monkeypatch.setattr("examples.research.threshold_constant_sweep.subprocess.run", fake_run)
+        with pytest.raises(RuntimeError):
+            run_benchmark_isolated("abt_buy", self._args(**args_over), scratch, fingerprint)
+        assert relaunched, "a mismatched artifact must be re-measured, not adopted"
+
+
+class TestAFailedRetryDoesNotDestroyDurableCells:
+    """Old cells must survive a worker that fails.
+
+    They used to be filtered out of the in-memory list BEFORE the replacement
+    worker ran. When it failed, the handler continued with the filtered list and
+    the NEXT benchmark's checkpoint() wrote that loss to disk permanently -- the
+    data-destruction shape a sibling PR shipped twice. Found in review.
+    """
+
+    def test_a_failing_benchmark_keeps_its_previous_cells(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "sweep.json"
+        scratch = out.with_name(out.name + ".partial")
+        old = _cell("abt_buy").model_copy(update={"method": "rapidfuzz", "seed": 0})
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=1000,
+                source_fingerprint=_source_fingerprint(),
+                cells=[old],
+            ),
+            scratch,
+        )
+
+        def fake_isolated(name: str, *_a: Any, **_k: Any) -> list[CellResult]:
+            if name == "abt_buy":
+                raise RuntimeError("worker died")
+            return [_cell(name).model_copy(update={"method": "rapidfuzz", "seed": 0})]
+
+        monkeypatch.setattr(
+            "examples.research.threshold_constant_sweep.run_benchmark_isolated", fake_isolated
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "threshold_constant_sweep.py",
+                "--out",
+                str(out),
+                "--resume",
+                "--methods",
+                "rapidfuzz",
+                "--seeds",
+                "0",
+                "1",
+                "--only",
+                "abt_buy",
+                "dblp_acm",
+                "--no-tables",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            main()
+        # dblp_acm succeeded and checkpointed AFTER abt_buy failed; abt_buy's
+        # original cell must still be on disk.
+        survivors = {(c.benchmark, c.method, c.seed) for c in read_report(scratch).cells}
+        assert ("abt_buy", "rapidfuzz", 0) in survivors

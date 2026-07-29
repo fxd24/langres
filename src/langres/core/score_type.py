@@ -81,9 +81,10 @@ ConfidenceSource: TypeAlias = Literal[
 #:    pre-registered ship rule rejects it. The honest guidance for this family is
 #:    to derive the cut from labels
 #:    (``langres.training.calibration.derive_threshold``) — **not** because
-#:    deriving beats any constant everywhere (measured: it does not; the rejected
-#:    constant actually scores higher on 5 of 9 benchmarks) but because deriving
-#:    is what rescues the case a constant cannot. On ``abt_buy`` — the very
+#:    deriving beats any constant everywhere (measured: it does not — the
+#:    rejected constant scores higher on a majority of benchmarks; the exact
+#:    count is generated under the study's ladder table) but because deriving is
+#:    what rescues the case a constant cannot. On ``abt_buy`` — the very
 #:    benchmark that vetoes the constant — the derived cut beats both the
 #:    constant and ``0.5``.
 #: 3. **Not measured — status quo, not a finding.** ``prob_llm`` /

@@ -375,6 +375,8 @@ three:
 | `sim_cos` | walmart_amazon | 0.0025 | 0.0530 | 0.0330 | 0.0728 |
 | `sim_cos` | wdc_computers | 0.0130 | 0.0586 | 0.0457 | 0.0792 |
 
+Constant vs. labels, counted from the rows above: for `heuristic` the LOBO constant scores higher than the derived cut on **5 of 9** benchmarks; for `sim_cos` the LOBO constant scores higher than the derived cut on **5 of 9** benchmarks. Neither approach dominates.
+
 Seed-mean per benchmark, never pooled across benchmarks. `F1@derived` is what a user **with full labels** gets (PR #250's seam); `F1@LOBO` is what a user with **no labels at all** would get from a shipped constant.
 
 ## 7. Does a `sim_cos` constant even mean anything? (the checkpoint test)
@@ -485,13 +487,20 @@ Pre-registered rule: **transfers iff, on the variant checkpoint, (1) no benchmar
 The two runs agree on the finding that matters and disagree on the number, and
 both halves are load-bearing:
 
-- **They agree that `0.5` is the wrong order of magnitude for a cosine.** On
-  *both* checkpoints, `0.5` is beaten on every eligible benchmark, and on most of
-  them it leaves F1 in the low hundredths. (Not *all* of them, and an earlier
-  draft said "every" — review checked it against the tables above: `dblp_acm`
-  sits near 0.22 at the old cut, and the 12-record `tiny_fixture` at 0.50. The
-  direction is unanimous; the magnitude is not.) Whatever the right constant is,
-  it is nowhere near `0.5`.
+- **They agree that `0.5` is never the better choice for a cosine.** On *both*
+  checkpoints `0.90` is **never worse** than `0.5`, and on the pinned checkpoint
+  it is dramatically better. Two drafts of this sentence overclaimed and review
+  caught both, so it is worth stating exactly what the tables show:
+  - It is not "beaten on every eligible benchmark". On the e5 run, `F1@0.90`
+    **exactly equals** `F1@0.50` for every seed of `dblp_acm`, `fodors_zagat`,
+    `walmart_amazon` and `wdc_computers` — those are **ties, not wins**, because
+    on that encoder almost every candidate pair already sits above `0.90`, so the
+    cut selects the same set.
+  - Nor does `0.5` always leave F1 "in the low hundredths": `dblp_acm` sits near
+    0.22 there and the 12-record `tiny_fixture` at 0.50.
+
+  What survives both corrections is the claim the decision actually rests on:
+  never worse anywhere, and enormously better where the cut bites.
 - **They disagree about how high.** Each checkpoint's own leave-one-out
   selection is internally rock-solid — and they land in different places. That is
   not noise between two unstable estimates; it is two stable estimates of two
@@ -587,9 +596,10 @@ the honest guidance for it is unchanged: **derive the cut from labels** (PR
 
 **But read the ladder in §6 carefully before concluding that labels simply
 dominate — they do not, and an earlier draft of this sentence said they did.**
-Compare its `F1@LOBO` and `F1@derived` columns: the *rejected* constant scores
-**higher than the label-derived cut on 5 of the 9 benchmarks**, for both
-families. Neither approach dominates this portfolio. What makes deriving the
+Compare its `F1@LOBO` and `F1@derived` columns — and read the count generated
+directly beneath that table rather than one typed here, because the *rejected*
+constant scores higher than the label-derived cut on a **majority** of
+benchmarks, for both families. Neither approach dominates this portfolio. What makes deriving the
 right advice here is not that it wins on average — it is *where* it wins: on
 `abt_buy`, the single benchmark whose harm vetoes the constant, the derived cut
 beats both the constant and `0.5`. Labels buy you the case a constant cannot

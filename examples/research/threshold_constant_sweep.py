@@ -1033,22 +1033,45 @@ def to_ladder_markdown(report: SweepReport) -> str:
         "| family | benchmark | F1@0.50 | F1@LOBO | F1@derived (labels) | oracle F1 |",
         "|" + "---|" * 6,
     ]
+    # Counted here rather than in prose. The write-up's interpretation leans on
+    # "the constant beats the derived cut on N of M benchmarks", and a
+    # hand-typed N is exactly the drift this file's generated tables exist to
+    # prevent -- review pointed out the guarantee was being broken by the
+    # sentence explaining it.
+    scoreboard: dict[str, tuple[int, int]] = {}
     for family in sorted({c.score_family for c in report.cells}):
         family_cells = [c for c in report.cells if c.score_family == family]
         constants = lobo_constants(family_cells)
+        constant_wins = 0
+        graded = 0
         for benchmark in sorted({c.benchmark for c in family_cells}):
             rows = [c for c in family_cells if c.benchmark == benchmark]
             constant = constants.get(benchmark)
             if constant is None:
                 continue
             index = GRID.index(constant)
+            at_lobo = statistics.mean(c.f1_blocked[index] for c in rows)
+            at_derived = statistics.mean(c.derived_f1_blocked for c in rows)
+            graded += 1
+            constant_wins += at_lobo > at_derived
             lines.append(
                 f"| `{family}` | {benchmark} | "
                 f"{statistics.mean(c.shipped_f1_blocked for c in rows):.4f} | "
-                f"{statistics.mean(c.f1_blocked[index] for c in rows):.4f} | "
-                f"{statistics.mean(c.derived_f1_blocked for c in rows):.4f} | "
+                f"{at_lobo:.4f} | "
+                f"{at_derived:.4f} | "
                 f"{statistics.mean(c.oracle_f1_blocked for c in rows):.4f} |"
             )
+        scoreboard[family] = (constant_wins, graded)
+    lines.append("")
+    lines.append(
+        "Constant vs. labels, counted from the rows above: "
+        + "; ".join(
+            f"for `{family}` the LOBO constant scores higher than the derived cut on "
+            f"**{wins} of {graded}** benchmarks"
+            for family, (wins, graded) in sorted(scoreboard.items())
+        )
+        + ". Neither approach dominates."
+    )
     lines.append("")
     lines.append(
         "Seed-mean per benchmark, never pooled across benchmarks. `F1@derived` is what "
@@ -1361,12 +1384,30 @@ def run_benchmark_isolated(
     # caught that the two halves of that fix contradicted each other).
     if worker_out.exists():
         adopted = read_report(worker_out)
-        if adopted.source_fingerprint == fingerprint:
+        # Matching CODE is not matching INVOCATION. An artifact that survived a
+        # parent crash may have been measured with different --resamples, a
+        # different --embedder, or a different method/seed matrix; adopting it on
+        # the fingerprint alone republishes those measurements under this run's
+        # header, and if the cell COUNT happens to agree the final length check
+        # waves it through (raised in review). Every field the header will claim
+        # is checked here.
+        wanted = {(name, m, s) for m in args.methods for s in args.seeds}
+        found = {(c.benchmark, c.method, c.seed) for c in adopted.cells}
+        stale_embedder = sorted({c.embedder for c in adopted.cells if c.embedder != args.embedder})
+        reasons = []
+        if adopted.source_fingerprint != fingerprint:
+            reasons.append(f"source {adopted.source_fingerprint!r} != {fingerprint!r}")
+        if adopted.bootstrap_resamples != args.resamples:
+            reasons.append(f"--resamples {adopted.bootstrap_resamples} != {args.resamples}")
+        if stale_embedder:
+            reasons.append(f"embedder {stale_embedder} != {args.embedder!r}")
+        if found != wanted:
+            reasons.append(f"cells {sorted(found)} != {sorted(wanted)}")
+        if not reasons:
             print(f"[adopt] {name}: reusing the completed worker artifact", flush=True)
             return adopted.cells
         print(
-            f"[stale] {name}: worker artifact is from source "
-            f"{adopted.source_fingerprint!r}, not {fingerprint!r} -- re-measuring",
+            f"[stale] {name}: worker artifact rejected ({'; '.join(reasons)}) -- re-measuring",
             flush=True,
         )
         worker_out.unlink()
@@ -1596,14 +1637,20 @@ def main() -> None:
         where = "in-process" if args.in_process else "subprocess"
         print(f"[benchmark] {name} ({where}): {' '.join(args.methods)} ($0 spend)", flush=True)
         try:
+            # DO NOT drop this benchmark's existing cells up front. They are
+            # durable data, and dropping them before the replacement exists means
+            # a worker that then fails leaves the filtered list in memory -- the
+            # `except` below continues, and the NEXT benchmark's checkpoint()
+            # writes that loss to disk permanently. Old cells are swapped out only
+            # once replacements are in hand (raised in review).
+            kept = [c for c in cells if c.benchmark != name]
             if args.in_process:
-                # Same benchmark-granular resume as the subprocess path below:
-                # drop any cells this benchmark already contributed before
-                # re-measuring it. Without this an interrupted --in-process run
-                # APPENDS a second copy of every finished cell on resume, so
-                # identities duplicate, len(cells) overshoots expected_cells, and
-                # each further resume adds more (found in review).
-                cells = [c for c in cells if c.benchmark != name]
+                # Per-cell checkpointing is load-bearing here: an --in-process run
+                # IS the worker, so this loop is what writes `<worker_out>.partial`
+                # for the parent's resume. So it swaps incrementally rather than at
+                # the end -- `kept + fresh` each time, which keeps progress durable
+                # and cannot duplicate identities the way plain `.append` did.
+                fresh: list[CellResult] = []
                 for cell in run_benchmark(
                     name,
                     methods=tuple(args.methods),
@@ -1611,13 +1658,15 @@ def main() -> None:
                     resamples=args.resamples,
                     embedder=args.embedder,
                 ):
-                    cells.append(cell)
+                    fresh.append(cell)
+                    cells = kept + fresh
                     checkpoint()
             else:
-                # A partially-done benchmark is re-measured whole: the worker owns
-                # a benchmark, not a cell, so resume granularity IS the benchmark.
-                cells = [c for c in cells if c.benchmark != name]
-                cells.extend(run_benchmark_isolated(name, args, scratch, fingerprint))
+                # The worker is atomic from here, so the swap is too: measure
+                # first, and only then replace the slice. A raise leaves `cells`
+                # exactly as it was.
+                measured = run_benchmark_isolated(name, args, scratch, fingerprint)
+                cells = kept + measured
                 checkpoint()
                 # Only NOW is the worker's artifact redundant: its cells are in
                 # the parent checkpoint on disk. Unlinking it any earlier opens a
