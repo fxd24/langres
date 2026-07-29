@@ -60,17 +60,17 @@ Control: not instruction-trained, ships no prompts.
 | benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | Holm | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 4880 |
-| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0 | 0.2486 | 0.7514 | 0.459 | 5294 |
-| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.2486 | 0.2486 | 1.0000 | 0.524 | 4936 |
+| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0.2486 | 0.7514 | 0.459 | 5294 |
+| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.2486 | 0.2486 | 1.0000 | 0.524 | 4936 |
 | abt_buy | `none` | baseline | 0.9349 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 11204 |
-| abt_buy | `er_query_only` | trap | 0.9320 | -0.0029 | [-0.0128, +0.0073] (spans 0) | - | 0 | 0.25 | 0.7500 | 0.542 | 13352 |
-| abt_buy | `er_symmetric` | ours | 0.8688 | -0.0667 | [-0.0839, -0.0505] ** | **holds** | 0.25 | 0.25 | 1.0000 | 0.558 | 9436 |
+| abt_buy | `er_query_only` | trap | 0.9320 | -0.0029 | [-0.0128, +0.0069] (spans 0) | - | 0 | 0.25 | 0.7500 | 0.542 | 13352 |
+| abt_buy | `er_symmetric` | ours | 0.8688 | -0.0667 | [-0.0837, -0.0506] ** | **holds** | 0.25 | 0.25 | 1.0000 | 0.558 | 9436 |
 | amazon_google | `none` | baseline | 0.8266 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 23024 |
-| amazon_google | `er_query_only` | trap | 0.8165 | -0.0122 | [-0.0205, -0.0043] ** | **holds** | 0 | 0.3825 | 0.6175 | 0.345 | 25990 |
-| amazon_google | `er_symmetric` | ours | 0.8273 | 0.0001 | [-0.0044, +0.0048] (spans 0) | - | 0.3825 | 0.3825 | 1.0000 | 0.461 | 24310 |
+| amazon_google | `er_query_only` | trap | 0.8165 | -0.0122 | [-0.0210, -0.0042] ** | **holds** | 0 | 0.3825 | 0.6175 | 0.345 | 25990 |
+| amazon_google | `er_symmetric` | ours | 0.8273 | 0.0001 | [-0.0046, +0.0047] (spans 0) | - | 0.3825 | 0.3825 | 1.0000 | 0.461 | 24310 |
 | wdc_computers | `none` | baseline | 0.5770 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 32369 |
-| wdc_computers | `er_query_only` | trap | 0.5698 | -0.0079 | [-0.0299, +0.0121] (spans 0) | - | 0 | 0.3584 | 0.6416 | 0.507 | 36491 |
-| wdc_computers | `er_symmetric` | ours | 0.5176 | -0.0632 | [-0.0830, -0.0440] ** | **holds** | 0.3584 | 0.3584 | 1.0000 | 0.649 | 32814 |
+| wdc_computers | `er_query_only` | trap | 0.5698 | -0.0079 | [-0.0293, +0.0135] (spans 0) | - | 0 | 0.3584 | 0.6416 | 0.507 | 36491 |
+| wdc_computers | `er_symmetric` | ours | 0.5176 | -0.0632 | [-0.0835, -0.0433] ** | **holds** | 0.3584 | 0.3584 | 1.0000 | 0.649 | 32814 |
 
 ### `BAAI/bge-base-en-v1.5`
 
@@ -79,25 +79,25 @@ Control: not instruction-trained, ships no prompts.
 | benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | Holm | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 4505 |
-| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0 | 0.1969 | 0.8031 | 0.438 | 5415 |
-| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.1969 | 0.1969 | 1.0000 | 0.465 | 4926 |
-| fodors_zagat | `official_query_instruction` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0 | 0.06272 | 0.9373 | 0.663 | 4630 |
-| fodors_zagat | `official_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.06272 | 0.06272 | 1.0000 | 0.572 | 4704 |
+| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0.1969 | 0.8031 | 0.438 | 5415 |
+| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.1969 | 0.1969 | 1.0000 | 0.465 | 4926 |
+| fodors_zagat | `official_query_instruction` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0.06272 | 0.9373 | 0.663 | 4630 |
+| fodors_zagat | `official_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.06272 | 0.06272 | 1.0000 | 0.572 | 4704 |
 | abt_buy | `none` | baseline | 0.9713 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 10241 |
-| abt_buy | `er_query_only` | trap | 0.9636 | -0.0078 | [-0.0147, -0.0024] ** | **holds** | 0 | 0.1791 | 0.8209 | 0.518 | 13212 |
-| abt_buy | `er_symmetric` | ours | 0.9349 | -0.0368 | [-0.0505, -0.0235] ** | **holds** | 0.1791 | 0.1791 | 1.0000 | 0.503 | 10994 |
+| abt_buy | `er_query_only` | trap | 0.9636 | -0.0078 | [-0.0143, -0.0020] ** | **holds** | 0 | 0.1791 | 0.8209 | 0.518 | 13212 |
+| abt_buy | `er_symmetric` | ours | 0.9349 | -0.0368 | [-0.0501, -0.0236] ** | **holds** | 0.1791 | 0.1791 | 1.0000 | 0.503 | 10994 |
 | abt_buy | `official_query_instruction` | documented | 0.9808 | 0.0093 | [+0.0039, +0.0157] ** | **holds** | 0 | 0.06691 | 0.9331 | 0.665 | 12329 |
-| abt_buy | `official_symmetric` | ours | 0.9780 | 0.0064 | [+0.0010, +0.0122] ** | **holds** | 0.06691 | 0.06691 | 1.0000 | 0.659 | 11411 |
+| abt_buy | `official_symmetric` | ours | 0.9780 | 0.0064 | [+0.0010, +0.0122] ** | withdrawn | 0.06691 | 0.06691 | 1.0000 | 0.659 | 11411 |
 | amazon_google | `none` | baseline | 0.8317 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 22960 |
-| amazon_google | `er_query_only` | trap | 0.8079 | -0.0233 | [-0.0332, -0.0139] ** | **holds** | 0 | 0.2519 | 0.7481 | 0.258 | 26283 |
-| amazon_google | `er_symmetric` | ours | 0.8295 | -0.0020 | [-0.0073, +0.0032] (spans 0) | - | 0.2519 | 0.2519 | 1.0000 | 0.422 | 23606 |
-| amazon_google | `official_query_instruction` | documented | 0.8331 | 0.0021 | [-0.0016, +0.0062] (spans 0) | - | 0 | 0.1001 | 0.8999 | 0.567 | 22706 |
-| amazon_google | `official_symmetric` | ours | 0.8317 | 0.0002 | [-0.0037, +0.0042] (spans 0) | - | 0.1001 | 0.1001 | 1.0000 | 0.497 | 21913 |
+| amazon_google | `er_query_only` | trap | 0.8079 | -0.0233 | [-0.0330, -0.0138] ** | **holds** | 0 | 0.2519 | 0.7481 | 0.258 | 26283 |
+| amazon_google | `er_symmetric` | ours | 0.8295 | -0.0020 | [-0.0074, +0.0032] (spans 0) | - | 0.2519 | 0.2519 | 1.0000 | 0.422 | 23606 |
+| amazon_google | `official_query_instruction` | documented | 0.8331 | 0.0021 | [-0.0014, +0.0061] (spans 0) | - | 0 | 0.1001 | 0.8999 | 0.567 | 22706 |
+| amazon_google | `official_symmetric` | ours | 0.8317 | 0.0002 | [-0.0037, +0.0041] (spans 0) | - | 0.1001 | 0.1001 | 1.0000 | 0.497 | 21913 |
 | wdc_computers | `none` | baseline | 0.6103 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 32347 |
-| wdc_computers | `er_query_only` | trap | 0.6310 | 0.0250 | [+0.0037, +0.0513] ** | **holds** | 0 | 0.215 | 0.7850 | 0.501 | 36425 |
-| wdc_computers | `er_symmetric` | ours | 0.5356 | -0.0775 | [-0.0990, -0.0567] ** | **holds** | 0.215 | 0.215 | 1.0000 | 0.570 | 33125 |
-| wdc_computers | `official_query_instruction` | documented | 0.7201 | 0.1224 | [+0.1006, +0.1449] ** | **holds** | 0 | 0.07588 | 0.9241 | 0.673 | 32728 |
-| wdc_computers | `official_symmetric` | ours | 0.7129 | 0.1084 | [+0.0868, +0.1302] ** | **holds** | 0.07588 | 0.07588 | 1.0000 | 0.667 | 32205 |
+| wdc_computers | `er_query_only` | trap | 0.6310 | 0.0250 | [+0.0012, +0.0492] ** | withdrawn | 0 | 0.215 | 0.7850 | 0.501 | 36425 |
+| wdc_computers | `er_symmetric` | ours | 0.5356 | -0.0775 | [-0.0992, -0.0556] ** | **holds** | 0.215 | 0.215 | 1.0000 | 0.570 | 33125 |
+| wdc_computers | `official_query_instruction` | documented | 0.7201 | 0.1224 | [+0.1005, +0.1445] ** | **holds** | 0 | 0.07588 | 0.9241 | 0.673 | 32728 |
+| wdc_computers | `official_symmetric` | ours | 0.7129 | 0.1084 | [+0.0870, +0.1300] ** | **holds** | 0.07588 | 0.07588 | 1.0000 | 0.667 | 32205 |
 
 ### `intfloat/e5-base-v2`
 
@@ -106,25 +106,25 @@ Control: not instruction-trained, ships no prompts.
 | benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | Holm | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 4431 |
-| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0 | 0.07455 | 0.9254 | 0.542 | 5088 |
-| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.07455 | 0.07455 | 1.0000 | 0.590 | 4609 |
-| fodors_zagat | `official_asymmetric` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.01866 | 0.0226 | 0.9446 | 0.552 | 4887 |
-| fodors_zagat | `official_symmetric` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.0226 | 0.0226 | 1.0000 | 0.752 | 4470 |
+| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0.07455 | 0.9254 | 0.542 | 5088 |
+| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.07455 | 0.07455 | 1.0000 | 0.590 | 4609 |
+| fodors_zagat | `official_asymmetric` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.01866 | 0.0226 | 0.9446 | 0.552 | 4887 |
+| fodors_zagat | `official_symmetric` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.0226 | 0.0226 | 1.0000 | 0.752 | 4470 |
 | abt_buy | `none` | baseline | 0.9674 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 8799 |
 | abt_buy | `er_query_only` | trap | 0.9655 | -0.0020 | [-0.0049, +0.0000] (spans 0) | - | 0 | 0.08428 | 0.9157 | 0.642 | 10366 |
-| abt_buy | `er_symmetric` | ours | 0.9234 | -0.0436 | [-0.0564, -0.0314] ** | **holds** | 0.08428 | 0.08428 | 1.0000 | 0.626 | 8229 |
-| abt_buy | `official_asymmetric` | documented | 0.9741 | 0.0069 | [+0.0010, +0.0128] ** | withdrawn | 0.02394 | 0.0187 | 0.9483 | 0.615 | 11708 |
+| abt_buy | `er_symmetric` | ours | 0.9234 | -0.0436 | [-0.0564, -0.0318] ** | **holds** | 0.08428 | 0.08428 | 1.0000 | 0.626 | 8229 |
+| abt_buy | `official_asymmetric` | documented | 0.9741 | 0.0069 | [+0.0020, +0.0128] ** | withdrawn | 0.02394 | 0.0187 | 0.9483 | 0.615 | 11708 |
 | abt_buy | `official_symmetric` | documented | 0.9655 | -0.0020 | [-0.0059, +0.0020] (spans 0) | - | 0.0187 | 0.0187 | 1.0000 | 0.764 | 9489 |
 | amazon_google | `none` | baseline | 0.8324 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 21433 |
-| amazon_google | `er_query_only` | trap | 0.8324 | -0.0021 | [-0.0071, +0.0029] (spans 0) | - | 0 | 0.08845 | 0.9115 | 0.383 | 24210 |
+| amazon_google | `er_query_only` | trap | 0.8324 | -0.0021 | [-0.0072, +0.0028] (spans 0) | - | 0 | 0.08845 | 0.9115 | 0.383 | 24210 |
 | amazon_google | `er_symmetric` | ours | 0.8331 | 0.0005 | [-0.0023, +0.0032] (spans 0) | - | 0.08845 | 0.08845 | 1.0000 | 0.542 | 22488 |
-| amazon_google | `official_asymmetric` | documented | 0.8360 | 0.0020 | [-0.0012, +0.0056] (spans 0) | - | 0.03854 | 0.01111 | 0.9452 | 0.550 | 22415 |
-| amazon_google | `official_symmetric` | documented | 0.8295 | -0.0029 | [-0.0059, -0.0004] ** | withdrawn | 0.01111 | 0.01111 | 1.0000 | 0.760 | 21597 |
+| amazon_google | `official_asymmetric` | documented | 0.8360 | 0.0020 | [-0.0012, +0.0055] (spans 0) | - | 0.03854 | 0.01111 | 0.9452 | 0.550 | 22415 |
+| amazon_google | `official_symmetric` | documented | 0.8295 | -0.0029 | [-0.0061, -0.0003] ** | withdrawn | 0.01111 | 0.01111 | 1.0000 | 0.760 | 21597 |
 | wdc_computers | `none` | baseline | 0.7264 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 31840 |
-| wdc_computers | `er_query_only` | trap | 0.7183 | -0.0045 | [-0.0204, +0.0120] (spans 0) | - | 0 | 0.08624 | 0.9138 | 0.610 | 33875 |
-| wdc_computers | `er_symmetric` | ours | 0.6256 | -0.1038 | [-0.1238, -0.0815] ** | **holds** | 0.08624 | 0.08624 | 1.0000 | 0.670 | 32544 |
-| wdc_computers | `official_asymmetric` | documented | 0.7390 | 0.0152 | [+0.0000, +0.0310] (spans 0) | - | 0.02486 | 0.01444 | 0.9501 | 0.702 | 32141 |
-| wdc_computers | `official_symmetric` | documented | 0.7156 | -0.0145 | [-0.0274, -0.0023] ** | withdrawn | 0.01444 | 0.01444 | 1.0000 | 0.836 | 32029 |
+| wdc_computers | `er_query_only` | trap | 0.7183 | -0.0045 | [-0.0208, +0.0120] (spans 0) | - | 0 | 0.08624 | 0.9138 | 0.610 | 33875 |
+| wdc_computers | `er_symmetric` | ours | 0.6256 | -0.1038 | [-0.1245, -0.0840] ** | **holds** | 0.08624 | 0.08624 | 1.0000 | 0.670 | 32544 |
+| wdc_computers | `official_asymmetric` | documented | 0.7390 | 0.0152 | [-0.0004, +0.0308] (spans 0) | - | 0.02486 | 0.01444 | 0.9501 | 0.702 | 32141 |
+| wdc_computers | `official_symmetric` | documented | 0.7156 | -0.0145 | [-0.0274, -0.0021] ** | withdrawn | 0.01444 | 0.01444 | 1.0000 | 0.836 | 32029 |
 
 ### `google/embeddinggemma-300m`
 
@@ -135,33 +135,33 @@ Gated + use-restricted licence. Never the default recommendation.
 | benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | Holm | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 4161 |
-| fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.2381 | 0.2381 | 1.0000 | 0.401 | 4629 |
-| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0 | 0.2065 | 0.7935 | 0.542 | 4600 |
-| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.2065 | 0.2065 | 1.0000 | 0.475 | 4391 |
-| fodors_zagat | `official_clustering` | documented | 0.9375 | -0.0625 | [-0.1074, -0.0179] ** | **holds** | 0.3625 | 0.3625 | 1.0000 | 0.305 | 4470 |
-| fodors_zagat | `official_retrieval` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.08287 | 0.1564 | 0.8585 | 0.494 | 4501 |
-| fodors_zagat | `official_sts` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.2208 | 0.2208 | 1.0000 | 0.436 | 4362 |
+| fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.2381 | 0.2381 | 1.0000 | 0.401 | 4629 |
+| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0.2065 | 0.7935 | 0.542 | 4600 |
+| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.2065 | 0.2065 | 1.0000 | 0.475 | 4391 |
+| fodors_zagat | `official_clustering` | documented | 0.9375 | -0.0625 | [-0.1071, -0.0179] ** | **holds** | 0.3625 | 0.3625 | 1.0000 | 0.305 | 4470 |
+| fodors_zagat | `official_retrieval` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.08287 | 0.1564 | 0.8585 | 0.494 | 4501 |
+| fodors_zagat | `official_sts` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.2208 | 0.2208 | 1.0000 | 0.436 | 4362 |
 | abt_buy | `none` | baseline | 0.9741 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 9196 |
-| abt_buy | `er_in_official_template` | ours | 0.9559 | -0.0181 | [-0.0279, -0.0079] ** | **holds** | 0.2174 | 0.2174 | 1.0000 | 0.563 | 9817 |
+| abt_buy | `er_in_official_template` | ours | 0.9559 | -0.0181 | [-0.0279, -0.0089] ** | **holds** | 0.2174 | 0.2174 | 1.0000 | 0.563 | 9817 |
 | abt_buy | `er_query_only` | trap | 0.9751 | 0.0010 | [-0.0039, +0.0059] (spans 0) | - | 0 | 0.1478 | 0.8522 | 0.713 | 10211 |
 | abt_buy | `er_symmetric` | ours | 0.9665 | -0.0078 | [-0.0138, -0.0020] ** | **holds** | 0.1478 | 0.1478 | 1.0000 | 0.629 | 9052 |
-| abt_buy | `official_clustering` | documented | 0.9023 | -0.0721 | [-0.0874, -0.0564] ** | **holds** | 0.3584 | 0.3584 | 1.0000 | 0.468 | 10055 |
-| abt_buy | `official_retrieval` | documented | 0.9828 | 0.0088 | [+0.0039, +0.0157] ** | **holds** | 0.06653 | 0.1527 | 0.8283 | 0.590 | 12155 |
-| abt_buy | `official_sts` | documented | 0.9617 | -0.0127 | [-0.0216, -0.0039] ** | **holds** | 0.217 | 0.217 | 1.0000 | 0.569 | 10292 |
+| abt_buy | `official_clustering` | documented | 0.9023 | -0.0721 | [-0.0885, -0.0564] ** | **holds** | 0.3584 | 0.3584 | 1.0000 | 0.468 | 10055 |
+| abt_buy | `official_retrieval` | documented | 0.9828 | 0.0088 | [+0.0039, +0.0147] ** | **holds** | 0.06653 | 0.1527 | 0.8283 | 0.590 | 12155 |
+| abt_buy | `official_sts` | documented | 0.9617 | -0.0127 | [-0.0217, -0.0039] ** | **holds** | 0.217 | 0.217 | 1.0000 | 0.569 | 10292 |
 | amazon_google | `none` | baseline | 0.8014 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 21531 |
-| amazon_google | `er_in_official_template` | ours | 0.8237 | 0.0238 | [+0.0145, +0.0338] ** | **holds** | 0.2042 | 0.2042 | 1.0000 | 0.362 | 22589 |
-| amazon_google | `er_query_only` | trap | 0.8144 | 0.0136 | [+0.0031, +0.0233] ** | **holds** | 0 | 0.209 | 0.7910 | 0.477 | 22538 |
-| amazon_google | `er_symmetric` | ours | 0.8129 | 0.0118 | [+0.0046, +0.0196] ** | **holds** | 0.209 | 0.209 | 1.0000 | 0.465 | 22655 |
-| amazon_google | `official_clustering` | documented | 0.7871 | -0.0164 | [-0.0279, -0.0053] ** | **holds** | 0.2994 | 0.2994 | 1.0000 | 0.256 | 23475 |
-| amazon_google | `official_retrieval` | documented | 0.8367 | 0.0371 | [+0.0271, +0.0482] ** | **holds** | 0.09595 | 0.1442 | 0.8734 | 0.427 | 23038 |
-| amazon_google | `official_sts` | documented | 0.8223 | 0.0224 | [+0.0130, +0.0326] ** | **holds** | 0.2208 | 0.2208 | 1.0000 | 0.469 | 21627 |
+| amazon_google | `er_in_official_template` | ours | 0.8237 | 0.0238 | [+0.0139, +0.0341] ** | **holds** | 0.2042 | 0.2042 | 1.0000 | 0.362 | 22589 |
+| amazon_google | `er_query_only` | trap | 0.8144 | 0.0136 | [+0.0037, +0.0237] ** | **holds** | 0 | 0.209 | 0.7910 | 0.477 | 22538 |
+| amazon_google | `er_symmetric` | ours | 0.8129 | 0.0118 | [+0.0041, +0.0199] ** | **holds** | 0.209 | 0.209 | 1.0000 | 0.465 | 22655 |
+| amazon_google | `official_clustering` | documented | 0.7871 | -0.0164 | [-0.0281, -0.0050] ** | **holds** | 0.2994 | 0.2994 | 1.0000 | 0.256 | 23475 |
+| amazon_google | `official_retrieval` | documented | 0.8367 | 0.0371 | [+0.0268, +0.0483] ** | **holds** | 0.09595 | 0.1442 | 0.8734 | 0.427 | 23038 |
+| amazon_google | `official_sts` | documented | 0.8223 | 0.0224 | [+0.0131, +0.0321] ** | **holds** | 0.2208 | 0.2208 | 1.0000 | 0.469 | 21627 |
 | wdc_computers | `none` | baseline | 0.7786 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0 | 0 | 1.0000 | 1.000 | 31540 |
-| wdc_computers | `er_in_official_template` | ours | 0.6229 | -0.1589 | [-0.1821, -0.1361] ** | **holds** | 0.2239 | 0.2239 | 1.0000 | 0.537 | 32371 |
-| wdc_computers | `er_query_only` | trap | 0.7930 | 0.0172 | [+0.0064, +0.0300] ** | **holds** | 0 | 0.1646 | 0.8354 | 0.724 | 32232 |
-| wdc_computers | `er_symmetric` | ours | 0.7777 | 0.0004 | [-0.0131, +0.0149] (spans 0) | - | 0.1646 | 0.1646 | 1.0000 | 0.695 | 31525 |
-| wdc_computers | `official_clustering` | documented | 0.4797 | -0.3183 | [-0.3492, -0.2899] ** | **holds** | 0.3611 | 0.3611 | 1.0000 | 0.432 | 32646 |
-| wdc_computers | `official_retrieval` | documented | 0.8128 | 0.0394 | [+0.0244, +0.0551] ** | **holds** | 0.07062 | 0.1424 | 0.8139 | 0.648 | 31945 |
-| wdc_computers | `official_sts` | documented | 0.7300 | -0.0410 | [-0.0584, -0.0249] ** | **holds** | 0.2295 | 0.2295 | 1.0000 | 0.627 | 31947 |
+| wdc_computers | `er_in_official_template` | ours | 0.6229 | -0.1589 | [-0.1826, -0.1357] ** | **holds** | 0.2239 | 0.2239 | 1.0000 | 0.537 | 32371 |
+| wdc_computers | `er_query_only` | trap | 0.7930 | 0.0172 | [+0.0059, +0.0291] ** | **holds** | 0 | 0.1646 | 0.8354 | 0.724 | 32232 |
+| wdc_computers | `er_symmetric` | ours | 0.7777 | 0.0004 | [-0.0136, +0.0143] (spans 0) | - | 0.1646 | 0.1646 | 1.0000 | 0.695 | 31525 |
+| wdc_computers | `official_clustering` | documented | 0.4797 | -0.3183 | [-0.3479, -0.2886] ** | **holds** | 0.3611 | 0.3611 | 1.0000 | 0.432 | 32646 |
+| wdc_computers | `official_retrieval` | documented | 0.8128 | 0.0394 | [+0.0242, +0.0550] ** | **holds** | 0.07062 | 0.1424 | 0.8139 | 0.648 | 31945 |
+| wdc_computers | `official_sts` | documented | 0.7300 | -0.0410 | [-0.0590, -0.0233] ** | **holds** | 0.2295 | 0.2295 | 1.0000 | 0.627 | 31947 |
 
 ### `Qwen/Qwen3-Embedding-0.6B`
 
@@ -170,80 +170,85 @@ Gated + use-restricted licence. Never the default recommendation.
 | benchmark | arm | kind | recall (micro) | Δ per-record (macro) | 95% CI | Holm | doc shift | query shift | doc·query | pair J | candidates |
 |---|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|
 | fodors_zagat | `none` | baseline | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0001261 | -0.0001261 | 1.0001 | 1.000 | 5385 |
-| fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | -0.0001261 | 0.0842 | 0.9158 | 0.604 | 5480 |
-| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | -0.0001261 | 0.09792 | 0.9021 | 0.619 | 5617 |
-| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | 0.09792 | 0.09792 | 1.0002 | 0.470 | 5445 |
-| fodors_zagat | `official_query_instruct` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | n/a | -0.0001261 | 0.06924 | 0.9308 | 0.627 | 5538 |
+| fodors_zagat | `er_in_official_template` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0001261 | 0.0842 | 0.9158 | 0.604 | 5480 |
+| fodors_zagat | `er_query_only` | trap | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0001261 | 0.09792 | 0.9021 | 0.619 | 5617 |
+| fodors_zagat | `er_symmetric` | ours | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | 0.09792 | 0.09792 | 1.0002 | 0.470 | 5445 |
+| fodors_zagat | `official_query_instruct` | documented | 1.0000 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0001261 | 0.06924 | 0.9308 | 0.627 | 5538 |
 | abt_buy | `none` | baseline | 0.9722 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0001779 | -0.0001779 | 1.0002 | 1.000 | 12803 |
-| abt_buy | `er_in_official_template` | ours | 0.9808 | 0.0088 | [+0.0029, +0.0147] ** | **holds** | -0.0001779 | 0.09127 | 0.9087 | 0.664 | 13256 |
+| abt_buy | `er_in_official_template` | ours | 0.9808 | 0.0088 | [+0.0039, +0.0147] ** | **holds** | -0.0001779 | 0.09127 | 0.9087 | 0.664 | 13256 |
 | abt_buy | `er_query_only` | trap | 0.9761 | 0.0039 | [+0.0000, +0.0088] (spans 0) | - | -0.0001779 | 0.05111 | 0.9489 | 0.757 | 12950 |
-| abt_buy | `er_symmetric` | ours | 0.9732 | 0.0010 | [-0.0020, +0.0040] (spans 0) | - | 0.05111 | 0.05111 | 1.0002 | 0.606 | 12387 |
-| abt_buy | `official_query_instruct` | documented | 0.9808 | 0.0088 | [+0.0029, +0.0147] ** | **holds** | -0.0001779 | 0.09255 | 0.9074 | 0.658 | 13254 |
+| abt_buy | `er_symmetric` | ours | 0.9732 | 0.0010 | [-0.0020, +0.0049] (spans 0) | - | 0.05111 | 0.05111 | 1.0002 | 0.606 | 12387 |
+| abt_buy | `official_query_instruct` | documented | 0.9808 | 0.0088 | [+0.0039, +0.0147] ** | **holds** | -0.0001779 | 0.09255 | 0.9074 | 0.658 | 13254 |
 | amazon_google | `none` | baseline | 0.8331 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0002207 | -0.0002207 | 1.0002 | 1.000 | 25583 |
-| amazon_google | `er_in_official_template` | ours | 0.8367 | 0.0044 | [+0.0012, +0.0088] ** | **holds** | -0.0002207 | 0.1437 | 0.8563 | 0.495 | 25173 |
-| amazon_google | `er_query_only` | trap | 0.8374 | 0.0039 | [+0.0000, +0.0085] (spans 0) | - | -0.0002207 | 0.09368 | 0.9063 | 0.526 | 27621 |
-| amazon_google | `er_symmetric` | ours | 0.8345 | 0.0005 | [-0.0049, +0.0057] (spans 0) | - | 0.09368 | 0.09368 | 1.0002 | 0.380 | 26448 |
-| amazon_google | `official_query_instruct` | documented | 0.8374 | 0.0040 | [-0.0002, +0.0084] (spans 0) | - | -0.0002207 | 0.1651 | 0.8349 | 0.470 | 25328 |
+| amazon_google | `er_in_official_template` | ours | 0.8367 | 0.0044 | [+0.0009, +0.0088] ** | **holds** | -0.0002207 | 0.1437 | 0.8563 | 0.495 | 25173 |
+| amazon_google | `er_query_only` | trap | 0.8374 | 0.0039 | [+0.0000, +0.0086] (spans 0) | - | -0.0002207 | 0.09368 | 0.9063 | 0.526 | 27621 |
+| amazon_google | `er_symmetric` | ours | 0.8345 | 0.0005 | [-0.0048, +0.0060] (spans 0) | - | 0.09368 | 0.09368 | 1.0002 | 0.380 | 26448 |
+| amazon_google | `official_query_instruct` | documented | 0.8374 | 0.0040 | [+0.0000, +0.0087] (spans 0) | - | -0.0002207 | 0.1651 | 0.8349 | 0.470 | 25328 |
 | wdc_computers | `none` | baseline | 0.7030 | 0.0000 | [+0.0000, +0.0000] (spans 0) | - | -0.0001887 | -0.0001887 | 1.0002 | 1.000 | 33020 |
-| wdc_computers | `er_in_official_template` | ours | 0.7426 | 0.0388 | [+0.0237, +0.0551] ** | **holds** | -0.0001887 | 0.09078 | 0.9092 | 0.650 | 32922 |
-| wdc_computers | `er_query_only` | trap | 0.7003 | -0.0045 | [-0.0230, +0.0143] (spans 0) | - | -0.0001887 | 0.08417 | 0.9158 | 0.614 | 35849 |
-| wdc_computers | `er_symmetric` | ours | 0.6238 | -0.0907 | [-0.1150, -0.0660] ** | **holds** | 0.08417 | 0.08417 | 1.0002 | 0.507 | 34541 |
-| wdc_computers | `official_query_instruct` | documented | 0.7660 | 0.0646 | [+0.0469, +0.0829] ** | **holds** | -0.0001887 | 0.1125 | 0.8875 | 0.586 | 33151 |
+| wdc_computers | `er_in_official_template` | ours | 0.7426 | 0.0388 | [+0.0229, +0.0550] ** | **holds** | -0.0001887 | 0.09078 | 0.9092 | 0.650 | 32922 |
+| wdc_computers | `er_query_only` | trap | 0.7003 | -0.0045 | [-0.0232, +0.0140] (spans 0) | - | -0.0001887 | 0.08417 | 0.9158 | 0.614 | 35849 |
+| wdc_computers | `er_symmetric` | ours | 0.6238 | -0.0907 | [-0.1150, -0.0668] ** | **holds** | 0.08417 | 0.08417 | 1.0002 | 0.507 | 34541 |
+| wdc_computers | `official_query_instruct` | documented | 0.7660 | 0.0646 | [+0.0459, +0.0836] ** | **holds** | -0.0001887 | 0.1125 | 0.8875 | 0.586 | 33151 |
 
 ## What survives correcting for multiplicity
 
-Every interval above is a separate 95% interval, and this sweep contains 80 of them. Read one at a time each controls its own error rate; read as a set -- which is how a claim like *"this recipe helps this checkpoint"* is actually read -- they do not. So each `(model, arm)` row of the tables above is treated as one **family** across benchmarks and corrected with **Holm's step-down** at family-wise α=0.05. Holm is uniformly at least as powerful as Bonferroni and assumes nothing about dependence, which matters because the arms of one model share a baseline and a corpus.
+Every interval above is a separate 95% interval, and this sweep contains 80 of them. Read one at a time each controls its own error rate; read as a set -- which is how a claim like *"this recipe helps this checkpoint"* is actually read -- they do not. So each `(model, arm)` row of the tables above is treated as one **family** across benchmarks and corrected with **Holm's step-down** at family-wise α=0.05. Holm is uniformly at least as powerful as Bonferroni and assumes nothing about dependence.
 
-**The p-values are approximate and the exact route was unavailable.** Holm needs p-values; the rows carry percentile intervals, and the bootstrap replicates were not retained. Each p is recovered by reading the interval as normal, scaling from the bound **facing zero** only -- the side that decides exclusion -- so no symmetry is assumed. Two properties follow by arithmetic rather than judgement: an interval that spans zero yields p>0.05, so correction can only remove claims and never add one; and a bound resting *exactly* on zero yields p=0.05 exactly, so it fails every Holm threshold in a family of more than one.
+**Where the dependence actually is.** Inside one family the comparisons sit on four *disjoint* benchmarks -- separate corpora, separate gold clusters -- so they are close to independent, and Holm's freedom from an independence assumption is not what carries them. The strong dependence is **across** families: every arm of a checkpoint is measured against the same `none` baseline over the same corpus. Holm controls the error rate *within* each family under any dependence and says nothing about the sweep as a whole -- which is exactly what the study-wide sensitivity check at the end of this section is for. (An earlier version of this paragraph cited the shared baseline as the reason Holm was needed, pointing at dependence that lives between families rather than in the one being corrected. Found by automated review on PR #252.)
 
-- **61** comparisons were testable; **19** were not -- the arm changed no record's recall on that benchmark, so the estimate and both bounds are exactly zero and the bootstrap has no support. They fall entirely on `fodors_zagat`, which every model already solves at recall 1.0000 with no prompt.
-- **4** testable comparisons rest a bound *exactly* on zero (`Qwen3-Embedding-0.6B`/`er_query_only`/abt_buy, `Qwen3-Embedding-0.6B`/`er_query_only`/amazon_google, `e5-base-v2`/`er_query_only`/abt_buy, `e5-base-v2`/`official_asymmetric`/wdc_computers). They read p=0.05, which fails every Holm threshold in a family of more than one, so none of them is counted as an effect -- and none was counted uncorrected either, since an interval closing on zero does not exclude it.
-- Read uncorrected, **40** intervals exclude zero. After Holm, **37** survive -- **3** are withdrawn.
+**The p-values come from the same bootstrap draw as the intervals**, as the *achieved significance level* -- `2 * min(P(diff* <= 0), P(diff* >= 0))` over the 20000 replicates, with the usual `(count+1)/(B+1)` correction. That is the percentile interval **inverted**: `p <= t` *implies* "the `1-t` percentile interval over this draw excludes zero" at every `t`, exactly, which is what makes it legitimate to read at the `α/m` levels Holm tests at. (The converse can fail inside a band of `4/(B+1)` -- 2e-04 here -- because the interval interpolates between order statistics across the block of replicates equal to zero. The p-value is the conservative side of that band, and the band is narrower than one Monte-Carlo standard error at every attainable p.) (An earlier version recovered p by turning an interval endpoint into a standard error and assuming normality. That is pinned to agree at 0.95 and uncalibrated everywhere else -- including at every level Holm actually uses. Found by automated review on PR #252.)
 
-| model | arm | benchmark | Δ per-record | 95% CI | approx p | Holm α=0.05 |
-|---|---|---|---:|---|---:|---|
-| `BAAI/bge-base-en-v1.5` | `er_query_only` | abt_buy | -0.0078 | [-0.0147, -0.0024] ** | 0.00452 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `er_query_only` | amazon_google | -0.0233 | [-0.0332, -0.0139] ** | 1.02e-06 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `er_query_only` | wdc_computers | 0.0250 | [+0.0037, +0.0513] ** | 0.0213 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `er_symmetric` | abt_buy | -0.0368 | [-0.0505, -0.0235] ** | 5.64e-08 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `er_symmetric` | wdc_computers | -0.0775 | [-0.0990, -0.0567] ** | 3e-13 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `official_query_instruction` | abt_buy | 0.0093 | [+0.0039, +0.0157] ** | 0.00072 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `official_query_instruction` | wdc_computers | 0.1224 | [+0.1006, +0.1449] ** | 3.44e-28 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `official_symmetric` | abt_buy | 0.0064 | [+0.0010, +0.0122] ** | 0.0205 | **holds** |
-| `BAAI/bge-base-en-v1.5` | `official_symmetric` | wdc_computers | 0.1084 | [+0.0868, +0.1302] ** | 1.04e-22 | **holds** |
-| `Qwen/Qwen3-Embedding-0.6B` | `er_in_official_template` | abt_buy | 0.0088 | [+0.0029, +0.0147] ** | 0.00324 | **holds** |
-| `Qwen/Qwen3-Embedding-0.6B` | `er_in_official_template` | amazon_google | 0.0044 | [+0.0012, +0.0088] ** | 0.00791 | **holds** |
-| `Qwen/Qwen3-Embedding-0.6B` | `er_in_official_template` | wdc_computers | 0.0388 | [+0.0237, +0.0551] ** | 4.93e-07 | **holds** |
-| `Qwen/Qwen3-Embedding-0.6B` | `er_symmetric` | wdc_computers | -0.0907 | [-0.1150, -0.0660] ** | 6.52e-13 | **holds** |
-| `Qwen/Qwen3-Embedding-0.6B` | `official_query_instruct` | abt_buy | 0.0088 | [+0.0029, +0.0147] ** | 0.00324 | **holds** |
-| `Qwen/Qwen3-Embedding-0.6B` | `official_query_instruct` | wdc_computers | 0.0646 | [+0.0469, +0.0829] ** | 8.33e-13 | **holds** |
-| `google/embeddinggemma-300m` | `er_in_official_template` | abt_buy | -0.0181 | [-0.0279, -0.0079] ** | 0.000546 | **holds** |
-| `google/embeddinggemma-300m` | `er_in_official_template` | amazon_google | 0.0238 | [+0.0145, +0.0338] ** | 5.08e-07 | **holds** |
-| `google/embeddinggemma-300m` | `er_in_official_template` | wdc_computers | -0.1589 | [-0.1821, -0.1361] ** | 1.08e-42 | **holds** |
-| `google/embeddinggemma-300m` | `er_query_only` | amazon_google | 0.0136 | [+0.0031, +0.0233] ** | 0.0108 | **holds** |
-| `google/embeddinggemma-300m` | `er_query_only` | wdc_computers | 0.0172 | [+0.0064, +0.0300] ** | 0.00171 | **holds** |
-| `google/embeddinggemma-300m` | `er_symmetric` | abt_buy | -0.0078 | [-0.0138, -0.0020] ** | 0.00897 | **holds** |
-| `google/embeddinggemma-300m` | `er_symmetric` | amazon_google | 0.0118 | [+0.0046, +0.0196] ** | 0.00129 | **holds** |
-| `google/embeddinggemma-300m` | `official_clustering` | abt_buy | -0.0721 | [-0.0874, -0.0564] ** | 1.65e-19 | **holds** |
-| `google/embeddinggemma-300m` | `official_clustering` | amazon_google | -0.0164 | [-0.0279, -0.0053] ** | 0.00384 | **holds** |
-| `google/embeddinggemma-300m` | `official_clustering` | fodors_zagat | -0.0625 | [-0.1074, -0.0179] ** | 0.00607 | **holds** |
-| `google/embeddinggemma-300m` | `official_clustering` | wdc_computers | -0.3183 | [-0.3492, -0.2899] ** | 6.34e-107 | **holds** |
-| `google/embeddinggemma-300m` | `official_retrieval` | abt_buy | 0.0088 | [+0.0039, +0.0157] ** | 0.000428 | **holds** |
-| `google/embeddinggemma-300m` | `official_retrieval` | amazon_google | 0.0371 | [+0.0271, +0.0482] ** | 3e-13 | **holds** |
-| `google/embeddinggemma-300m` | `official_retrieval` | wdc_computers | 0.0394 | [+0.0244, +0.0551] ** | 2.32e-07 | **holds** |
-| `google/embeddinggemma-300m` | `official_sts` | abt_buy | -0.0127 | [-0.0216, -0.0039] ** | 0.00485 | **holds** |
-| `google/embeddinggemma-300m` | `official_sts` | amazon_google | 0.0224 | [+0.0130, +0.0326] ** | 3.02e-06 | **holds** |
-| `google/embeddinggemma-300m` | `official_sts` | wdc_computers | -0.0410 | [-0.0584, -0.0249] ** | 5.47e-07 | **holds** |
-| `intfloat/e5-base-v2` | `er_symmetric` | abt_buy | -0.0436 | [-0.0564, -0.0314] ** | 2.83e-12 | **holds** |
-| `intfloat/e5-base-v2` | `er_symmetric` | wdc_computers | -0.1038 | [-0.1238, -0.0815] ** | 5.98e-20 | **holds** |
-| `intfloat/e5-base-v2` | `official_asymmetric` | abt_buy | 0.0069 | [+0.0010, +0.0128] ** | 0.0221 | withdrawn |
-| `intfloat/e5-base-v2` | `official_symmetric` | amazon_google | -0.0029 | [-0.0059, -0.0004] ** | 0.0229 | withdrawn |
-| `intfloat/e5-base-v2` | `official_symmetric` | wdc_computers | -0.0145 | [-0.0274, -0.0023] ** | 0.0197 | withdrawn |
-| `sentence-transformers/all-MiniLM-L6-v2` | `er_query_only` | amazon_google | -0.0122 | [-0.0205, -0.0043] ** | 0.00244 | **holds** |
-| `sentence-transformers/all-MiniLM-L6-v2` | `er_symmetric` | abt_buy | -0.0667 | [-0.0839, -0.0505] ** | 5.42e-16 | **holds** |
-| `sentence-transformers/all-MiniLM-L6-v2` | `er_symmetric` | wdc_computers | -0.0632 | [-0.0830, -0.0440] ** | 1.12e-10 | **holds** |
+**Every measured benchmark stays in its family, including the ones an arm left untouched** (`p = 1`). Dropping them would make the Holm denominator depend on the observed result -- a family of 3 or of 4 according to whether an arm happened to move the saturated benchmark -- and a data-dependent family size is invalid however well the p-values are calibrated. Family sizes here: **m = 4**, so the thresholds are 0.0125 / 0.01667 / 0.025 / 0.05. (Also found by automated review on PR #252.)
 
-**Sensitivity to the family choice.** Correcting instead over the whole sweep as one family of 61 would leave **24** comparisons standing rather than 37. That is the stricter reading, and it is reported here so the per-`(model, arm)` choice above is visible as a choice rather than assumed.
+- **80** comparisons entered the correction. For **19** of them the replicate distribution is a **point mass at zero** -- the estimate and both bounds land exactly there, which is what happens when no record's recall moved; they carry `p = 1` and are retained. They fall entirely on `fodors_zagat`, which every model already reaches at no-prompt recall 1.0000.
+- **4** comparisons rest a bound *exactly* on zero (`Qwen3-Embedding-0.6B`/`er_query_only`/abt_buy, `Qwen3-Embedding-0.6B`/`er_query_only`/amazon_google, `Qwen3-Embedding-0.6B`/`official_query_instruct`/amazon_google, `e5-base-v2`/`er_query_only`/abt_buy). An interval closing on zero does not exclude it, so none of them counted as an effect before the correction either.
+- Read uncorrected, **40** intervals exclude zero. After Holm, **35** survive. Of the rest, **5** were significant on their own and lost it to the correction -- those are the withdrawals; the other **0** never cleared the uncorrected α=0.05 p-value, so the correction took nothing from them.
+- **0** verdicts sit within 3 Monte-Carlo standard errors of their own Holm threshold. So no verdict here turns on a p-value within 3 Monte-Carlo standard errors of the threshold it was tested against. That bounds how much the replicate count could have moved these verdicts; it is not a claim about how large the effects are, nor about anything the p-values cannot see.
+
+| model | arm | benchmark | Δ per-record | 95% CI | p | ± MC | Holm α=0.05 |
+|---|---|---|---:|---|---:|---:|---|
+| `BAAI/bge-base-en-v1.5` | `er_query_only` | abt_buy | -0.0078 | [-0.0143, -0.0020] ** | 0.0074 | 0.0009 | **holds** |
+| `BAAI/bge-base-en-v1.5` | `er_query_only` | amazon_google | -0.0233 | [-0.0330, -0.0138] ** | 0.0001 | 0.0001 | **holds** |
+| `BAAI/bge-base-en-v1.5` | `er_query_only` | wdc_computers | 0.0250 | [+0.0012, +0.0492] ** | 0.0406 | 0.0020 | withdrawn |
+| `BAAI/bge-base-en-v1.5` | `er_symmetric` | abt_buy | -0.0368 | [-0.0501, -0.0236] ** | 0.0001 | 0.0001 | **holds** |
+| `BAAI/bge-base-en-v1.5` | `er_symmetric` | wdc_computers | -0.0775 | [-0.0992, -0.0556] ** | 0.0001 | 0.0001 | **holds** |
+| `BAAI/bge-base-en-v1.5` | `official_query_instruction` | abt_buy | 0.0093 | [+0.0039, +0.0157] ** | 0.0001 | 0.0001 | **holds** |
+| `BAAI/bge-base-en-v1.5` | `official_query_instruction` | wdc_computers | 0.1224 | [+0.1005, +0.1445] ** | 0.0001 | 0.0001 | **holds** |
+| `BAAI/bge-base-en-v1.5` | `official_symmetric` | abt_buy | 0.0064 | [+0.0010, +0.0122] ** | 0.0216 | 0.0015 | withdrawn |
+| `BAAI/bge-base-en-v1.5` | `official_symmetric` | wdc_computers | 0.1084 | [+0.0870, +0.1300] ** | 0.0001 | 0.0001 | **holds** |
+| `Qwen/Qwen3-Embedding-0.6B` | `er_in_official_template` | abt_buy | 0.0088 | [+0.0039, +0.0147] ** | 0.0003 | 0.0002 | **holds** |
+| `Qwen/Qwen3-Embedding-0.6B` | `er_in_official_template` | amazon_google | 0.0044 | [+0.0009, +0.0088] ** | 0.0078 | 0.0009 | **holds** |
+| `Qwen/Qwen3-Embedding-0.6B` | `er_in_official_template` | wdc_computers | 0.0388 | [+0.0229, +0.0550] ** | 0.0001 | 0.0001 | **holds** |
+| `Qwen/Qwen3-Embedding-0.6B` | `er_symmetric` | wdc_computers | -0.0907 | [-0.1150, -0.0668] ** | 0.0001 | 0.0001 | **holds** |
+| `Qwen/Qwen3-Embedding-0.6B` | `official_query_instruct` | abt_buy | 0.0088 | [+0.0039, +0.0147] ** | 0.0003 | 0.0002 | **holds** |
+| `Qwen/Qwen3-Embedding-0.6B` | `official_query_instruct` | wdc_computers | 0.0646 | [+0.0459, +0.0836] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `er_in_official_template` | abt_buy | -0.0181 | [-0.0279, -0.0089] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `er_in_official_template` | amazon_google | 0.0238 | [+0.0139, +0.0341] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `er_in_official_template` | wdc_computers | -0.1589 | [-0.1826, -0.1357] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `er_query_only` | amazon_google | 0.0136 | [+0.0037, +0.0237] ** | 0.0062 | 0.0008 | **holds** |
+| `google/embeddinggemma-300m` | `er_query_only` | wdc_computers | 0.0172 | [+0.0059, +0.0291] ** | 0.0031 | 0.0006 | **holds** |
+| `google/embeddinggemma-300m` | `er_symmetric` | abt_buy | -0.0078 | [-0.0138, -0.0020] ** | 0.0086 | 0.0009 | **holds** |
+| `google/embeddinggemma-300m` | `er_symmetric` | amazon_google | 0.0118 | [+0.0041, +0.0199] ** | 0.0031 | 0.0006 | **holds** |
+| `google/embeddinggemma-300m` | `official_clustering` | abt_buy | -0.0721 | [-0.0885, -0.0564] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `official_clustering` | amazon_google | -0.0164 | [-0.0281, -0.0050] ** | 0.0044 | 0.0007 | **holds** |
+| `google/embeddinggemma-300m` | `official_clustering` | fodors_zagat | -0.0625 | [-0.1071, -0.0179] ** | 0.0006 | 0.0002 | **holds** |
+| `google/embeddinggemma-300m` | `official_clustering` | wdc_computers | -0.3183 | [-0.3479, -0.2886] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `official_retrieval` | abt_buy | 0.0088 | [+0.0039, +0.0147] ** | 0.0002 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `official_retrieval` | amazon_google | 0.0371 | [+0.0268, +0.0483] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `official_retrieval` | wdc_computers | 0.0394 | [+0.0242, +0.0550] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `official_sts` | abt_buy | -0.0127 | [-0.0217, -0.0039] ** | 0.0058 | 0.0008 | **holds** |
+| `google/embeddinggemma-300m` | `official_sts` | amazon_google | 0.0224 | [+0.0131, +0.0321] ** | 0.0001 | 0.0001 | **holds** |
+| `google/embeddinggemma-300m` | `official_sts` | wdc_computers | -0.0410 | [-0.0590, -0.0233] ** | 0.0001 | 0.0001 | **holds** |
+| `intfloat/e5-base-v2` | `er_symmetric` | abt_buy | -0.0436 | [-0.0564, -0.0318] ** | 0.0001 | 0.0001 | **holds** |
+| `intfloat/e5-base-v2` | `er_symmetric` | wdc_computers | -0.1038 | [-0.1245, -0.0840] ** | 0.0001 | 0.0001 | **holds** |
+| `intfloat/e5-base-v2` | `official_asymmetric` | abt_buy | 0.0069 | [+0.0020, +0.0128] ** | 0.0174 | 0.0013 | withdrawn |
+| `intfloat/e5-base-v2` | `official_symmetric` | amazon_google | -0.0029 | [-0.0061, -0.0003] ** | 0.0216 | 0.0015 | withdrawn |
+| `intfloat/e5-base-v2` | `official_symmetric` | wdc_computers | -0.0145 | [-0.0274, -0.0021] ** | 0.0247 | 0.0016 | withdrawn |
+| `sentence-transformers/all-MiniLM-L6-v2` | `er_query_only` | amazon_google | -0.0122 | [-0.0210, -0.0042] ** | 0.0026 | 0.0005 | **holds** |
+| `sentence-transformers/all-MiniLM-L6-v2` | `er_symmetric` | abt_buy | -0.0667 | [-0.0837, -0.0506] ** | 0.0001 | 0.0001 | **holds** |
+| `sentence-transformers/all-MiniLM-L6-v2` | `er_symmetric` | wdc_computers | -0.0632 | [-0.0835, -0.0433] ** | 0.0001 | 0.0001 | **holds** |
+
+**Sensitivity to the family choice.** Correcting instead over the whole sweep as one family of 80 would leave **26** comparisons standing rather than 35. That is the stricter reading, and it is reported here so the per-`(model, arm)` choice above is visible as a choice rather than assumed.
 
 ## Every k
 

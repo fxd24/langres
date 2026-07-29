@@ -41,11 +41,13 @@ class BootstrapInterval(BaseModel):
     reason: str | None = None
 
     #: Two-sided achieved significance level, from the **same replicates** as the
-    #: interval. ``p_value <= a`` if and only if the ``1 - a`` percentile interval
-    #: over this draw excludes zero, so a caller may compare it against a level
-    #: other than ``confidence_level`` -- which is what a multiplicity correction
-    #: needs and what an interval alone cannot supply. ``None`` when ``status`` is
-    #: ``"insufficient"``. See :func:`paired_entity_bootstrap` for the estimator.
+    #: interval, so a caller may compare it against a level other than
+    #: ``confidence_level`` -- which is what a multiplicity correction needs and
+    #: what an interval alone cannot supply. ``p_value <= a`` **implies** the
+    #: ``1 - a`` percentile interval over this draw excludes zero, exactly and at
+    #: every ``a``; the converse holds only up to the draw's order-statistic
+    #: granularity (see :func:`_achieved_significance_level`). ``None`` when
+    #: ``status`` is ``"insufficient"``.
     p_value: float | None = None
 
     #: Monte-Carlo standard error of :attr:`p_value` -- ``sqrt(p (2 - p) / samples)``.
@@ -116,13 +118,36 @@ def _achieved_significance_level(bootstrap_differences: list[float]) -> float:
     interval endpoint into a standard error and assuming normality is an
     extrapolation: it is pinned to agree at the published level and is
     uncalibrated everywhere else, which is precisely where the correction reads
-    it. This estimator instead comes from the replicate distribution itself, so
-    ``p_value <= t`` is equivalent to "the ``1 - t`` percentile interval over
-    this same draw excludes zero" at *every* ``t``, by construction.
+    it. This estimator instead comes from the replicate distribution itself.
+
+    **How exactly it agrees with the interval, stated precisely.**
+    ``p <= t`` **implies** the ``1 - t`` percentile interval excludes zero, for
+    every ``t``, with no approximation. The converse can fail in a narrow band:
+    :func:`_percentile` interpolates linearly *between order statistics*, so
+    when the interpolation position straddles the block of replicates equal to
+    zero it can return a bound strictly off zero where the counting rule still
+    sees the tail. The disagreement is bounded by ``4 / (samples + 1)`` in
+    p-units -- 4e-3 at the default 1000 replicates, 2e-4 at 20000 -- and always
+    in the same direction: **the p-value is the conservative side**, never
+    calling significant anything the interval leaves ambiguous. That band is
+    narrower than one Monte-Carlo standard error at every attainable p (the
+    smallest is ``2/(samples+1)``, and ``sqrt(p(2-p)/B) > 4/(B+1)`` there), so a
+    caller already flagging near-threshold verdicts by
+    :attr:`BootstrapInterval.p_value_standard_error` cannot be surprised by it.
 
     It inherits the percentile method's limits -- no bias or acceleration
     correction (BCa would give both) -- but it is coherent with the intervals
     reported alongside it, which the normal shortcut is not.
+
+    **Replicates equal to zero are counted in both tails**, which is deliberate.
+    This statistic is a mean over resampled clusters and its distribution can
+    have a real atom at zero (a two-record gold cluster contributes a per-record
+    difference in ``{-1, 0, +1}``, so gains and losses cancel exactly rather than
+    approximately). When mass sits on zero, the ``t/2`` quantile *is* zero and
+    the interval correctly reports "does not exclude zero"; counting the atom in
+    both tails reproduces that boundary. A strict ``<`` / ``>`` rule would
+    instead declare significance exactly where the interval's own bound rests on
+    zero.
     """
     samples = len(bootstrap_differences)
     at_or_below = sum(1 for difference in bootstrap_differences if difference <= 0.0)

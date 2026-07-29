@@ -124,11 +124,21 @@ def test_p_value_agrees_with_its_own_interval_at_every_level() -> None:
     testing at ``a/m`` … ``a`` rather than at the level the interval was cut at.
     Recovering the tail from an interval endpoint under a normality assumption
     satisfies this at 0.95 only, which is the one level Holm mostly does not use.
+
+    **The effect size is chosen so the sweep changes its mind.** An earlier
+    version used a shift so large that the p-value sat under every level tested,
+    so every assertion compared ``True == True``: a p-value hard-coded to any
+    tiny constant would have passed it. The equivalence is only observable where
+    the two rules could disagree, so the fixture is calibrated to put ``p``
+    *between* the levels swept -- and the run asserts that both verdicts actually
+    occurred, which is what fails if a future edit drifts it back out of that
+    band. (Found by automated review on PR #252.)
     """
-    observations = _shifted(0.01)
+    observations = _shifted(0.0055)
     reference = paired_entity_bootstrap(observations, samples=4000, seed=3)
     assert reference.p_value is not None
 
+    verdicts: list[bool] = []
     for level in (0.5, 0.8, 0.9, 0.95, 0.99, 0.995):
         interval = paired_entity_bootstrap(
             observations, samples=4000, seed=3, confidence_level=level
@@ -136,6 +146,12 @@ def test_p_value_agrees_with_its_own_interval_at_every_level() -> None:
         assert interval.lower is not None and interval.upper is not None
         excludes_zero = not (interval.lower <= 0.0 <= interval.upper)
         assert excludes_zero == (reference.p_value <= 1.0 - level), level
+        verdicts.append(excludes_zero)
+
+    assert set(verdicts) == {True, False}, (
+        f"p={reference.p_value} lies outside every level swept, so the equivalence "
+        "was never actually exercised -- recalibrate the shift"
+    )
 
 
 def test_p_value_is_two_sided_and_symmetric_under_sign_flip() -> None:
@@ -171,17 +187,28 @@ def test_the_monte_carlo_error_treats_the_p_value_as_a_doubled_proportion() -> N
     The p-value is a tail proportion **doubled** for two-sidedness, so its
     standard error is `2 * sqrt(q(1-q)/B)` with `q = p/2`, i.e.
     `sqrt(p(2-p)/B)`. Using the ordinary `sqrt(p(1-p)/B)` of a proportion
-    understates it by ~40% at `p ~ 0.02` -- precisely where correction thresholds
-    sit, so the error term would be smallest exactly where it is relied on most.
+    understates it by ~40%, and the place that matters is where a correction's
+    thresholds sit -- roughly `alpha/m` … `alpha`, or 0.0125 … 0.05 for the
+    four-benchmark families this backs.
+
+    So the fixture is calibrated to land there and the test *checks* that it
+    did. It used to name that region and then measure a shift so large the
+    p-value hit the resolution floor `2/(B+1)` instead -- a censored value, a
+    different regime, and no evidence at all about the band the docstring was
+    arguing over. (Found by automated review on PR #252.)
     """
-    result = paired_entity_bootstrap(_shifted(0.019), samples=2000, seed=13)
+    result = paired_entity_bootstrap(_shifted(0.0055), samples=2000, seed=13)
     assert result.p_value is not None and result.p_value_standard_error is not None
+    assert 0.0125 <= result.p_value <= 0.05, (
+        f"p={result.p_value} is outside the threshold band this test exists to cover"
+    )
     expected = math.sqrt(result.p_value * (2 - result.p_value) / 2000)
     assert result.p_value_standard_error == pytest.approx(expected)
     naive = math.sqrt(result.p_value * (1 - result.p_value) / 2000)
     assert result.p_value_standard_error > naive, "the understating formula must not return"
+    assert result.p_value_standard_error / naive == pytest.approx(1.4, abs=0.05)
     # More replicates, tighter estimate -- the lever a caller actually has.
-    bigger = paired_entity_bootstrap(_shifted(0.019), samples=8000, seed=13)
+    bigger = paired_entity_bootstrap(_shifted(0.0055), samples=8000, seed=13)
     assert bigger.p_value_standard_error is not None
     assert bigger.p_value_standard_error < result.p_value_standard_error
 

@@ -70,7 +70,7 @@ import time
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -87,13 +87,15 @@ SEED = 0
 #: Bootstrap replicates per comparison. Well above the library default of 1000,
 #: and the reason is the multiplicity correction rather than the intervals.
 #: Holm tests at `alpha/m` -- as low as 0.0125 here -- and a p-value estimated
-#: from B replicates carries Monte-Carlo error `sqrt(p(1-p)/B)`: at p≈0.02 that
-#: is 0.0044 with B=1000, a third of the threshold being tested, so the verdict
-#: would be decided by the draw rather than by the data. At B=20000 it is
-#: 0.0010. Nothing below `2/(B+1)` is observable either, and that floor must sit
-#: under the smallest threshold or strong effects cannot be separated from
-#: merely-significant ones. Costs ~2 min for the largest comparison; the
-#: embedding cache means a re-run pays this and almost nothing else.
+#: from B replicates carries Monte-Carlo error `sqrt(p(2-p)/B)` (a *doubled* tail
+#: proportion, so `2-p`, not the `1-p` of an ordinary proportion): at p≈0.02 that
+#: is **0.00629** with B=1000, which is **half** the threshold being tested, so
+#: the verdict would be decided by the draw rather than by the data. At B=20000
+#: it is **0.00141**, 11% of it. Nothing below `2/(B+1)` is observable either,
+#: and that floor must sit under the smallest threshold or strong effects cannot
+#: be separated from merely-significant ones. Costs ~2 min for the largest
+#: comparison; the embedding cache means a re-run pays this and almost nothing
+#: else.
 BOOTSTRAP_SAMPLES = 20000
 
 #: Family-wise error rate for the Holm correction.
@@ -1012,6 +1014,23 @@ def write_rows(rows: Sequence[Row], path: Path) -> None:
     path.write_text("\n".join(json.dumps(asdict(row)) for row in rows) + "\n")
 
 
+def _missing_p_value(row: Row) -> bool:
+    """A headline comparison carrying an interval but no p-value.
+
+    That combination is only producible by an *older* harness: the bootstrap
+    reports a p-value from the same draw as the bounds, so a row with
+    ``ci_low`` set and ``p_value`` absent was measured before the p-value
+    existed. Such a row is silently dropped by :func:`_row_p_value`, and a
+    dropped row shrinks its Holm family -- the exact data-dependent denominator
+    the correction is written to avoid -- while the report still renders and
+    still prints a family size, because nothing checked.
+
+    One predicate, read by both the resume check and the publish guard, so a
+    stale row can neither survive ``--resume`` nor reach the report.
+    """
+    return row.k == HEADLINE_K and row.arm != "none" and row.ci_low is not None and row.p_value is None
+
+
 def _cell_complete(
     existing: Sequence[Row],
     spec: ModelSpec,
@@ -1026,6 +1045,11 @@ def _cell_complete(
     per-record recall, so a partially-resumed cell would have no baseline to
     compare against. Re-running an incomplete cell is cheap anyway -- the
     document and query vectors come back from the on-disk embedding cache.
+
+    Completeness also includes **carrying a p-value** (see
+    :func:`_missing_p_value`) -- a cell measured by a harness that did not
+    record one is re-run rather than resumed, because the correction cannot
+    read it.
 
     Completeness includes **provenance**, not just coverage. Matching on
     ``(arm, k)`` alone meant a changed checkpoint revision or an edited prompt
@@ -1046,6 +1070,7 @@ def _cell_complete(
         and row.benchmark == benchmark
         and row.revision == spec.revision
         and want.get((row.arm, row.k)) == row.recipe_fingerprint
+        and not _missing_p_value(row)
     }
     return set(want) <= have
 
@@ -1101,6 +1126,18 @@ def _on_boundary(row: Row) -> bool:
 
 
 def _holm_cell(row: Row, verdict: tuple[float | None, bool] | None) -> str:
+    """This comparison's label in the results tables.
+
+    ``withdrawn`` is reserved for its literal meaning: a comparison that *was*
+    significant on its own and lost that to the multiplicity correction. It used
+    to be printed for **every** non-rejected comparison whose interval excluded
+    zero, which silently swept in a second, different case -- one whose p-value
+    never cleared the uncorrected ``alpha`` in the first place, so the correction
+    took nothing away from it. Those get ``n.s.`` instead. (The two can differ:
+    ``p <= t`` implies the ``1-t`` interval excludes zero, but the converse can
+    fail inside a band of ``4/(B+1)``, where an interval clears zero and the
+    counting rule does not.)
+    """
     if verdict is None:
         return "-"
     p_value, rejected = verdict
@@ -1108,7 +1145,9 @@ def _holm_cell(row: Row, verdict: tuple[float | None, bool] | None) -> str:
         return "n/a"
     if rejected:
         return "**holds**"
-    return "-" if _spans_zero(row) else "withdrawn"
+    if _spans_zero(row):
+        return "-"
+    return "n.s." if p_value > ALPHA else "withdrawn"
 
 
 def _interval(row: Row) -> str:
@@ -1123,9 +1162,11 @@ def _row_p_value(row: Row) -> float | None:
     """The p-value Holm should use for this comparison.
 
     Read from the row, where it was written by the same bootstrap draw that
-    produced the interval beside it -- so ``p <= t`` means "the ``1-t`` percentile
-    interval excludes zero" at every ``t``, including the ``alpha/m`` levels the
-    correction actually tests at.
+    produced the interval beside it -- so ``p <= t`` *implies* "the ``1-t``
+    percentile interval excludes zero" at every ``t``, exactly, including the
+    ``alpha/m`` levels the correction actually tests at. (The converse holds only
+    up to the draw's order-statistic granularity; see
+    :func:`langres.experiments.statistics._achieved_significance_level`.)
 
     A *degenerate* comparison -- the arm changed no record's recall, so the
     estimate and both interval bounds are exactly zero -- is **not** dropped. It
@@ -1148,8 +1189,22 @@ def _is_degenerate(row: Row) -> bool:
     return row.delta_per_record_recall == 0.0 and row.ci_low == 0.0 and row.ci_high == 0.0
 
 
-def _holm_steps(p_values: dict[str, float], alpha: float = ALPHA) -> list[tuple[str, float, float]]:
-    """``(key, p, threshold)`` in Holm's step-down order.
+class HolmStep(NamedTuple):
+    """One comparison's place in Holm's step-down order."""
+
+    key: str
+    p_value: float
+    #: ``m - i + 1`` -- how many hypotheses are still live at this step. Carried
+    #: as an exact integer rather than recovered as ``alpha / threshold``, which
+    #: is not exact for a multiplier that is not a power of two and would put
+    #: float noise on a boundary comparison.
+    multiplier: int
+    #: ``alpha / multiplier`` -- the level this step is tested at.
+    threshold: float
+
+
+def _holm_steps(p_values: dict[str, float], alpha: float = ALPHA) -> list[HolmStep]:
+    """The family in Holm's step-down order, with each step's level.
 
     Holm sorts a family ascending and tests ``p(i)`` against
     ``alpha / (m - i + 1)``. Both the verdicts and the resolution check need
@@ -1159,23 +1214,39 @@ def _holm_steps(p_values: dict[str, float], alpha: float = ALPHA) -> list[tuple[
     """
     ordered = sorted(p_values.items(), key=lambda item: item[1])
     total = len(ordered)
-    return [(key, p_value, alpha / (total - index)) for index, (key, p_value) in enumerate(ordered)]
+    return [
+        HolmStep(key, p_value, total - index, alpha / (total - index))
+        for index, (key, p_value) in enumerate(ordered)
+    ]
 
 
 def _holm(p_values: dict[str, float], alpha: float = ALPHA) -> set[str]:
     """Keys Holm's step-down rejects at family-wise ``alpha``.
 
-    Stops at the first failure -- a comparison is only rejected if every smaller
-    p-value in its family was rejected too. Holm is uniformly at least as
-    powerful as Bonferroni and needs no independence assumption, which matters
-    here: the arms of one model share a baseline and a corpus, so their
-    comparisons are strongly dependent.
+    Implemented through Holm's **adjusted** p-values,
+    ``p~(i) = max(p~(i-1), min(1, (m - i + 1) * p(i)))``, rejecting where
+    ``p~ <= alpha``. That is the same procedure as "walk the sorted family and
+    stop at the first p above its threshold" everywhere the p-values are
+    distinct, and it is **tie-safe** where they are not: the running maximum
+    gives equal p-values equal adjusted p-values, so tied comparisons are
+    rejected or retained together instead of according to how ``sorted`` happened
+    to break the tie. Ties are not hypothetical here -- a comparison that moved
+    no record's recall carries exactly ``p = 1``, and the resolution floor
+    ``2/(B+1)`` is attained exactly by every sufficiently strong effect, so both
+    ends of the range are atoms. (Found by automated review on PR #252.)
+
+    Holm is uniformly at least as powerful as Bonferroni and needs no
+    independence assumption. On where the dependence actually lives, see the
+    report section this feeds: *within* a family the comparisons sit on disjoint
+    benchmarks, and the strong dependence is *across* families.
     """
     rejected: set[str] = set()
-    for key, p_value, threshold in _holm_steps(p_values, alpha):
-        if p_value > threshold:
+    adjusted = 0.0
+    for step in _holm_steps(p_values, alpha):
+        adjusted = max(adjusted, min(1.0, step.multiplier * step.p_value))
+        if adjusted > alpha:
             break
-        rejected.add(key)
+        rejected.add(step.key)
     return rejected
 
 
@@ -1200,10 +1271,10 @@ def _resolution_limited(
     errors = {(row.model, row.arm, row.benchmark): row.p_value_standard_error for row in headline}
     limited: list[tuple[str, str, str]] = []
     for (model, arm), family in by_family.items():
-        for benchmark, p_value, threshold in _holm_steps(family):
-            error = errors.get((model, arm, benchmark))
-            if error and abs(p_value - threshold) < margin * error:
-                limited.append((model, arm, benchmark))
+        for step in _holm_steps(family):
+            error = errors.get((model, arm, step.key))
+            if error and abs(step.p_value - step.threshold) < margin * error:
+                limited.append((model, arm, step.key))
     return sorted(limited)
 
 
@@ -1253,6 +1324,13 @@ def _assert_rows_match_declaration(rows: Sequence[Row]) -> None:
     So before rendering, every row must carry provenance, and that provenance
     must equal the spec and recipe the prose is about. Absent provenance fails --
     a row that cannot say what produced it cannot be shown to agree.
+
+    It also refuses a headline comparison that has an interval but no p-value
+    (:func:`_missing_p_value`). That row is not merely incomplete: the
+    correction drops it, the family it belonged to silently shrinks, and the
+    report goes on to print a family size derived from the survivors -- an
+    expectation regenerated from the very thing that broke. The guard has to
+    read the row, because the rendered number cannot see its own absence.
     """
     problems: list[str] = []
     for row in rows:
@@ -1274,6 +1352,11 @@ def _assert_rows_match_declaration(rows: Sequence[Row]) -> None:
             problems.append(
                 f"{row.model}/{row.benchmark}/{row.arm}: measured under prompt "
                 f"fingerprint {row.recipe_fingerprint!r}, report describes {want!r}"
+            )
+        if _missing_p_value(row):
+            problems.append(
+                f"{row.model}/{row.benchmark}/{row.arm}: has a k={HEADLINE_K} interval but "
+                "no p-value, so the correction would drop it and shrink its family"
             )
     if problems:
         shown = sorted(set(problems))
@@ -1399,8 +1482,22 @@ def render_report(rows: Sequence[Row]) -> str:
         "do not. So each `(model, arm)` row of the tables above is treated as one "
         "**family** across benchmarks and corrected with **Holm's step-down** at "
         "family-wise α=0.05. Holm is uniformly at least as powerful as Bonferroni "
-        "and assumes nothing about dependence, which matters because the arms of "
-        "one model share a baseline and a corpus."
+        "and assumes nothing about dependence."
+    )
+    add("")
+    add(
+        "**Where the dependence actually is.** Inside one family the comparisons sit "
+        "on four *disjoint* benchmarks -- separate corpora, separate gold clusters -- "
+        "so they are close to independent, and Holm's freedom from an independence "
+        "assumption is not what carries them. The strong dependence is **across** "
+        "families: every arm of a checkpoint is measured against the same `none` "
+        "baseline over the same corpus. Holm controls the error rate *within* each "
+        "family under any dependence and says nothing about the sweep as a whole -- "
+        "which is exactly what the study-wide sensitivity check at the end of this "
+        "section is for. (An earlier version of this paragraph cited the shared "
+        "baseline as the reason Holm was needed, pointing at dependence that lives "
+        "between families rather than in the one being corrected. Found by automated "
+        "review on PR #252.)"
     )
     add("")
     samples = next((row.bootstrap_samples for row in headline if row.bootstrap_samples), None)
@@ -1408,9 +1505,14 @@ def render_report(rows: Sequence[Row]) -> str:
         "**The p-values come from the same bootstrap draw as the intervals**, as the "
         "*achieved significance level* -- `2 * min(P(diff* <= 0), P(diff* >= 0))` over "
         f"the {samples or '?'} replicates, with the usual `(count+1)/(B+1)` correction. "
-        "That is the percentile interval **inverted**, so `p <= t` means "
-        '"the `1-t` percentile interval over this draw excludes zero" at *every* `t`, '
-        "which is what makes it legitimate to read at the `α/m` levels Holm tests at. "
+        "That is the percentile interval **inverted**: `p <= t` *implies* "
+        '"the `1-t` percentile interval over this draw excludes zero" at every `t`, '
+        "exactly, which is what makes it legitimate to read at the `α/m` levels Holm "
+        "tests at. (The converse can fail inside a band of `4/(B+1)` -- "
+        f"{4 / ((samples or 20000) + 1):.0e} here -- because the interval interpolates "
+        "between order statistics across the block of replicates equal to zero. The "
+        "p-value is the conservative side of that band, and the band is narrower than "
+        "one Monte-Carlo standard error at every attainable p.) "
         "(An earlier version recovered p by turning an interval endpoint into a "
         "standard error and assuming normality. That is pinned to agree at 0.95 and "
         "uncalibrated everywhere else -- including at every level Holm actually uses. "
@@ -1420,6 +1522,20 @@ def render_report(rows: Sequence[Row]) -> str:
     sizes = sorted(
         {sum(1 for key in verdicts if key[:2] == family) for family in {k[:2] for k in verdicts}}
     )
+    if sizes != [len(BENCHMARKS)]:
+        # The paragraph below *claims* the family size is fixed by the design. Nothing
+        # made that true: the size is counted from the verdicts, so a comparison that
+        # failed to produce a p-value would quietly shrink its family and the sentence
+        # would report the shrunken number as the design. An expectation regenerated
+        # from the thing that broke cannot detect it breaking -- so the declared
+        # benchmark count, which is upstream of any measurement, is the expectation.
+        raise ValueError(
+            f"refusing to render: every Holm family must span all {len(BENCHMARKS)} "
+            f"declared benchmarks ({', '.join(BENCHMARKS)}), but the observed family "
+            f"sizes are {sizes}. A family that lost a benchmark is corrected against a "
+            "smaller denominator than the design -- the data-dependent family size this "
+            "section says it avoids. Re-measure the missing cells. Nothing was written."
+        )
     thresholds = (
         " / ".join(f"{ALPHA / (sizes[0] - i):.4g}" for i in range(sizes[0])) if sizes else "-"
     )
@@ -1451,12 +1567,27 @@ def render_report(rows: Sequence[Row]) -> str:
     }
     survives = {key for key, (_, rejected) in testable.items() if rejected}
     where = sorted({row.benchmark for row in degenerate})
+    baselines = sorted(
+        {row.candidate_recall for row in headline if row.arm == "none" and row.benchmark in where}
+    )
+    span = ""
+    if baselines:
+        span = (
+            f"{baselines[0]:.4f}"
+            if len(baselines) == 1
+            else f"{baselines[0]:.4f}-{baselines[-1]:.4f}"
+        )
     add(
-        f"- **{len(testable)}** comparisons entered the correction. **{len(degenerate)}** "
-        "of them moved no record's recall at all, so the estimate and both bounds are "
-        f"exactly zero; they carry `p = 1` and are retained. They fall entirely on "
-        f"{', '.join(f'`{b}`' for b in where)}, which every model already solves at "
-        "recall 1.0000 with no prompt."
+        f"- **{len(testable)}** comparisons entered the correction. For "
+        f"**{len(degenerate)}** of them the replicate distribution is a **point mass at "
+        "zero** -- the estimate and both bounds land exactly there, which is what "
+        "happens when no record's recall moved; they carry `p = 1` and are retained."
+        + (
+            f" They fall entirely on {', '.join(f'`{b}`' for b in where)}"
+            + (f", which every model already reaches at no-prompt recall {span}." if span else ".")
+            if degenerate
+            else ""
+        )
     )
     named = ", ".join(f"`{model.split('/')[-1]}`/`{arm}`/{bench}" for model, arm, bench in boundary)
     add(
@@ -1464,10 +1595,14 @@ def render_report(rows: Sequence[Row]) -> str:
         f"({named or 'none'}). An interval closing on zero does not exclude it, so "
         "none of them counted as an effect before the correction either."
     )
+    lost = excluded_zero - survives
+    withdrawn = {key for key in lost if (testable.get(key, (1.0, False))[0] or 1.0) <= ALPHA}
     add(
         f"- Read uncorrected, **{len(excluded_zero)}** intervals exclude zero. After "
-        f"Holm, **{len(survives)}** survive -- **{len(excluded_zero - survives)}** are "
-        "withdrawn."
+        f"Holm, **{len(survives)}** survive. Of the rest, **{len(withdrawn)}** were "
+        "significant on their own and lost it to the correction -- those are the "
+        f"withdrawals; the other **{len(lost - withdrawn)}** never cleared the "
+        "uncorrected α=0.05 p-value, so the correction took nothing from them."
     )
 
     limited = _resolution_limited(headline, verdicts)
@@ -1480,8 +1615,10 @@ def render_report(rows: Sequence[Row]) -> str:
             + ". Those are decided by the size of the bootstrap draw as much as by the "
             "data, and more replicates -- not more argument -- is what would settle them."
             if limited
-            else ". Every verdict below is separated from its threshold by more than "
-            "the draw's own noise, so none of them is an artefact of the replicate count."
+            else ". So no verdict here turns on a p-value within 3 Monte-Carlo standard "
+            "errors of the threshold it was tested against. That bounds how much the "
+            "replicate count could have moved these verdicts; it is not a claim about "
+            "how large the effects are, nor about anything the p-values cannot see."
         )
     )
     add("")
@@ -1498,7 +1635,7 @@ def render_report(rows: Sequence[Row]) -> str:
         add(
             f"| `{row.model}` | `{row.arm}` | {row.benchmark} "
             f"| {_fmt(row.delta_per_record_recall)} | {_interval(row)} "
-            f"| {verdict[0]:.3g} | {mc} | {'**holds**' if verdict[1] else 'withdrawn'} |"
+            f"| {verdict[0]:.3g} | {mc} | {_holm_cell(row, verdict)} |"
         )
     add("")
 
