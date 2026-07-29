@@ -33,8 +33,17 @@ ecosystem:
 |---|---|
 | `Retrieve` | Retrieve → threshold Select → Cluster |
 | `RetrieveRerank` | Retrieve → Rerank → threshold Select → Cluster |
-| `RetrieveLLM` | Retrieve → top-k Select → Generate → Parse → `ThresholdSelect(0.5)` → Cluster |
-| `RetrieveRerankLLM` | Retrieve → Rerank → top-k Select → Generate → Parse → `ThresholdSelect(0.5)` → Cluster |
+| `RetrieveLLM` | Retrieve → top-k Select → Generate → Parse → threshold Select (**inert**, see below) → Cluster |
+| `RetrieveRerankLLM` | Retrieve → Rerank → top-k Select → Generate → Parse → threshold Select (**inert**, see below) → Cluster |
+
+The two LLM recipes' trailing threshold takes a *number* that cannot change any
+outcome: `Parse` emits a `decision` with `score=None`, and `predicted_match`
+gives a decision precedence over any score. The `Select` still drops
+`decision=False` rows and abstentions, but its threshold does not. Passing an
+explicit `threshold=` to either recipe raises a `UserWarning` for that reason.
+(The literal `0.5` this table used to print was doubly misleading: it was never
+read, *and* it stopped being the resolved default when `threshold=None` began
+resolving through the `prob_llm` family.)
 
 Each model slot accepts either a resource object or a model reference. The
 resource name describes what it does, while the following `Select` determines

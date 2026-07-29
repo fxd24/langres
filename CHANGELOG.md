@@ -35,6 +35,124 @@ uncalibrated at exactly the levels a correction reads.
 - Both fields are additive with defaults; existing callers and stored intervals
   are unaffected, and no existing number changes.
 
+### `threshold=None` now means the score family's default, not a hard-coded `0.5`
+
+`MethodSpec.default_threshold` has existed since the v0.3 registry unification,
+declared per method and documented — and read by **nothing**. Six front doors
+hard-coded their own `0.5` instead, so the field could say one thing while the
+shipped behaviour said another and no test would notice.
+
+- **One place a family's cut is written down**:
+  `langres.core.score_type.DEFAULT_THRESHOLDS` (a read-only mapping over all
+  seven `ScoreType` values) plus `resolve_threshold(threshold, score_type)`, the
+  seam every `threshold: float | None = None` parameter now goes through. It
+  lives on the stdlib leaf, so it adds no import-graph edge.
+- **`MethodSpec` inherits from its own `score_type`.** Omitting
+  `default_threshold` fills it from the family; set it explicitly only to
+  *override*. Eight specs previously spelled out the same two literals, so a
+  change to a family's cut would have moved some and silently left the rest.
+  **The wiring itself changed no value** — all 13 registered methods resolved to
+  exactly what they had before; the constant that then moves does so as a
+  separate, measured change (below).
+
+  To be precise about what was fixed: `MethodSpec.default_threshold` still has no
+  runtime reader (a front door has a score *family*, not a method name, so it
+  resolves through `DEFAULT_THRESHOLDS` directly). What changed is that the field
+  and the shipped behaviour now derive from the **same** map, so they can no
+  longer disagree — and a test asserts every registered method matches its
+  family, which is the thing that was previously unobservable.
+- **Wired at the front doors**: `FuzzyString`, `VectorLLMCascade`, the four
+  `architectures/retrieval.py` recipes, and `Reranker.for_schema`. An explicit
+  `threshold=` is returned untouched, including one that happens to equal the
+  default — that is not the same statement as omitting it.
+- **`Reranker.for_schema` no longer *requires* a threshold.** It cuts a score
+  built by `MatcherScore(WeightedAverageMatcher(feature_specs=<all>))` — the same
+  class, over the same feature set, as `FuzzyString`'s matcher — so demanding a
+  number here while `FuzzyString` defaulted was an inconsistency, not a safety
+  feature.
+- **Behaviour change (INFERRED, not measured): `VectorLLMCascade`'s
+  out-of-the-box cut moves `0.5` → `0.7`.** That is the value the registry has
+  declared for `prob_llm` all along; this change makes it *read* rather than
+  ignored. It is **not** a measured constant — sweeping the LLM families costs a
+  paid completion per score and is a separate study. Pass `threshold=0.5` for the
+  previous behaviour.
+
+### MEASURED: the `sim_cos` default moves `0.5` → `0.90`; `heuristic` deliberately stays
+
+A new $0/offline study — harness `examples/research/threshold_constant_sweep.py`,
+artifacts under `examples/research/results/`, write-up
+`docs/research/20260728_threshold_constant.md` (**every table in it is generated
+from the committed artifacts**, none transcribed) — swept a *fixed* constant per
+score family across the benchmark portfolio. Held out by **corpus** (whole gold
+clusters), selected **leave-one-benchmark-out** so the reported number is
+out-of-sample w.r.t. the dataset, 3 seeds, 95% intervals from a paired bootstrap
+resampled **by gold cluster** (never by dependent pair rows), against an exact
+oracle. The ship rule was **pre-registered in the harness** before any number
+existed, and the verdict is computed by applying it to the artifact.
+
+This is the measurement PR #250 recommended and explicitly did *not* perform: it
+scored the label-*derived* cut, never a shared replacement constant, so the
+medians of those derived cuts were a documented prior, not a finding.
+
+- **`sim_cos`: `0.5` → `0.90`.** Every selection-eligible benchmark and seed
+  improves, with all 95% intervals entirely above zero. `0.5` was not a mildly
+  mistuned cut on a cosine scale — normalized embeddings put nearly every
+  candidate pair above it, so it accepted almost everything the blocker proposed
+  and precision collapsed. **The only front door this changes is `Retrieve`**,
+  constructed without an explicit `threshold=`; an explicit value is untouched.
+  Note it does *not* change `RetrieveRerank`: that chain is
+  `RetrieveOp -> Rerank -> ThresholdSelect`, whose single cut is tagged
+  `heuristic` (the reranker's `out_space`) and stays `0.5` — there is no cosine
+  threshold in it to move. Two registered methods (`embedding`,
+  `embedding_cosine`) also now *declare* `0.90`, though
+  `MethodSpec.default_threshold` still has no runtime reader.
+- **It is a floor, not a tuning, and it was chosen for safety across encoders.**
+  A cosine cut belongs to the *encoder*, not the family tag, and every benchmark
+  loader pins `all-MiniLM-L6-v2` while `DEFAULT_EMBEDDING_MODEL` is
+  `intfloat/e5-base-v2`. So the whole protocol was re-run on the shipped default
+  and the constant graded **in both directions**: `0.90` never harms on
+  e5-base-v2, while e5's own (higher) selection carried back *significantly*
+  harms `abt_buy`. `0.90` is the value safe on both. If you have labels, derive
+  the cut instead (`langres.training.calibration.derive_threshold`).
+- **`heuristic` stays `0.5` — measured and rejected, not skipped.** The sweep
+  *did* find a stable constant (`0.74`; leave-one-out spread only `0.03`, so the
+  usual "every dataset wants a different cut" explanation is wrong here). It
+  fails the pre-registered rule's clause (2): it helps most of the portfolio and
+  reliably **damages `abt_buy` on every seed**, interval entirely below zero.
+  Both F1 conventions agree, so it does not rest on the denominator. A default
+  that lifts the median while predictably harming a known data class is a
+  recommendation with an undisclosed victim.
+- **Not measured, and unchanged**: `prob_llm` / `prob_group_llm` (a paid
+  completion per score — a portfolio grid sweep is a real invoice) and
+  `calibrated_prob` / `prob_fs` / `prob_rf`, whose scores come out of a
+  **per-dataset fit** — the scale is re-estimated for your data, so "the best
+  shared out-of-the-box constant" is not the same question. (`prob_rf` also needs
+  labels; `prob_fs` does **not** — `FellegiSunterMatcher.fit_unlabeled` runs an
+  unsupervised u-estimate plus EM.) Their entries record the status quo, not a
+  finding.
+
+### Three `threshold` parameters that silently did nothing now say so
+
+A knob that quietly ignores you is worse than no knob: users tune it, see nothing
+move, and blame the model. Each claim below was verified by running the code, and
+each is now pinned by a test rather than only a docstring.
+
+- **`RetrieveLLM` / `RetrieveRerankLLM` warn.** Their chain ends
+  `... -> Generate -> Parse -> ThresholdSelect`, `Parse` emits a `decision` with
+  `score=None`, and `predicted_match` gives a decision precedence over any score
+  — so the `ThresholdSelect` still drops `decision=False` rows and abstentions,
+  but its *number* cannot change any outcome. Verified: byte-identical clusters
+  at `threshold` 0.0 / 0.5 / 0.99, with `Retrieve` as a not-invariant control.
+  A `UserWarning` fires only on an *explicit* value; `None` expresses no
+  preference and stays silent. Warned rather than raised because the parameter is
+  on four public constructors and is swept by the experiment matrix.
+- **`RapidfuzzMatcher.threshold` is documented as inert.** It is range-checked,
+  stored, and never read — the matcher is a ranker, so the caller's cut decides.
+  `method_registry._build_rapidfuzz` passes no threshold at all, and there is no
+  `config`/`from_config` to round-trip one. Its docstring examples no longer
+  suggest otherwise, and a stale "compatibility with Optimizer" claim is gone
+  (there is no `Optimizer`; only `autoresearch.blocker_optimizer.BlockerOptimizer`).
+
 ### `dedupe()` finally has a benchmark (`febrl_dedup`)
 
 `BenchmarkTask` declared `Literal["linkage", "dedup"]`, but all ten registered
@@ -1618,7 +1736,6 @@ The one entry doc for the closed flywheel (fail-fast `auto`, `select_for_review`
   here" (+ a quickstart pointer); `docs/TUTORIAL_YOUR_OWN_CSV.md` gains it as
   the big-picture rung and in the calibration tease; `examples/README.md`
   Start-here tier gains `flywheel_closed_loop.py`.
-
 
 ---
 
