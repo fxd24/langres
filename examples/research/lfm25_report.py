@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -42,63 +41,57 @@ BASE_BASELINE = "LiquidAI/LFM2.5-Embedding-350M"
 #: cannot tell "every model agrees" from "the benchmark is solved".
 SATURATED = {"fodors_zagat"}
 
-#: Files whose content decides what the numbers MEAN, so the write-up records the
-#: exact blob each one was at. The statistics module is here because "were these
-#: numbers produced by the same code that is in main?" was asked of this study
-#: while it was still running: it was answerable in minutes only because the code
-#: was diffable. Rows that cannot name the code that produced them force a re-run
-#: to answer that question.
-PROVENANCE_FILES = (
-    "src/langres/experiments/statistics.py",
-    "examples/research/embedder_ladder.py",
-)
-
-
-def _git(*args: str) -> str:
-    """``git`` output, or an empty string when git cannot answer."""
-    try:
-        out = subprocess.run(
-            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30, check=False
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    return out.stdout.strip() if out.returncode == 0 else ""
-
-
-def _bootstrap_default_samples() -> str:
-    """The bootstrap replicate count these intervals were actually computed with.
-
-    Read out of the signature rather than repeated as a literal, so it cannot go
-    stale the way a hand-typed ``B=1000`` in prose would.
-    """
-    src = (REPO_ROOT / "src" / "langres" / "experiments" / "statistics.py").read_text()
-    match = re.search(r"^\s*samples:\s*int\s*=\s*(\d+)", src, re.MULTILINE)
-    return match.group(1) if match else "unknown"
+#: Blob hashes of the code that produced the rows, captured at MEASUREMENT time
+#: and committed. Exists because "were these numbers produced by the same code
+#: that is in main?" was asked of this study while it was still running, and was
+#: answerable in minutes only because the code was diffable.
+PROVENANCE = RESEARCH / "20260729_lfm25_provenance.json"
 
 
 def _provenance_section() -> list[str]:
-    """Name the code that produced these numbers, read from git rather than typed."""
-    lines = [
-        "## Provenance — which code produced these numbers",
-        "",
-        f"The paired intervals were computed by `paired_entity_bootstrap` at "
-        f"**B={_bootstrap_default_samples()}** replicates (the library default; this "
-        "harness does not override it), resampling **gold clusters**. Blob hashes of "
-        "the files that decide what the numbers mean:",
+    """Name the code that produced these numbers, read from the persisted sidecar.
+
+    Emphatically **not** derived from ``HEAD`` at render time. That was the first
+    implementation and it was wrong in the worst way: it named whatever was
+    checked out *now*, so the very next commit touching the harness silently
+    reattributed every measured row to code that never ran. Not a stale number —
+    a false one, and the same shape as every other "gate decoupled from what it
+    checks" bug in this repo. The sidecar is written from the measurement window
+    and committed beside the rows.
+    """
+    lines = ["## Provenance — which code produced these numbers", ""]
+    if not PROVENANCE.exists():
+        lines.append(
+            f"**Not recorded.** `{PROVENANCE.name}` is absent, so this run cannot say which "
+            "code produced its rows. Deliberately left blank rather than filled in from the "
+            "current checkout, which would assert something unverified."
+        )
+        return lines
+
+    doc = json.loads(PROVENANCE.read_text())
+    boot = doc["bootstrap"]
+    window = doc["measurement_window"]
+    lines += [
+        f"The paired intervals were computed by `{boot['function']}` at "
+        f"**B={boot['samples']}** replicates, resampling **{boot['resampled_unit']}s**. "
+        f"Measured between `{window['study_a_started']}` and "
+        f"`{window['study_b_finished']}`, with `HEAD` at "
+        f"`{window['head_when_sweep_started']}`.",
         "",
         "| file | blob | last commit touching it |",
         "|---|---|---|",
     ]
-    for path in PROVENANCE_FILES:
-        blob = _git("rev-parse", f"HEAD:{path}") or "unavailable"
-        last = _git("log", "-1", "--format=%h %cI", "--", path) or "unavailable"
-        lines.append(f"| `{path}` | `{blob[:12]}` | {last} |")
+    for path, meta in doc["blobs"].items():
+        lines.append(
+            f"| `{path}` | `{meta['blob'][:12]}` | {meta['last_commit']} "
+            f"{meta['last_commit_date']} |"
+        )
     lines += [
         "",
-        "Blob hashes, deliberately, and **not** the render-time `HEAD`: `HEAD` moves with "
-        "every commit, so embedding it would make this file re-render differently on each "
-        "run and break the harness's own reproduce-the-committed-table check. A blob hash "
-        "changes only when the file's content does, which is the property being recorded.",
+        "A **blob** hash, not a commit: it changes only when the file's *content* does, "
+        "which is the property being recorded. `git log` over these paths restricted to "
+        "the measurement window above is empty — no harness change landed mid-sweep, so "
+        "these hashes apply to every row in both studies.",
     ]
     return lines
 
@@ -604,17 +597,21 @@ def render() -> str:
         "",
         *_control_vs_base_encoders(base),
         "",
-        f"**The causal reading applies only to the matched pair.** On "
-        f"`{MATCHED_BACKBONE_ENCODER}` vs the control, architecture and pooling are held "
-        "fixed and only pretraining differs, so there the conclusion holds: pretrained "
-        "masked-LM features read through an untrained mean-pooling head are **worse than "
-        "random features read the same way**. That is a statement about the *pooling*, not "
-        "about the checkpoint — MLM training shapes token representations for a head this "
-        "pipeline never attaches, and averaging them destroys more than averaging random "
-        "projections does. The 230M row points the same way but **cannot support that "
-        "claim**, because it varies backbone and size as well as pretraining. Either way "
-        "it is the cleanest available demonstration of why an untuned encoder must not be "
-        "ranked against a retrieval-tuned one.",
+        f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
+        "the control, architecture and pooling are held fixed and only pretrained-vs-random "
+        "weights differ. So the *finding* is exactly this: **under this untrained "
+        "mean-pooling configuration, the pretrained checkpoint scores worse than random "
+        "weights.** The 230M row points the same way but cannot even support that, because "
+        "it varies backbone and size as well as pretraining.",
+        "",
+        "A tempting explanation is that MLM training shapes token representations for a head "
+        "this pipeline never attaches, so averaging them destroys more than averaging random "
+        "projections does. That is a **hypothesis, not a result** — this experiment holds "
+        "pooling *fixed*, so it cannot attribute the gap to pooling rather than to the "
+        "checkpoint. Testing it means varying the pooling over the same features (CLS, "
+        "last-token, a trained head) and seeing whether the ordering reverses. Not done "
+        "here. What is safe to conclude either way is narrower and sufficient: an untuned "
+        "encoder must not be ranked against a retrieval-tuned one.",
         "",
         "This reframes `fodors_zagat` specifically. It was already labelled *saturated* — "
         "every usable embedder scoring near the ceiling. The control shows it is stronger "

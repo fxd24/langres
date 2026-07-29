@@ -195,7 +195,9 @@ Benchmarks with usable range: `abt_buy`, `amazon_google`, `wdc_computers`.
 - Random weights match or beat `LiquidAI/LFM2.5-Encoder-230M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`) — *different backbone and size*, so this pair confounds pretraining with model size and is an observation only.
 - Random weights match or beat `LiquidAI/LFM2.5-Encoder-350M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`) — **matched backbone**, so this pair isolates pretraining.
 
-**The causal reading applies only to the matched pair.** On `LiquidAI/LFM2.5-Encoder-350M` vs the control, architecture and pooling are held fixed and only pretraining differs, so there the conclusion holds: pretrained masked-LM features read through an untrained mean-pooling head are **worse than random features read the same way**. That is a statement about the *pooling*, not about the checkpoint — MLM training shapes token representations for a head this pipeline never attaches, and averaging them destroys more than averaging random projections does. The 230M row points the same way but **cannot support that claim**, because it varies backbone and size as well as pretraining. Either way it is the cleanest available demonstration of why an untuned encoder must not be ranked against a retrieval-tuned one.
+**What this supports, and what it does not.** On `LiquidAI/LFM2.5-Encoder-350M` vs the control, architecture and pooling are held fixed and only pretrained-vs-random weights differ. So the *finding* is exactly this: **under this untrained mean-pooling configuration, the pretrained checkpoint scores worse than random weights.** The 230M row points the same way but cannot even support that, because it varies backbone and size as well as pretraining.
+
+A tempting explanation is that MLM training shapes token representations for a head this pipeline never attaches, so averaging them destroys more than averaging random projections does. That is a **hypothesis, not a result** — this experiment holds pooling *fixed*, so it cannot attribute the gap to pooling rather than to the checkpoint. Testing it means varying the pooling over the same features (CLS, last-token, a trained head) and seeing whether the ordering reverses. Not done here. What is safe to conclude either way is narrower and sufficient: an untuned encoder must not be ranked against a retrieval-tuned one.
 
 This reframes `fodors_zagat` specifically. It was already labelled *saturated* — every usable embedder scoring near the ceiling. The control shows it is stronger than that: it is **uninformative in the strict sense**, because an untrained network also scores near the ceiling. Saturation says the models agree; this says the benchmark cannot tell a trained retriever from noise. It must never be cited as evidence that one embedder beats another.
 
@@ -225,14 +227,14 @@ Every model loaded and every cell measured — no failure rows.
 
 ## Provenance — which code produced these numbers
 
-The paired intervals were computed by `paired_entity_bootstrap` at **B=1000** replicates (the library default; this harness does not override it), resampling **gold clusters**. Blob hashes of the files that decide what the numbers mean:
+The paired intervals were computed by `langres.experiments.statistics.paired_entity_bootstrap` at **B=1000** replicates, resampling **gold clusters**. Measured between `2026-07-29T01:18:12+02:00` and `2026-07-29T03:44:51+02:00`, with `HEAD` at `c23d95e`.
 
 | file | blob | last commit touching it |
 |---|---|---|
 | `src/langres/experiments/statistics.py` | `5436b938b70e` | 9192ebf 2026-07-28T16:47:58+02:00 |
 | `examples/research/embedder_ladder.py` | `26ee49f473e7` | c23d95e 2026-07-29T01:17:51+02:00 |
 
-Blob hashes, deliberately, and **not** the render-time `HEAD`: `HEAD` moves with every commit, so embedding it would make this file re-render differently on each run and break the harness's own reproduce-the-committed-table check. A blob hash changes only when the file's content does, which is the property being recorded.
+A **blob** hash, not a commit: it changes only when the file's *content* does, which is the property being recorded. `git log` over these paths restricted to the measurement window above is empty — no harness change landed mid-sweep, so these hashes apply to every row in both studies.
 
 ## Reproduce
 

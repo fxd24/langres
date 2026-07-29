@@ -375,7 +375,11 @@ for model in "${MODELS[@]}"; do
         code=$cell_code
         # Name the cell that died. Without this the failure path condemns every
         # benchmark for this model, including the ones that measured fine.
-        FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark"
+        # Exit 3 is excluded on purpose: a cache-integrity refusal means the
+        # ROWS are fine and the cache is suspect, so recording it as a death
+        # would delete good rows -- the trap the exit-3 branch below exists to
+        # avoid.
+        [ $cell_code -ne 3 ] && FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark"
       fi
       # A cache-integrity refusal must stop immediately, not after the remaining
       # benchmarks have each recorded their own failure row.
@@ -388,6 +392,18 @@ for model in "${MODELS[@]}"; do
     # Non-granular: one process covers every benchmark, so all of them are lost.
     [ $code -ne 0 ] && FAILED_BENCHMARKS="$BENCHMARKS"
     check_swap || code=9
+  fi
+
+  # Flush cell deaths BEFORE the terminal branches below, both of which return
+  # without reaching the ordinary failure path. `code` gets overwritten by the
+  # terminal 9 (memory) or 3 (cache refusal), so a cell that genuinely died
+  # earlier in the loop left no trace -- and the next re-run then saw stale
+  # SUCCESSFUL rows for a cell that never re-ran. Scoped to the benchmarks that
+  # actually failed, and code-3 refusals are already excluded from that list, so
+  # this cannot delete a good row. (Cross-model review.)
+  if [ -n "${FAILED_BENCHMARKS// /}" ] && { [ $code -eq 9 ] || [ $code -eq 3 ]; }; then
+    log "$model: recording cell failures that preceded the stop:$FAILED_BENCHMARKS"
+    record_process_failure "$model" "$code" "$FAILED_BENCHMARKS"
   fi
 
   if [ $code -eq 9 ]; then
@@ -416,9 +432,6 @@ for model in "${MODELS[@]}"; do
     exit 3
   fi
 
-  # Code 9 is THIS script stopping on memory pressure, not the model failing.
-  # Recording a failure row would delete every good row this model already
-  # produced and commit the deletion -- the same trap as the exit-3 path.
   if [ $code -ne 0 ] && [ $code -ne 9 ]; then
     log "$model exited $code -- recording a failure row for:${FAILED_BENCHMARKS:- $BENCHMARKS}"
     record_process_failure "$model" "$code" "${FAILED_BENCHMARKS:-$BENCHMARKS}"
@@ -433,10 +446,27 @@ for model in "${MODELS[@]}"; do
       >> "$LOG_DIR/$safe.log" 2>&1
   fi
 
-  git add "$ROWS" "$REPORT" "$REFERENCE" 2>/dev/null
+  # Stage only the artifacts that EXIST. `git add` fails atomically on a
+  # pathspec matching nothing, so naming an absent sidecar staged NONE of the
+  # three -- and with its status discarded, the next check read "no change" and
+  # the run was never committed. On a fresh LADDER_ARTIFACT whose first model
+  # dies before Python writes the reference sidecar, that silently threw away
+  # the very failure record this path exists to preserve. (Cross-model review.)
+  ARTIFACT_PATHS=()
+  for artifact_path in "$ROWS" "$REPORT" "$REFERENCE"; do
+    [ -e "$artifact_path" ] && ARTIFACT_PATHS+=("$artifact_path")
+  done
+  if [ ${#ARTIFACT_PATHS[@]} -eq 0 ]; then
+    log "FATAL: $model produced none of the tracked artifacts -- nothing to commit; stopping."
+    exit 1
+  fi
+  if ! git add "${ARTIFACT_PATHS[@]}"; then
+    log "FATAL: could not stage ${ARTIFACT_PATHS[*]}; stopping rather than losing the result."
+    exit 1
+  fi
   # Path-scoped, like the commit below: an operator's unrelated staged work
   # would otherwise read as "this model produced results".
-  if git diff --cached --quiet -- "$ROWS" "$REPORT" "$REFERENCE"; then
+  if git diff --cached --quiet -- "${ARTIFACT_PATHS[@]}"; then
     log "$model produced no change to the tracked artifacts"
   else
     # --only: commit EXACTLY these three paths. A plain `git commit` takes the
@@ -448,7 +478,7 @@ for model in "${MODELS[@]}"; do
     # identity, disk), the results are merely staged, and carrying on would let
     # the NEXT model's --only commit bundle them under the wrong message. A
     # bare `&& log` would swallow exactly that.
-    if ! git commit -q --only "$ROWS" "$REPORT" "$REFERENCE" \
+    if ! git commit -q --only "${ARTIFACT_PATHS[@]}" \
       -m "results($(basename "$ARTIFACT")): $model" \
       -m "Measured by examples/research/run_ladder.sh, committed as soon as the rows existed. Exit code $code."
     then

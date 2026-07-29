@@ -305,6 +305,36 @@ class TestNoiseFloor:
         assert REPORT.render() == REPORT.render()
 
 
+class TestProvenance:
+    """Provenance names the code that MEASURED, not the code checked out now."""
+
+    def test_the_blob_comes_from_the_sidecar_not_from_head(self) -> None:
+        """Regression: the first version read ``git rev-parse HEAD:<path>``.
+
+        That made the line move with every commit, so the first change to the
+        harness silently reattributed every measured row to code that never ran
+        -- a false statement, not merely a stale one -- and it also broke the
+        reproduce-the-committed-table property.
+        """
+        recorded = json.loads(REPORT.PROVENANCE.read_text())
+        section = "\n".join(REPORT._provenance_section())
+
+        for path, meta in recorded["blobs"].items():
+            assert path in section
+            assert meta["blob"][:12] in section
+
+    def test_a_missing_sidecar_says_so_instead_of_guessing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Silence is the honest answer; inventing a hash from the checkout is not."""
+        monkeypatch.setattr(REPORT, "PROVENANCE", tmp_path / "absent.json")
+
+        section = "\n".join(REPORT._provenance_section())
+
+        assert "Not recorded" in section
+        assert "blob" not in section.split("Not recorded")[1]
+
+
 class TestLicenceBlocker:
     def test_the_threshold_clause_is_quoted_from_the_committed_licence(self) -> None:
         clauses = REPORT._licence_clauses()
