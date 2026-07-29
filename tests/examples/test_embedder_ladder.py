@@ -2561,3 +2561,68 @@ class TestTheArmClaimIsPerArmNotPerModel:
 
         assert "whose OWN recipe this sweep did run" in caveat
         assert "google/embeddinggemma-300m" in caveat
+
+
+class TestTheArmClaimCoversEveryModelTheDocumentIsAccountableFor:
+    """`--models` accepts a checkpoint outside the declared ladder.
+
+    `_ladder_specs(rows)` exists so the coverage denominator and every
+    enumeration drawn from it cannot disagree -- it row-expands the declared
+    tuple. The instruction block iterated `LADDER` instead, so a custom
+    checkpoint with a successful `documented` arm appeared in the tables while
+    the prose two sections later said no model's own recipe was measured.
+    """
+
+    def test_a_row_backed_model_outside_the_declared_ladder_is_credited(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        declared = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", declared)
+        # Measured via --models, absent from --ladder-models. `documented` is the
+        # arm whose presence the prose reports on.
+        rows = [
+            _cell("all-MiniLM-L6-v2", "none"),
+            _cell("acme/custom-checkpoint", "documented"),
+        ]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "acme/custom-checkpoint" in caveat
+        assert "No model here had its own recipe measured" not in caveat
+
+    def test_the_reproduce_command_carries_the_same_denominator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """LADDER_ALL_MODELS *is* the coverage denominator, and run_ladder.sh
+        refuses (exit 2) on a custom artifact whose denominator is wrong."""
+        declared = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", declared)
+        rows = [
+            _cell("all-MiniLM-L6-v2", "none"),
+            _cell("acme/custom-checkpoint", "documented"),
+        ]
+
+        report = LADDER.render_report(rows)
+        # The LADDER_ALL_MODELS assignments themselves. Slicing "everything after
+        # the reproduce heading" passed on the pre-fix code, because later sections
+        # of the document name the model too -- the assertion was reading the rest
+        # of the report, not the command.
+        denominators = [line for line in report.splitlines() if "LADDER_ALL_MODELS=" in line]
+
+        assert denominators
+        for line in denominators:
+            assert "acme/custom-checkpoint" in line
+
+    def test_the_random_init_control_is_still_excluded_from_the_claim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It has no training recipe to measure; widening the cohort must not add it."""
+        declared = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", declared)
+        control = LADDER.ModelSpec("random-init-probe", random_init=True)
+        monkeypatch.setattr(LADDER, "LADDER", (*declared, control))
+        rows = [_cell("all-MiniLM-L6-v2", "none"), _cell("random-init-probe", "none")]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "random-init-probe" not in caveat

@@ -2509,7 +2509,13 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # coverage denominator count CHARACTERS ("7 of the 336 models in the ladder")
     # and made the licence table iterate them, emptying it. Renamed so the two
     # cannot collide.
-    ladder_arg = " ".join(shlex.quote(spec.name) for spec in LADDER)
+    # `ladder_specs` for the same reason as the instruction block below: this
+    # string becomes LADDER_ALL_MODELS, which IS the report's coverage denominator.
+    # Built from LADDER it omitted any row-backed custom checkpoint, so the command
+    # a reader is told reproduces this document would reproduce it against a
+    # smaller denominator than the document reports -- and `run_ladder.sh` refuses
+    # (exit 2) on a custom artifact whose denominator is wrong. (Cross-model review.)
+    ladder_arg = " ".join(shlex.quote(spec.name) for spec in ladder_specs)
     # LADDER_ALL_MODELS is the artifact's COVERAGE DENOMINATOR and run_ladder.sh
     # refuses (exit 2) if a custom LADDER_ARTIFACT arrives without it -- so a
     # command that omitted it did not merely mis-report coverage, it failed
@@ -2984,7 +2990,15 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # described as having had the generic instruction run against it. Configuration
     # decided nothing here any more. (Cross-model review.)
     measured_arms = {(row.model, row.prompt_arm) for row in ok}
-    trainable = [spec for spec in LADDER if not spec.random_init]
+    # `ladder_specs`, not LADDER: `--models` accepts a checkpoint outside the
+    # declared tuple, and `_ladder_specs(rows)` exists precisely so the coverage
+    # denominator and every enumeration drawn from it cannot disagree. This block
+    # read LADDER, so a custom checkpoint with a successful `documented` arm
+    # appeared in the tables while this paragraph said no model's own recipe was
+    # measured -- a document contradicting itself two sections apart, which is the
+    # exact failure `_ladder_specs` was written for. Third expression of one set.
+    # (Cross-model review.)
+    trainable = [spec for spec in ladder_specs if not spec.random_init]
     own_recipe = [spec.name for spec in trainable if (spec.name, "documented") in measured_arms]
     generic_only = [
         spec.name

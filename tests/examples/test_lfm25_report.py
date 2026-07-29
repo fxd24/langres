@@ -1535,3 +1535,120 @@ class TestTheOneEnvironmentClaimIsProspective:
         if "postdates the measurement window" in published:
             assert "so the loading section and the scores describe one environment." in published
             assert "Whether that holds for the artifacts committed here" in published
+
+
+class TestATieBetweenPromptArmsCannotDecideAVerdict:
+    """`max` returns the FIRST maximum, so a tie was resolved by JSONL row order.
+
+    Not hypothetical: five of twenty study-A cells and three of twenty study-B
+    cells are tied in the committed rows, and `merge_rows` reorders through
+    `kept + fresh`, so a partial re-measure can swap them. One of those ties is
+    the control on `walmart_amazon`, whose paired interval decides a published
+    verdict.
+    """
+
+    @staticmethod
+    def _tied_control(low_a: float, high_a: float, low_b: float, high_b: float) -> list[dict]:
+        """Two control arms tied on recall with different intervals."""
+        return [
+            _row(
+                REPORT.CONTROL,
+                "bm",
+                prompt_arm=arm,
+                candidate_recall=0.80,
+                vs_reference_delta=-0.01,
+                vs_reference_ci_low=low,
+                vs_reference_ci_high=high,
+                reference_model="LiquidAI/LFM2.5-Embedding-350M",
+            )
+            for arm, low, high in (("instruct", low_a, high_a), ("none", low_b, high_b))
+        ]
+
+    def test_the_arm_credited_does_not_depend_on_row_order(self) -> None:
+        rows = self._tied_control(-0.03, -0.01, -0.02, -0.005)
+
+        forward = REPORT._best_arm(rows, REPORT.CONTROL, "bm")
+        reversed_ = REPORT._best_arm(list(reversed(rows)), REPORT.CONTROL, "bm")
+
+        assert forward is not None and reversed_ is not None
+        assert forward["prompt_arm"] == reversed_["prompt_arm"]
+
+    def test_separation_requires_every_tied_arm_to_clear_zero(self) -> None:
+        """One arm spanning zero must not be outvoted by the arm listed first."""
+        tuned = [_row("intfloat/e5-base-v2", "bm", candidate_recall=0.90)]
+        # `instruct` clears zero; `none` does not. Row order would have picked
+        # `instruct` and called the benchmark separating.
+        base = self._tied_control(-0.03, -0.01, -0.02, 0.01)
+
+        table, _uninformative, _informative, _narrow, _inverted = REPORT._noise_floor_table(
+            tuned, base
+        )
+
+        assert "cannot separate trained from random" in table
+
+    def test_a_tie_whose_arms_agree_still_separates(self) -> None:
+        """The conservative rule must not refuse the case the rows actually hold."""
+        tuned = [_row("intfloat/e5-base-v2", "bm", candidate_recall=0.90)]
+        base = self._tied_control(-0.03, -0.01, -0.02, -0.005)
+
+        table, _uninformative, informative, _narrow, _inverted = REPORT._noise_floor_table(
+            tuned, base
+        )
+
+        assert "bm" in informative
+        assert "cannot separate trained from random" not in table
+
+    def test_an_arm_with_no_interval_is_a_missing_measurement_not_a_verdict(self) -> None:
+        """Unanimity cannot be established over an arm nobody measured."""
+        tuned = [_row("intfloat/e5-base-v2", "bm", candidate_recall=0.90)]
+        base = self._tied_control(-0.03, -0.01, -0.02, -0.005)
+        base[1].pop("vs_reference_ci_low")
+        base[1].pop("vs_reference_ci_high")
+
+        table, uninformative, informative, _narrow, _inverted = REPORT._noise_floor_table(
+            tuned, base
+        )
+
+        assert "not measured, not a finding" in table
+        assert "bm" not in uninformative
+        assert "bm" not in informative
+
+
+class TestZeroExclusionIsOnePredicate:
+    """It was written out three times and this PR was adding a fourth.
+
+    A bound landing exactly on 0.0000 is a MEASURED case here (`fodors_zagat`),
+    so which copy of the comparison a reader hits must not change the answer.
+    """
+
+    def test_a_bound_exactly_on_zero_does_not_exclude_zero(self) -> None:
+        assert REPORT._excludes_zero(0.0, 0.0) is False
+        assert REPORT._excludes_zero(0.0, 0.11) is False
+        assert REPORT._excludes_zero(-0.11, 0.0) is False
+
+    def test_a_missing_bound_is_not_an_exclusion(self) -> None:
+        assert REPORT._excludes_zero(None, -0.01) is False
+        assert REPORT._excludes_zero(-0.03, None) is False
+
+    def test_it_clears_zero_in_both_directions(self) -> None:
+        assert REPORT._excludes_zero(0.01, 0.11) is True
+        assert REPORT._excludes_zero(-0.11, -0.01) is True
+
+    def test_the_module_has_no_second_copy_of_the_comparison(self) -> None:
+        """Grep the invariant, not my phrasing of it.
+
+        Docstrings are stripped, not merely `#` comments. The first version of
+        this test counted raw text and fired on a docstring that *describes* the
+        predicate -- prose about the artifact matched as if it were the artifact,
+        which is the mistake this whole PR keeps making. Comparing ASTs makes the
+        assertion about code.
+        """
+        import ast
+
+        tree = ast.parse(REPORT_PATH.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                node.value.value = ""  # a docstring is not an implementation
+        code = ast.unparse(tree)
+
+        assert code.count("low > 0 or high < 0") == 1

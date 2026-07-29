@@ -1179,9 +1179,14 @@ class TestOnePublicationRule:
 
         assert "publish_branch" in block
 
+    @staticmethod
+    def _code(text: str) -> str:
+        """Comment lines stripped. A prose mention of `exit` is not an exit."""
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
     def test_publication_failure_is_never_fatal(self) -> None:
         """Durability is the commit; publication is not worth aborting a sweep for."""
-        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+        lib = self._code((self.RESEARCH / "publish_lib.sh").read_text())
 
         assert "exit " not in lib
         assert "return 1" in lib
@@ -1240,3 +1245,88 @@ class TestAVerificationFailureWithholdsPublication:
         commit = block.index("git commit -q --only")
 
         assert commit < block.index('if [ "$PROVENANCE_OK" = "1" ]; then')
+
+
+class TestPublicationIsWithheldForTheWholeSweep:
+    """Withholding ONE push withholds nothing: `git push` sends the whole branch.
+
+    So a per-call refusal is not a refusal. The next model whose check passes
+    republishes every commit held back before it -- and after a mid-sweep edit is
+    reverted, the endpoint-only `--finish` compares start against end and passes
+    too, so nothing downstream can see that one row was measured under code the
+    provenance window does not describe.
+    """
+
+    RESEARCH = Path(__file__).parents[2] / "examples" / "research"
+
+    def _driver(self) -> str:
+        return (self.RESEARCH / "run_ladder.sh").read_text()
+
+    def test_the_latch_lives_in_the_one_function_that_publishes(self) -> None:
+        """A shell variable would have latched only the process that set it.
+
+        Both wrappers call run_ladder.sh and then publish for themselves, so the
+        verdict has to outlive it -- and the condition is a property of the
+        BRANCH, since `git push` sends every commit on it.
+        """
+        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+
+        assert "block_publication()" in lib
+        assert "_publication_block_file()" in lib
+        assert "block_publication()" not in self._driver()
+
+    def test_publish_branch_honours_it_before_anything_else(self) -> None:
+        """Checked after the branch rule, a push could still have gone out."""
+        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+        body = lib[lib.index("publish_branch() {") :]
+        gate = body.index("publication is withheld for this branch")
+
+        assert gate < body.index("git push")
+        assert gate < body.index("symbolic-ref")
+
+    def test_the_marker_is_worktree_state_not_a_tracked_artifact(self) -> None:
+        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+
+        assert "/tmp/.publication-withheld" in lib
+
+    def test_a_verification_failure_latches(self) -> None:
+        driver = self._driver()
+        body = driver[driver.index("push_results() {") : driver.index("# `${VAR:+...}`")]
+        handler = body[body.index("--verify") :]
+
+        assert "block_publication" in handler[: handler.index("publish_branch")]
+
+    def test_a_failed_render_latches_before_the_commit_is_pushed(self) -> None:
+        """The commit deliberately omits the report; publishing it strands the remote."""
+        driver = self._driver()
+        latch = driver.index("if [ $RENDER_FAILED -eq 1 ]; then\n    block_publication")
+
+        assert latch < driver.index("    push_results")
+
+    @staticmethod
+    def _code(text: str) -> str:
+        """Comment lines stripped. A prose mention of `exit` is not an exit.
+
+        The sibling test asserting publication is never fatal fired on the word
+        `exit` inside a comment explaining why an exit code was the wrong design.
+        """
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+    def test_durability_is_never_what_is_withheld(self) -> None:
+        """Every commit still happens; only the push is held."""
+        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+        body = self._code(lib[lib.index("block_publication() {") : lib.index("publish_branch() {")])
+
+        assert "exit " not in body
+        assert "COMMITTED" in body
+
+    def test_it_does_not_clear_itself(self) -> None:
+        """The withheld commits are still on the branch after the sweep ends.
+
+        Auto-clearing would let the next sweep's first successful push publish
+        exactly what this withheld. It fails closed and prints how to clear.
+        """
+        lib = self._code((self.RESEARCH / "publish_lib.sh").read_text())
+
+        assert "rm " not in lib
+        assert "Clear " in lib

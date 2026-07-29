@@ -354,19 +354,60 @@ def _cells(rows: list[dict[str, Any]], **match: Any) -> list[dict[str, Any]]:
     return [row for row in rows if all(row.get(key) == value for key, value in match.items())]
 
 
-def _best_arm(rows: list[dict[str, Any]], model: str, benchmark: str) -> dict[str, Any] | None:
-    """The model's best prompt arm on this benchmark, at the headline k.
+def _excludes_zero(low: float | None, high: float | None) -> bool:
+    """Whether a bootstrap interval clears zero, in either direction.
 
-    Reporting the best arm rather than a fixed one is the configuration a user
-    following the model card would land on, and every arm is in the per-arm table
-    below — so this selects, it does not hide.
+    One predicate, because it was written out three times — the per-arm table, the
+    control-interval split and the noise-floor verdict — and this PR was adding a
+    fourth. A bound landing EXACTLY on 0.0000 does not exclude zero; that is a
+    measured case here (``fodors_zagat``), not a theoretical one, so it must not
+    depend on which copy of the comparison a reader happens to hit.
+    """
+    return low is not None and high is not None and (low > 0 or high < 0)
+
+
+def _tied_best_arms(rows: list[dict[str, Any]], model: str, benchmark: str) -> list[dict[str, Any]]:
+    """Every arm sharing the model's best recall here, ordered by arm name.
+
+    Exists because ``max`` returns the FIRST maximum, which on a tie is whichever
+    row the JSONL happens to list first — and ``merge_rows`` reorders rows through
+    ``kept + fresh``, so a partial re-measure can swap them. Ties are not
+    hypothetical: five of twenty study-A cells and three of twenty study-B cells
+    have them, including the ``random-init-control-350M`` control on
+    ``walmart_amazon`` whose paired interval decides a published verdict.
+
+    Returned as a LIST rather than resolved here, because the two callers need
+    different things from a tie and only one of them can be answered by picking a
+    row. (Cross-model review.)
     """
     candidates = [
         row
         for row in _cells(rows, model=model, benchmark=benchmark, k=HEADLINE_K, status="ok")
         if row.get("candidate_recall") is not None
     ]
-    return max(candidates, key=lambda row: row["candidate_recall"]) if candidates else None
+    if not candidates:
+        return []
+    best = max(row["candidate_recall"] for row in candidates)
+    return sorted(
+        (row for row in candidates if row["candidate_recall"] == best),
+        key=lambda row: str(row.get("prompt_arm")),
+    )
+
+
+def _best_arm(rows: list[dict[str, Any]], model: str, benchmark: str) -> dict[str, Any] | None:
+    """The model's best prompt arm on this benchmark, at the headline k.
+
+    Reporting the best arm rather than a fixed one is the configuration a user
+    following the model card would land on, and every arm is in the per-arm table
+    below — so this selects, it does not hide.
+
+    Ties break on arm NAME, deterministically. The enclosing table already fixed
+    this one level up — ``_noise_floor_table`` breaks its model tie on
+    ``(recall, model)`` and says why — while the arm chosen inside each of those
+    cells was still decided by row order. One of N identical sites, again.
+    """
+    tied = _tied_best_arms(rows, model, benchmark)
+    return tied[0] if tied else None
 
 
 def _failure_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -435,7 +476,7 @@ def _interval_table(rows: list[dict[str, Any]], baseline: str) -> tuple[str, lis
                 low, high = row.get("vs_reference_ci_low"), row.get("vs_reference_ci_high")
                 excludes = "—"
                 if low is not None and high is not None:
-                    excludes = "yes" if (low > 0 or high < 0) else "no"
+                    excludes = "yes" if _excludes_zero(low, high) else "no"
                     # A percentile bootstrap on a DISCRETE statistic can land a
                     # bound exactly on 0.0000. That does not exclude zero, and a
                     # ">= 0" test would read it as if it did.
@@ -863,7 +904,7 @@ def _control_intervals(base: list[dict[str, Any]], benchmark: str) -> tuple[list
         if low is None or high is None:
             continue
         formatted = f"`{_ci(low, high)}`"
-        bucket = excluding if (low > 0 or high < 0) else spanning
+        bucket = excluding if _excludes_zero(low, high) else spanning
         if formatted not in bucket:
             bucket.append(formatted)
     return sorted(excluding), sorted(spanning)
@@ -958,7 +999,7 @@ def _control_reference(base: list[dict[str, Any]]) -> str | None:
 def _control_direction(base: list[dict[str, Any]], benchmark: str) -> str | None:
     """``"below"`` / ``"above"`` — which side of its paired baseline the control's CI sits.
 
-    ``separates`` is ``low > 0 or high < 0``: the interval excludes zero in
+    ``separates`` is :func:`_excludes_zero`: the interval clears zero in
     *either* direction. The narrow-benchmark prose then said the control is
     "significantly below" — true of every cell measured here, but not implied by
     the predicate that put it in that bucket. A control significantly ABOVE its
@@ -1057,6 +1098,20 @@ def _noise_floor_table(
         # low-resolution, not blind.
         low = control.get("vs_reference_ci_low")
         high = control.get("vs_reference_ci_high")
+        # The verdict must not depend on WHICH of several equally-good control arms
+        # was picked. `_best_arm` now breaks that tie deterministically, but a
+        # deterministic arbitrary choice is still arbitrary: on `walmart_amazon` the
+        # control's two arms are tied at 0.8626 with DIFFERENT intervals
+        # ([-0.0275, -0.0072] and [-0.0295, -0.0099]), and a scientific claim that
+        # changes with a tie-break rule is not a claim about the benchmark.
+        #
+        # So separation has to hold for EVERY tied-best arm. Today they agree on
+        # both tied cells and this changes no verdict in the committed rows — which
+        # is the point: it removes the dependency while it is still costless, rather
+        # than after a re-measure moves one of them across zero. Unanimity is the
+        # conservative direction: a tie can no longer manufacture a stronger claim
+        # than the weakest arm supports. (Cross-model review.)
+        tied_controls = _tied_best_arms(base, CONTROL, benchmark)
         # THREE outcomes, not two. An interval that was never measured is not an
         # interval that failed to exclude zero, and collapsing them made a
         # missing measurement read as a finding about the benchmark:
@@ -1065,7 +1120,14 @@ def _noise_floor_table(
         # of that benchmark that "the control's paired interval does not exclude
         # zero" — about a number nobody has. Unmeasured benchmarks are excluded
         # from every blind/separates conclusion instead. (Cross-model review.)
-        if low is None or high is None:
+        # An arm missing its interval is a missing measurement for the whole cell:
+        # unanimity cannot be established over an arm nobody measured, and quietly
+        # dropping it would let the remaining arm speak for the tie.
+        intervals = [
+            (arm.get("vs_reference_ci_low"), arm.get("vs_reference_ci_high"))
+            for arm in tied_controls
+        ]
+        if low is None or high is None or any(lo is None or hi is None for lo, hi in intervals):
             verdict = "— **no control interval in these rows** (not measured, not a finding)"
             unmeasured.append(benchmark)
             table += (
@@ -1073,7 +1135,7 @@ def _noise_floor_table(
                 f"(`{best['model']}`) | **{margin:+.4f}** | — | {verdict} |\n"
             )
             continue
-        separates = low > 0 or high < 0
+        separates = all(_excludes_zero(lo, hi) for lo, hi in intervals)
         if not separates:
             verdict = "**cannot separate trained from random**"
             uninformative.append(benchmark)

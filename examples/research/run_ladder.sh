@@ -187,8 +187,26 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 # are still made -- the durability the sweep depends on is untouched -- only the
 # publish step is withheld, with the branch to create printed. (Cross-model
 # review.)
+# `block_publication` and the check that honours it live in publish_lib.sh.
+#
+# `git push origin HEAD` publishes the whole BRANCH, not the one commit that just
+# landed, so withholding a single push withholds nothing durable: the next model
+# whose check passes republishes everything held back before it. Two ways in here:
+#
+#   - provenance --verify failed for one model, the tracked .py was restored, and
+#     the next model verified clean. The endpoint-only `--finish` compares start
+#     against end and also passes, so nothing downstream can see that one row was
+#     measured under code the window does not describe.
+#   - the rows were re-rendered into a report that FAILED, so the commit
+#     deliberately excludes the report. Pushing then leaves origin holding new
+#     rows beside the previous report -- the contradiction the exclusion existed
+#     to prevent, published.
+#
+# A shell variable would have latched only THIS process. Both wrappers call this
+# driver and then publish for themselves, so the verdict has to outlive it.
+# (Cross-model review, twice: the same "publishing HEAD republishes what was
+# withheld" shape as run_lfm25.sh's abort path, one driver down.)
 push_results() {
-  local branch default
   # Provenance is verified per PUBLICATION, not once at the end. --finish runs
   # after every model has run, but this function publishes after EACH one, so a
   # mid-sweep edit to a tracked .py could already be pushed by the time --finish
@@ -206,8 +224,7 @@ push_results() {
   local required_arg=()
   [ "${LADDER_PROVENANCE_REQUIRED:-0}" = "1" ] && required_arg=(--required)
   if ! uv run python examples/research/write_provenance.py --verify "${required_arg[@]}" 2>&1; then
-    log "NOT pushing: provenance verification failed (see above)."
-    log "  Rows are COMMITTED and safe. Re-measure on a stable tree before publishing."
+    block_publication "provenance verification failed (see above). Rows are COMMITTED and safe; re-measure on a stable tree before publishing."
     return 0
   fi
   # LADDER_NO_PUSH: commit as usual, publish nothing. For a WRAPPER that cannot
@@ -732,6 +749,15 @@ for model in "${MODELS[@]}"; do
   # the run was never committed. On a fresh LADDER_ARTIFACT whose first model
   # dies before Python writes the reference sidecar, that silently threw away
   # the very failure record this path exists to preserve. (Cross-model review.)
+  # Excluding the stale report from the COMMIT is only half the fix. The commit
+  # then holds new rows and no report, and `git push origin HEAD` publishes that
+  # against the report already on the remote -- which was generated from the
+  # PREVIOUS rows. The remote ends up holding exactly the contradiction the
+  # exclusion below exists to prevent, while the log says the rows are merely
+  # being made durable. Commit, do not publish. (Cross-model review.)
+  if [ $RENDER_FAILED -eq 1 ]; then
+    block_publication "the report could not be re-rendered over these rows, so the commit carries rows WITHOUT it. Publishing would leave the remote holding new rows beside a report generated from the previous ones."
+  fi
   ARTIFACT_PATHS=()
   for artifact_path in "$ROWS" "$REPORT" "$REFERENCE"; do
     # The report is excluded when it could not be re-rendered over the edited
