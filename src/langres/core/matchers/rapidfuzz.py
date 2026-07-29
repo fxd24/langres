@@ -32,7 +32,6 @@ class RapidfuzzMatcher(Matcher[SchemaT]):
                 "name": (lambda x: x.name, 0.7),
                 "address": (lambda x: x.address or "", 0.3),
             },
-            threshold=0.7,
             algorithm="ratio"
         )
 
@@ -42,7 +41,6 @@ class RapidfuzzMatcher(Matcher[SchemaT]):
                 "title": (lambda x: x.title, 0.8),
                 "brand": (lambda x: x.brand or "", 0.2),
             },
-            threshold=0.6,
             algorithm="token_sort_ratio"
         )
 
@@ -73,9 +71,23 @@ class RapidfuzzMatcher(Matcher[SchemaT]):
                 tuples. The extractor is a function that extracts a string from
                 an entity, and the weight is the importance of this field in the
                 final score.
-            threshold: Minimum score to consider a match (0.0 to 1.0).
-                This is stored for compatibility with Optimizer, but not used
-                in forward() (that's the Clusterer's job).
+            threshold: **Inert. Range-checked, stored, and never read** -- not by
+                ``forward`` (which is a ranker: it emits a ``score`` and lets the
+                caller cut), and not by anything else in the package. Kept only
+                because it is on a public constructor.
+
+                The old note here said it was "stored for compatibility with
+                Optimizer". There is no ``Optimizer`` -- only
+                ``autoresearch.blocker_optimizer.BlockerOptimizer``, which
+                searches *blocking* configs and never touches this attribute, so
+                that justification named something that does not exist.
+
+                The cut that actually decides a match lives downstream, on the
+                ``Clusterer`` (or on whatever ``ThresholdSelect`` /
+                ``predicted_match`` call grades the judgements). Set it there.
+                The registry's own builder (``method_registry._build_rapidfuzz``)
+                passes no threshold at all, which is why nothing has ever
+                noticed.
             algorithm: Rapidfuzz algorithm to use for string comparison.
 
         Raises:

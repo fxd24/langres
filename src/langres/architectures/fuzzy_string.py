@@ -17,6 +17,7 @@ from langres.core.comparators import StringComparator
 from langres.core.matchers.weighted_average import WeightedAverageMatcher
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
+from langres.core.score_type import resolve_threshold
 
 __all__ = ["FuzzyString"]
 
@@ -59,7 +60,10 @@ class FuzzyString(ERModel):
 
     Args:
         threshold: The match cut on the weighted-average similarity (a
-            ``"heuristic"`` score, not a probability -- 0.5 by default).
+            ``"heuristic"`` score, not a probability). ``None`` (the default)
+            takes the ``"heuristic"`` family's shipped cut from
+            :data:`~langres.core.score_type.DEFAULT_THRESHOLDS` rather than a
+            constant hard-coded here.
         weights: Per-feature weight overrides for the comparator. Defaults to
             equal weights; pass name-dominant weights (e.g.
             ``{"name": 0.6, "address": 0.2}``) to recover name-only duplicates
@@ -104,7 +108,7 @@ class FuzzyString(ERModel):
     def __init__(
         self,
         *,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         weights: dict[str, float] | None = None,
         exclude: set[str] | None = None,
         clusterer: Clusterer | None = None,
@@ -114,7 +118,10 @@ class FuzzyString(ERModel):
         # Hyperparameters only -- sklearn's rule, and here it is load-bearing
         # rather than stylistic: the components cannot exist yet, because the
         # schema may not be known until dedupe() sees the records.
-        self.threshold = threshold
+        # Resolved HERE, not lazily: ``self.threshold`` is public and is read by
+        # _build_clusterer, ``config``, and every caller that inspects the model,
+        # so it must be the number that will actually cut -- never ``None``.
+        self.threshold = resolve_threshold(threshold, "heuristic")
         self.weights = weights
         self.exclude = exclude
         # NOT ``self.clusterer``: that name is an ERModel SLOT (a property whose

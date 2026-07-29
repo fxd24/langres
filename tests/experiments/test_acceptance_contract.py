@@ -209,7 +209,7 @@ def test_public_acceptance_imports_and_signatures_are_stable() -> None:
     assert str(inspect.signature(Experiment.plan)) == "(self) -> 'ExperimentPlan'"
     assert str(inspect.signature(Retrieve)) == (
         "(*, embedder: 'EmbedderLike', schema: 'type[BaseModel] | None' = None, "
-        "retrieve_k: 'int' = 20, threshold: 'float' = 0.5, "
+        "retrieve_k: 'int' = 20, threshold: 'float | None' = None, "
         "text_field: 'str | None' = None, source_field: 'str | None' = None, "
         "clusterer: 'Clusterer | None' = None, "
         "budget_usd: 'float | None' = None, "
@@ -218,7 +218,7 @@ def test_public_acceptance_imports_and_signatures_are_stable() -> None:
     assert str(inspect.signature(RetrieveRerank)) == (
         "(*, embedder: 'EmbedderLike', reranker: 'RerankerLike', "
         "schema: 'type[BaseModel] | None' = None, retrieve_k: 'int' = 20, "
-        "threshold: 'float' = 0.5, text_field: 'str | None' = None, "
+        "threshold: 'float | None' = None, text_field: 'str | None' = None, "
         "source_field: 'str | None' = None, clusterer: 'Clusterer | None' = None, "
         "budget_usd: 'float | None' = None, "
         "monitor: 'SpendMonitor | None' = None) -> 'None'"
@@ -226,7 +226,7 @@ def test_public_acceptance_imports_and_signatures_are_stable() -> None:
     assert str(inspect.signature(RetrieveLLM)) == (
         "(*, embedder: 'EmbedderLike', llm: 'LLMLike', "
         "schema: 'type[BaseModel] | None' = None, retrieve_k: 'int' = 20, "
-        "llm_k: 'int' = 5, threshold: 'float' = 0.5, "
+        "llm_k: 'int' = 5, threshold: 'float | None' = None, "
         "text_field: 'str | None' = None, source_field: 'str | None' = None, "
         "clusterer: 'Clusterer | None' = None, "
         "budget_usd: 'float | None' = None, "
@@ -235,7 +235,7 @@ def test_public_acceptance_imports_and_signatures_are_stable() -> None:
     assert str(inspect.signature(RetrieveRerankLLM)) == (
         "(*, embedder: 'EmbedderLike', reranker: 'RerankerLike', llm: 'LLMLike', "
         "schema: 'type[BaseModel] | None' = None, retrieve_k: 'int' = 20, "
-        "llm_k: 'int' = 5, threshold: 'float' = 0.5, "
+        "llm_k: 'int' = 5, threshold: 'float | None' = None, "
         "text_field: 'str | None' = None, source_field: 'str | None' = None, "
         "clusterer: 'Clusterer | None' = None, "
         "budget_usd: 'float | None' = None, "

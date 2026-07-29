@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeAlias, cast
@@ -17,6 +18,7 @@ from langres.core.pairs import Pairs
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
 from langres.core.results import DedupeResult, LinkVerdict
+from langres.core.score_type import ScoreType, resolve_threshold
 from langres.core.spend import SpendMonitor
 from langres.resources import (
     CrossEncoderReranker,
@@ -60,9 +62,44 @@ def _cluster_stage(clusterer: Clusterer | None) -> ClustererStage[Any]:
     return ClustererStage(threshold_free)
 
 
-def _validate_threshold(threshold: float) -> None:
-    if not 0.0 <= threshold <= 1.0:
+def _resolve_threshold(threshold: float | None, score_type: ScoreType) -> float:
+    """Take the family default for ``None``, then range-check whatever we ended up with."""
+    resolved = resolve_threshold(threshold, score_type)
+    if not 0.0 <= resolved <= 1.0:
         raise ValueError("threshold must be between 0.0 and 1.0")
+    return resolved
+
+
+def _warn_threshold_is_inert(threshold: float | None, recipe: str) -> None:
+    """Warn when a caller sets a ``threshold`` this recipe's topology cannot honour.
+
+    Verified by running, not by reading: ``RetrieveLLM`` and ``RetrieveRerankLLM``
+    return byte-identical clusters at ``threshold`` 0.0, 0.5 and 0.99. The chain
+    is ``... -> Generate -> Parse -> ThresholdSelect``; ``Parse()``'s default
+    ``parse_binary_response`` emits a ``decision`` and leaves ``score=None``, and
+    :func:`~langres.core.models.predicted_match` gives ``decision`` precedence
+    over the score *by design*. So the ``ThresholdSelect`` still does real work
+    (it drops ``decision=False`` rows and abstentions) but its **number** cannot
+    change any outcome.
+
+    Warning rather than raising: the parameter is on four public constructors and
+    is swept by the experiment matrix, so a hard error would break callers to fix
+    a no-op. Warning rather than staying silent: a knob that quietly ignores you
+    is worse than no knob -- users tune it, see nothing move, and blame the model.
+    Only an *explicit* value warns; ``None`` means the caller expressed no
+    preference and there is nothing to contradict.
+    """
+    if threshold is not None:
+        warnings.warn(
+            f"{recipe}(threshold={threshold!r}) has no effect. This recipe parses the "
+            "LLM's answer into a decision (Parse -> decision=True/False, score=None), "
+            "and predicted_match gives a decision precedence over any score, so the "
+            "match cut is the LLM's verdict rather than a number. To spend less, "
+            "lower llm_k (fewer pairs reach the LLM); to cut on a score, use "
+            "Retrieve or RetrieveRerank, whose thresholds do apply.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class _LoggingParse(Parse[Any]):
@@ -257,7 +294,33 @@ class _ResearchRecipe(ERModel):
 
 @register_model("retrieve")
 class Retrieve(_ResearchRecipe):
-    """Embed, retrieve nearest neighbours, threshold, and cluster."""
+    """Embed, retrieve nearest neighbours, threshold, and cluster.
+
+    ``threshold=None`` (the default) cuts at the ``"sim_cos"`` family's shipped
+    value from :data:`~langres.core.score_type.DEFAULT_THRESHOLDS`, because the
+    scores being cut here *are* embedding cosine similarities and that is the
+    scale the constant was measured on.
+
+    **Known inconsistency, disclosed rather than silently relied on:** the
+    :class:`~langres.resources.op_adapters.Retrieve` op stamps those rows
+    ``score_type="heuristic"`` (``resources/retrieve.py:174``), not
+    ``"sim_cos"`` -- the tag is hard-coded and not parameterizable. So the family
+    used to resolve this default is chosen from what the score **is**, not from
+    the tag the op happens to emit. That mismatch is the same coarse-tag problem
+    called out on :class:`RetrieveRerank` below (which stamps a *cross-encoder*
+    score ``"heuristic"`` too), and fixing it means changing a resource's emitted
+    contract -- a separate change with its own blast radius, not a threshold one.
+
+    **That default is a floor, not a tuning, and you are choosing the scale it
+    sits on.** ``embedder=`` is required here, and a cosine cut belongs to the
+    encoder, not to the family tag -- two models both emitting "cosine
+    similarity" disagree about what ``0.9`` means. The shipped value was picked
+    to be *safe* on every checkpoint measured rather than optimal on any one of
+    them (see ``docs/research/20260728_threshold_constant.md`` §7), so it stops
+    the out-of-the-box path being badly wrong and no more. If you have labels,
+    derive the cut instead:
+    :func:`langres.training.calibration.derive_threshold`.
+    """
 
     def __init__(
         self,
@@ -265,16 +328,15 @@ class Retrieve(_ResearchRecipe):
         embedder: EmbedderLike,
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         text_field: str | None = None,
         source_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
     ) -> None:
-        _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
-        self.threshold = threshold
+        self.threshold = _resolve_threshold(threshold, "sim_cos")
         self.text_field = text_field
         self.source_field = source_field
         self.clusterer_override = clusterer
@@ -302,7 +364,19 @@ class Retrieve(_ResearchRecipe):
 
 @register_model("retrieve_rerank")
 class RetrieveRerank(_ResearchRecipe):
-    """Retrieve, rescore with one reusable Reranker, threshold, and cluster."""
+    """Retrieve, rescore with one reusable Reranker, threshold, and cluster.
+
+    ``threshold=None`` (the default) cuts at the ``"heuristic"`` family's shipped
+    value, because that is what :class:`~langres.resources.op_adapters.Rerank`
+    tags its output with by default.
+
+    **Know what that inherits.** ``"heuristic"`` is a coarse tag: it covers both
+    normalized string similarity *and* whatever scale your reranker emits, and
+    those are not the same numbers. A cross-encoder's score distribution is
+    model-specific and nothing here has measured one. If your reranker's scale
+    differs, either pass an explicit ``threshold=`` or retag the operation
+    (``Rerank(reranker, out_space=...)``) and build the chain yourself.
+    """
 
     def __init__(
         self,
@@ -311,16 +385,15 @@ class RetrieveRerank(_ResearchRecipe):
         reranker: RerankerLike,
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         text_field: str | None = None,
         source_field: str | None = None,
         clusterer: Clusterer | None = None,
         budget_usd: float | None = None,
         monitor: SpendMonitor | None = None,
     ) -> None:
-        _validate_threshold(threshold)
         self.retrieve_k = retrieve_k
-        self.threshold = threshold
+        self.threshold = _resolve_threshold(threshold, "heuristic")
         self.text_field = text_field
         self.source_field = source_field
         self.clusterer_override = clusterer
@@ -353,7 +426,14 @@ class RetrieveRerank(_ResearchRecipe):
 
 @register_model("retrieve_llm")
 class RetrieveLLM(_ResearchRecipe):
-    """Retrieve candidates, ask one LLM, parse decisions, and cluster."""
+    """Retrieve candidates, ask one LLM, parse decisions, and cluster.
+
+    **``threshold=`` cannot change this recipe's output** and warns if you set
+    it: ``Parse()`` turns the answer into a ``decision``, and
+    :func:`~langres.core.models.predicted_match` gives a decision precedence over
+    any score. Verified by running -- clusters are identical at 0.0, 0.5 and
+    0.99. ``llm_k`` is the knob that actually moves cost and recall here.
+    """
 
     def __init__(
         self,
@@ -363,7 +443,7 @@ class RetrieveLLM(_ResearchRecipe):
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
         llm_k: int = 5,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         text_field: str | None = None,
         source_field: str | None = None,
         clusterer: Clusterer | None = None,
@@ -372,10 +452,10 @@ class RetrieveLLM(_ResearchRecipe):
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
-        _validate_threshold(threshold)
+        _warn_threshold_is_inert(threshold, type(self).__name__)
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
-        self.threshold = threshold
+        self.threshold = _resolve_threshold(threshold, "prob_llm")
         self.text_field = text_field
         self.source_field = source_field
         self.clusterer_override = clusterer
@@ -410,7 +490,13 @@ class RetrieveLLM(_ResearchRecipe):
 
 @register_model("retrieve_rerank_llm")
 class RetrieveRerankLLM(_ResearchRecipe):
-    """Retrieve, rerank, prune, ask one LLM, parse decisions, and cluster."""
+    """Retrieve, rerank, prune, ask one LLM, parse decisions, and cluster.
+
+    **``threshold=`` cannot change this recipe's output** and warns if you set
+    it -- same reason as :class:`RetrieveLLM`: ``Parse()`` emits a ``decision``,
+    which outranks any score. Note the reranker's score is *overwritten* by
+    ``Parse``, so it orders the ``TopKSelect(llm_k)`` and then stops mattering.
+    """
 
     def __init__(
         self,
@@ -421,7 +507,7 @@ class RetrieveRerankLLM(_ResearchRecipe):
         schema: type[BaseModel] | None = None,
         retrieve_k: int = 20,
         llm_k: int = 5,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         text_field: str | None = None,
         source_field: str | None = None,
         clusterer: Clusterer | None = None,
@@ -430,10 +516,10 @@ class RetrieveRerankLLM(_ResearchRecipe):
     ) -> None:
         if llm_k <= 0:
             raise ValueError("llm_k must be positive")
-        _validate_threshold(threshold)
+        _warn_threshold_is_inert(threshold, type(self).__name__)
         self.retrieve_k = retrieve_k
         self.llm_k = llm_k
-        self.threshold = threshold
+        self.threshold = _resolve_threshold(threshold, "prob_llm")
         self.text_field = text_field
         self.source_field = source_field
         self.clusterer_override = clusterer
