@@ -10,6 +10,7 @@ and none of them would have shown up as a crash.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -1774,3 +1775,854 @@ class TestRecommendationSplitsOnLicence:
 
         assert f"of the {len(LADDER.MODELS)} models in the ladder" in section
         assert "**3 of the" in section
+
+
+# ---------------------------------------------------------------------------
+# Silently-wrong checkpoints
+#
+# Every case below was MEASURED on the LFM2.5 checkpoints on 2026-07-29, and
+# every one of them loads, embeds, and returns finite unit-norm vectors. None
+# raises without these guards, so the failure mode is a published number rather
+# than a crash -- which is why they are tested instead of trusted.
+# ---------------------------------------------------------------------------
+
+
+def _fake_auto_model(qualname: str, module: str, auto_map: dict[str, str] | None) -> Any:
+    """An object shaped like a loaded ``auto_model``, with a controllable class identity."""
+    cls = type(qualname, (), {"__module__": module})
+    cls.__qualname__ = qualname
+    instance = cls()
+    instance.config = SimpleNamespace(auto_map=auto_map, model_type="lfm2")
+    return instance
+
+
+class TestDeclaredArchitecture:
+    """``trust_remote_code`` + a natively implemented ``model_type`` is the trap."""
+
+    def test_the_native_class_winning_over_the_declared_one_is_refused(self) -> None:
+        # Measured: LFM2.5-Embedding-350M without trust_remote_code loads the
+        # native CAUSAL Lfm2Model. It pools the CLS token, causal attention makes
+        # that token a function of itself alone, and every text in the corpus
+        # collapses to one vector -- cos(two unrelated products) == 1.0000.
+        auto_model = _fake_auto_model(
+            "Lfm2Model",
+            "transformers.models.lfm2.modeling_lfm2",
+            {"AutoModel": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel"},
+        )
+        spec = LADDER.ModelSpec("LiquidAI/LFM2.5-Embedding-350M", trust_remote_code=True)
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="auto_map.AutoModel"):
+            LADDER._assert_declared_architecture(spec, auto_model)
+
+    def test_the_declared_remote_class_passes(self) -> None:
+        auto_model = _fake_auto_model(
+            "Lfm2BidirectionalModel",
+            "transformers_modules.LiquidAI.LFM2_5.abc123.modeling_lfm2_bidirectional",
+            {"AutoModel": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel"},
+        )
+        spec = LADDER.ModelSpec("LiquidAI/LFM2.5-Embedding-350M", trust_remote_code=True)
+
+        LADDER._assert_declared_architecture(spec, auto_model)
+
+    def test_a_right_named_class_from_the_wrong_place_is_still_refused(self) -> None:
+        """Name-matching alone would pass a native class that happened to agree."""
+        auto_model = _fake_auto_model(
+            "Lfm2BidirectionalModel",
+            "transformers.models.lfm2.modeling_lfm2",
+            {"AutoModel": "modeling_lfm2_bidirectional.Lfm2BidirectionalModel"},
+        )
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError):
+            LADDER._assert_declared_architecture(
+                LADDER.ModelSpec("x", trust_remote_code=True), auto_model
+            )
+
+    def test_a_checkpoint_declaring_no_auto_map_is_not_constrained(self) -> None:
+        """The ordinary case: BertModel for e5-base-v2, no auto_map, nothing to check."""
+        auto_model = _fake_auto_model("BertModel", "transformers.models.bert.modeling_bert", None)
+
+        LADDER._assert_declared_architecture(LADDER.ModelSpec("intfloat/e5-base-v2"), auto_model)
+
+
+class _FakeAutoClass:
+    """Stands in for ``transformers.AutoModel`` / ``AutoModelForMaskedLM``."""
+
+    def __init__(self, missing: list[str], backbone: Any | None) -> None:
+        self._missing = missing
+        self._backbone = backbone
+        self.__name__ = "FakeAutoClass"
+
+    def from_pretrained(self, name: str, **kwargs: Any) -> tuple[Any, dict[str, list[str]]]:
+        model = SimpleNamespace(base_model_prefix="lfm2")
+        model.base_model = model if self._backbone is None else self._backbone
+        return model, {"missing_keys": self._missing, "unexpected_keys": []}
+
+
+class TestPreflightBackbone:
+    """``from_pretrained`` reports a total key mismatch as a WARNING and carries on."""
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, **classes: Any) -> None:
+        monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(**classes))
+
+    def test_randomly_initialised_weights_stop_the_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Measured: AutoModel on LFM2.5-Encoder-350M matched ZERO of the
+        # checkpoint's 148 tensors (missing=148, unexpected=148) because they are
+        # stored under the MaskedLM wrapper's `lfm2.` prefix. The model then
+        # embeds happily; two independent loads simply disagree.
+        self._install(monkeypatch, AutoModel=_FakeAutoClass(["layers.0.conv.conv.weight"], None))
+        spec = LADDER.ModelSpec("LiquidAI/LFM2.5-Encoder-350M", trust_remote_code=True)
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="randomly initialised"):
+            LADDER._preflight_backbone(spec)
+
+    def test_a_clean_load_returns_the_recovered_backbone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backbone = SimpleNamespace(name="the real weights")
+        self._install(monkeypatch, AutoModelForMaskedLM=_FakeAutoClass([], backbone))
+        spec = LADDER.ModelSpec(
+            "LiquidAI/LFM2.5-Encoder-350M",
+            trust_remote_code=True,
+            backbone_auto_class="AutoModelForMaskedLM",
+        )
+
+        assert LADDER._preflight_backbone(spec) is backbone
+
+    def test_a_wrapper_exposing_no_distinct_backbone_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Substituting the wrapper for itself would leave the random weights in place."""
+        self._install(monkeypatch, AutoModelForMaskedLM=_FakeAutoClass([], None))
+        spec = LADDER.ModelSpec(
+            "x", trust_remote_code=True, backbone_auto_class="AutoModelForMaskedLM"
+        )
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="no distinct base_model"):
+            LADDER._preflight_backbone(spec)
+
+    def test_an_ordinary_checkpoint_pays_no_extra_load(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Custom loading code is what gets the prefix wrong; the rest need no probe."""
+        self._install(monkeypatch)  # any attribute access would raise AttributeError
+
+        assert LADDER._preflight_backbone(LADDER.ModelSpec("intfloat/e5-base-v2")) is None
+
+
+class _PropertyBackedTransformer:
+    """A sentence-transformers ``Transformer`` as it actually is in 5.6.0.
+
+    ``auto_model`` is a PROPERTY over a registered child named ``model``, so
+    ``transformer.auto_model = x`` does not replace the child that runs.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self.model = model
+
+    @property
+    def auto_model(self) -> Any:
+        return self.model
+
+    def named_children(self) -> Any:
+        return iter([("model", self.model)])
+
+
+class _FakeBackbone:
+    def __init__(self, signature: float) -> None:
+        self.signature = signature
+
+    def to(self, device: Any) -> "_FakeBackbone":
+        return self
+
+    def eval(self) -> "_FakeBackbone":
+        return self
+
+
+class _SwapAwareEmbedder:
+    """Encodes whatever backbone the transformer currently holds."""
+
+    def __init__(self, transformer: Any) -> None:
+        self._transformer = transformer
+
+    def encode(self, texts: Any, prompt: str | None = None) -> np.ndarray:
+        return np.array([[self._transformer.auto_model.signature]] * len(texts))
+
+
+class _FakeSTModel:
+    """A ``SentenceTransformer`` stand-in: indexable, with a device."""
+
+    def __init__(self, transformer: Any) -> None:
+        self._transformer = transformer
+        self.device = "cpu"
+
+    def __getitem__(self, index: int) -> Any:
+        return self._transformer
+
+
+class TestSubstituteBackbone:
+    """The fix for a silent failure was itself silently ineffective. Measured."""
+
+    def test_the_registered_child_is_replaced_not_the_property(self) -> None:
+        transformer = _PropertyBackedTransformer(_FakeBackbone(1.0))
+        base = _SwapAwareEmbedder(transformer)
+        backbone = _FakeBackbone(2.0)
+
+        LADDER._substitute_backbone(
+            LADDER.ModelSpec("x"), base, _FakeSTModel(transformer), backbone
+        )
+
+        # Assigning to `auto_model` would have left `model` in place; this asserts
+        # the CHILD moved, which is the thing the forward pass calls.
+        assert transformer.model is backbone
+        assert transformer.auto_model is backbone
+
+    def test_a_substitution_that_changes_no_vector_is_refused(self) -> None:
+        """The exact failure that shipped: bit-identical vectors after the swap."""
+        transformer = _PropertyBackedTransformer(_FakeBackbone(1.0))
+        base = _SwapAwareEmbedder(transformer)
+        # Same signature => encoding is unchanged => the swap did nothing that runs.
+        backbone = _FakeBackbone(1.0)
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="exactly 0"):
+            LADDER._substitute_backbone(
+                LADDER.ModelSpec("x"), base, _FakeSTModel(transformer), backbone
+            )
+
+    def test_a_backbone_held_by_no_registered_child_is_refused(self) -> None:
+        transformer = SimpleNamespace(
+            auto_model=_FakeBackbone(1.0), named_children=lambda: iter([])
+        )
+
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="registered child"):
+            LADDER._substitute_backbone(
+                LADDER.ModelSpec("x"),
+                _SwapAwareEmbedder(transformer),
+                _FakeSTModel(transformer),
+                _FakeBackbone(2.0),
+            )
+
+
+class _ConstantEmbedder:
+    """Returns the same vector whatever the prompt -- the shipped-bug signature."""
+
+    def __init__(self, *, responds_to_prompt: bool) -> None:
+        self._responds = responds_to_prompt
+
+    def encode(self, texts: Any, prompt: str | None = None) -> np.ndarray:
+        shift = 0.25 if (prompt and self._responds) else 0.0
+        return np.array([[1.0 + shift, 2.0, 3.0]] * len(texts))
+
+
+class TestPromptIsLive:
+    """langres has shipped a silently discarded ``query_prompt`` before."""
+
+    def test_a_prompt_that_moves_nothing_stops_the_run(self) -> None:
+        with pytest.raises(LADDER.SilentlyWrongCheckpointError, match="reached nothing"):
+            LADDER._assert_prompt_is_live(
+                _ConstantEmbedder(responds_to_prompt=False), [None, "query: "]
+            )
+
+    def test_a_prompt_that_moves_the_vector_passes(self) -> None:
+        LADDER._assert_prompt_is_live(_ConstantEmbedder(responds_to_prompt=True), [None, "query: "])
+
+    def test_an_unprompted_arm_has_nothing_to_assert(self) -> None:
+        LADDER._assert_prompt_is_live(_ConstantEmbedder(responds_to_prompt=False), [None])
+
+
+class TestOneReferenceModel:
+    """``--reference-model`` makes the baseline a property of the RUN, the delta of the ROW."""
+
+    def test_two_baselines_in_one_file_are_refused(self) -> None:
+        rows = [
+            _cell("a", "none", vs_reference_delta=0.01, reference_model="all-MiniLM-L6-v2"),
+            _cell("b", "none", vs_reference_delta=0.02, reference_model="intfloat/e5-base-v2"),
+        ]
+
+        with pytest.raises(ValueError, match="2 different baselines"):
+            LADDER._assert_one_reference_model(rows)
+
+    def test_rendering_under_a_different_baseline_is_refused(self) -> None:
+        """The numbers would not change -- only the label above them."""
+        row = _cell("a", "none", vs_reference_delta=0.01, reference_model="intfloat/e5-base-v2")
+
+        with pytest.raises(ValueError, match="relabel the delta column"):
+            LADDER._assert_one_reference_model([row])
+
+    def test_rows_predating_the_field_are_read_as_the_default_baseline(self) -> None:
+        """The 300 committed 2026-07-27 rows carry None and were measured against it."""
+        row = _cell("a", "none", vs_reference_delta=0.01)
+        assert row.reference_model is None
+
+        LADDER._assert_one_reference_model([row])
+
+    def test_a_delta_of_exactly_zero_still_names_its_baseline(self) -> None:
+        """The guard must not fail open on the rows it exists to police.
+
+        Regression: the baseline set was built with a truthiness filter, and
+        ``0.0`` is falsy. Exact-zero deltas are not exotic -- every model ties
+        on a saturated benchmark, and the committed rows carry ``+0.0000``
+        there. So a file whose only comparisons were zeros produced an EMPTY
+        set, returned early, and rendered under whatever baseline was passed,
+        relabelling the delta column without recomputing it.
+        """
+        row = _cell("a", "none", vs_reference_delta=0.0, reference_model="intfloat/e5-base-v2")
+
+        with pytest.raises(ValueError, match="relabel the delta column"):
+            LADDER._assert_one_reference_model([row])
+
+    def test_rows_without_a_delta_constrain_nothing(self) -> None:
+        LADDER._assert_one_reference_model([_cell("a", "none")])
+
+
+class TestLfm25Specs:
+    """The shipped-default blocker, asserted rather than left to a doc sentence."""
+
+    def test_every_lfm_checkpoint_is_recorded_as_non_osi(self) -> None:
+        # LFM Open License v1.0 §5(a)-(b) condition Commercial Use on not
+        # exceeding a $10,000,000 annual-revenue Threshold (§3). Apache-2.0 has no
+        # such restriction, so these must never read as safe for a default.
+        lfm = [spec for spec in LADDER.EXTRA_SPECS if spec.name.startswith("LiquidAI/")]
+
+        assert len(lfm) == 3
+        assert all(spec.license == "lfm1.0" for spec in lfm)
+        assert not any(LADDER._is_osi(spec) for spec in lfm)
+
+    def test_the_base_encoders_are_flagged_as_not_retrieval_tuned(self) -> None:
+        by_name = {spec.name: spec for spec in LADDER.EXTRA_SPECS}
+
+        assert by_name["LiquidAI/LFM2.5-Embedding-350M"].tuned_for_retrieval
+        assert not by_name["LiquidAI/LFM2.5-Encoder-350M"].tuned_for_retrieval
+        assert not by_name["LiquidAI/LFM2.5-Encoder-230M"].tuned_for_retrieval
+
+    def test_the_base_encoders_declare_the_class_that_owns_their_weights(self) -> None:
+        by_name = {spec.name: spec for spec in LADDER.EXTRA_SPECS}
+
+        assert by_name["LiquidAI/LFM2.5-Encoder-350M"].backbone_auto_class == "AutoModelForMaskedLM"
+        assert by_name["LiquidAI/LFM2.5-Encoder-230M"].backbone_auto_class == "AutoModelForMaskedLM"
+        # The tuned checkpoint loads correctly through the normal path.
+        assert by_name["LiquidAI/LFM2.5-Embedding-350M"].backbone_auto_class is None
+
+    def test_the_embedding_checkpoint_carries_its_own_trained_prefixes(self) -> None:
+        """Read from its config_sentence_transformers.json, not from the card prose."""
+        spec = LADDER.MODELS_BY_NAME["LiquidAI/LFM2.5-Embedding-350M"]
+
+        assert spec.documented_arm == ("document: ", "query: ")
+
+    def test_the_extra_specs_stay_out_of_the_standing_ladder(self) -> None:
+        """Adding them to MODELS would enlarge the 2026-07-27 ladder's denominator."""
+        assert not {spec.name for spec in LADDER.EXTRA_SPECS} & {s.name for s in LADDER.MODELS}
+        assert "LiquidAI/LFM2.5-Embedding-350M" in LADDER.MODELS_BY_NAME
+
+
+class TestGeneratedReproduceCommands:
+    """A published command that cannot run is worse than no command.
+
+    ``run_ladder.sh`` refuses (exit 2) when a custom ``LADDER_ARTIFACT`` arrives
+    without ``LADDER_ALL_MODELS`` -- the coverage denominator. That guard and the
+    generated "How to reproduce" block were added in the same PR and the second
+    was never re-checked against the first, so every committed reproduce command
+    exited 2 before measuring anything. Verified against the real committed
+    reports, because that is where a reader copies from.
+    """
+
+    REPORTS = (
+        "docs/research/20260727_embedder_ladder.md",
+        "docs/research/20260729_lfm25_tuned.md",
+        "docs/research/20260729_lfm25_base_encoders.md",
+    )
+
+    @staticmethod
+    def _driver_requires_all_models() -> bool:
+        """Read the requirement off the driver, so this test cannot drift from it."""
+        driver = (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+        return "LADDER_ARTIFACT is set but LADDER_ALL_MODELS is not" in driver
+
+    def test_every_command_setting_a_custom_artifact_also_sets_the_denominator(self) -> None:
+        assert self._driver_requires_all_models(), (
+            "the driver no longer enforces this; update or delete this test rather "
+            "than letting it pass vacuously"
+        )
+
+        offenders: list[str] = []
+        for name in self.REPORTS:
+            path = ROOT / name
+            if not path.exists():  # pragma: no cover - artifact not generated yet
+                continue
+            for block in re.findall(r"```bash\n(.*?)```", path.read_text(), re.S):
+                for command in block.split("\n\n"):
+                    if "LADDER_ARTIFACT=" not in command:
+                        continue
+                    if "LADDER_ALL_MODELS=" not in command:
+                        offenders.append(f"{name}: {command.splitlines()[0]}")
+
+        assert not offenders, "reproduce commands that would exit 2:\n" + "\n".join(offenders)
+
+
+class TestArtifactPathsMustShareOnePrefix:
+    """A report that mis-states which rows it came from is unreproducible.
+
+    ``--rows``/``--report``/``--reference`` are independent flags, but the
+    reproduce block derives all three from ``--report``'s prefix and
+    ``run_ladder.sh`` takes a single ``LADDER_ARTIFACT``. Mismatched paths did
+    not merely render an odd command: the report cited a rows file the run never
+    read, and the two ``run_ladder.sh`` commands beside it could not be made
+    correct at all -- there is no way to express divergent paths in them.
+    """
+
+    @staticmethod
+    def _argv(rows: Path, report: Path, reference: Path) -> list[str]:
+        return [
+            "--render-only",
+            "--rows",
+            str(rows),
+            "--report",
+            str(report),
+            "--reference",
+            str(reference),
+        ]
+
+    def test_the_defaults_agree(self) -> None:
+        """The relation has to hold for the shipped defaults or nothing can run."""
+        stem = str(LADDER.DEFAULT_REPORT_PATH).removesuffix(".md")
+
+        assert str(LADDER.DEFAULT_ROWS_PATH) == f"{stem}_rows.jsonl"
+        assert str(LADDER.DEFAULT_REFERENCE_PATH) == f"{stem}_reference_recall.json"
+
+    def test_a_rows_path_from_another_study_is_refused(self, tmp_path: Path) -> None:
+        report = tmp_path / "study.md"
+        argv = self._argv(
+            tmp_path / "other_rows.jsonl", report, tmp_path / "study_reference_recall.json"
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            LADDER.main(argv)
+
+        assert excinfo.value.code == 2
+        assert not report.exists(), "the refusal must precede every write"
+
+    def test_a_reference_path_from_another_study_is_refused(self, tmp_path: Path) -> None:
+        argv = self._argv(
+            tmp_path / "study_rows.jsonl", tmp_path / "study.md", tmp_path / "other_reference.json"
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            LADDER.main(argv)
+
+        assert excinfo.value.code == 2
+
+    def test_matching_paths_are_accepted(self, tmp_path: Path) -> None:
+        """The guard must not fire on the combination the driver actually passes."""
+        rows = tmp_path / "study_rows.jsonl"
+        rows.write_text("")
+        report = tmp_path / "study.md"
+
+        LADDER.main(self._argv(rows, report, tmp_path / "study_reference_recall.json"))
+
+        assert report.exists()
+
+
+class TestTheArtifactGuardDoesNotTrustGitSilence:
+    """``git status`` says nothing for three different reasons; one is safe.
+
+    ``LADDER_ARTIFACT`` takes any prefix, and ``tmp/my_study`` is an obvious
+    thing to try. For an ignored or external path ``git status --porcelain``
+    prints nothing at all, so an existing artifact read as CLEAN and the harness
+    rewrote it -- destroying the only copy, since an ignored file's contents are
+    in no commit. Executable proof lives in ``tmp/probe_round19.sh``; this pins
+    the guard so it cannot quietly go back to trusting silence.
+    """
+
+    @staticmethod
+    def _driver() -> str:
+        return (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+
+    def test_untracked_existing_artifacts_are_treated_as_dirty(self) -> None:
+        driver = self._driver()
+
+        assert 'git ls-files -- "$artifact"' in driver
+        assert "artifact_is_dirty()" in driver
+
+    def test_a_path_git_refuses_to_describe_is_not_called_clean(self) -> None:
+        """Outside the repository, ``git status`` exits non-zero rather than empty."""
+        assert 'if ! status=$(git status --porcelain --untracked-files=all -- "$artifact"' in (
+            self._driver()
+        )
+
+
+class TestHistoryStaysWithItsOwnDocument:
+    """Two blocks in this generator are history, not measurement.
+
+    The correction to the merged #239 PR body and the pilot claim that motivated
+    the ladder are both about the 2026-07-27 portfolio ladder. Emitted for every
+    artifact they interpolated the CURRENT study's headline into a sentence about
+    a different PR -- the study-B report told readers that #239 had described
+    ``LFM2.5-Encoder-350M``'s ``-0.0536`` as query-only, and claimed to re-measure
+    two models absent from its own rows.
+    """
+
+    STUDIES = (
+        "docs/research/20260729_lfm25_tuned.md",
+        "docs/research/20260729_lfm25_base_encoders.md",
+    )
+    PORTFOLIO = "docs/research/20260727_embedder_ladder.md"
+
+    def test_the_gate_is_derived_from_the_module_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not a typed date string, which would drift from the paths it names.
+
+        ``ARTIFACT_PREFIX`` is a module global that ``main()`` rebinds, so this
+        sets it explicitly rather than relying on whatever an earlier test in the
+        session left behind.
+        """
+        default = str(LADDER.DEFAULT_REPORT_PATH.relative_to(LADDER.REPO_ROOT)).removesuffix(".md")
+        monkeypatch.setattr(LADDER, "ARTIFACT_PREFIX", default)
+
+        assert LADDER._is_portfolio_ladder() is True
+
+        monkeypatch.setattr(LADDER, "ARTIFACT_PREFIX", "docs/research/20260729_lfm25_tuned")
+
+        assert LADDER._is_portfolio_ladder() is False
+
+    def test_no_study_report_carries_the_239_correction(self) -> None:
+        for name in self.STUDIES:
+            path = ROOT / name
+            if not path.exists():  # pragma: no cover - artifact not generated yet
+                continue
+            assert "supersedes the merged #239" not in path.read_text(), name
+
+    def test_no_study_report_claims_to_remeasure_the_pilot_models(self) -> None:
+        for name in self.STUDIES:
+            path = ROOT / name
+            if not path.exists():  # pragma: no cover - artifact not generated yet
+                continue
+            assert "The claim that started this sweep" not in path.read_text(), name
+
+    def test_the_portfolio_ladder_keeps_both(self) -> None:
+        """Scoping must not silently delete the correction from the document it corrects."""
+        path = ROOT / self.PORTFOLIO
+        if not path.exists():  # pragma: no cover - artifact not generated yet
+            pytest.skip("portfolio ladder report not generated")
+        text = path.read_text()
+
+        assert "supersedes the merged #239" in text
+        assert "The claim that started this sweep" in text
+
+
+class TestTheResumeGoesThroughTheGuardedDriver:
+    """A resume writes into rows a killed sweep may have left uncommitted.
+
+    Calling ``embedder_ladder.py`` directly skipped the dirty-artifact refusal,
+    the provenance ``--verify`` and -- worst -- the COMMIT, leaving an expensive
+    re-measured cell to die with the worktree.
+    """
+
+    @staticmethod
+    def _resume() -> str:
+        return (ROOT / "examples" / "research" / "resume_lfm25_study_a.sh").read_text()
+
+    def test_it_does_not_invoke_the_harness_directly(self) -> None:
+        """The COMMAND, not the prose: the comment explains why it no longer does."""
+        commands = [
+            line
+            for line in self._resume().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+        assert not any("embedder_ladder.py" in line for line in commands)
+
+    def test_it_calls_the_driver(self) -> None:
+        resume = self._resume()
+
+        assert "bash examples/research/run_ladder.sh" in resume
+        assert 'LADDER_BENCHMARKS="walmart_amazon"' in resume
+
+    def test_the_driver_honours_the_benchmark_override(self) -> None:
+        """A flag the driver ignores would silently re-run the whole study."""
+        driver = (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert 'BENCHMARKS="${LADDER_BENCHMARKS:-' in driver
+
+    def test_the_coverage_denominator_is_still_the_whole_study(self) -> None:
+        """Collapsing it to the measured model is a regression this harness shipped once."""
+        resume = self._resume()
+
+        assert 'LADDER_ALL_MODELS="$STUDY_A_MODELS"' in resume
+        assert "BAAI/bge-base-en-v1.5" in resume
+
+
+def _caveat(report: str) -> str:
+    """Just the instruction-axis blockquote.
+
+    Slicing to the end of the report swept in later sections that legitimately
+    name the baseline model, so the assertion passed or failed on unrelated text.
+    """
+    start = report.index("Do not read this table as")
+    return report[start : report.index("by a different route.", start)]
+
+
+class TestTheProseNamesOnlyModelsItMeasured:
+    """The instruction-axis caveat explained each study using a hand-typed model list.
+
+    Rendered into the base-encoder study that list named `all-MiniLM-*`,
+    `all-mpnet-base-v2` and BGE -- none of which have a row there -- while naming
+    none of the models that do. The worked examples in the paragraph immediately
+    above it did the same with `google/embeddinggemma-300m` and
+    `Qwen/Qwen3-Embedding-*`: the SECOND site of one defect, which is how five
+    earlier findings on this branch got half-fixed.
+    """
+
+    @staticmethod
+    def _specs(*names: str) -> tuple[Any, ...]:
+        return tuple(LADDER.MODELS_BY_NAME[name] for name in names)
+
+    @staticmethod
+    def _rows(specs: tuple[Any, ...]) -> list[Any]:
+        return [
+            _cell(spec.name, arm)
+            for spec in specs
+            for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+        ]
+
+    def test_the_lists_come_from_the_ladder_being_rendered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        base_study = self._specs(
+            "LiquidAI/LFM2.5-Embedding-350M",
+            "LiquidAI/LFM2.5-Encoder-350M",
+            "LiquidAI/LFM2.5-Encoder-230M",
+        )
+        monkeypatch.setattr(LADDER, "LADDER", base_study)
+
+        report = LADDER.render_report(self._rows(base_study))
+
+        caveat = _caveat(report)
+        assert "LiquidAI/LFM2.5-Encoder-350M" in caveat
+        for absent in ("all-MiniLM-L6-v2", "all-mpnet-base-v2", "BAAI/bge-base-en-v1.5"):
+            assert absent not in caveat, absent
+
+    def test_it_makes_no_claim_about_how_a_checkpoint_was_TRAINED(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`documented_arm` records what THIS HARNESS configured, nothing more.
+
+        Read as "was not trained with a query-side instruction" it was false for
+        `intfloat/e5-base-v2` (native `query:`/`passage:`) and for the
+        Qwen3-Embedding rows -- which the paragraph above simultaneously
+        described as HAVING a documented instruction, two paragraphs apart in one
+        generated document. Deriving a claim beats typing it only when the field
+        means what the sentence says.
+        """
+        portfolio = self._specs("intfloat/e5-base-v2", "google/embeddinggemma-300m")
+        monkeypatch.setattr(LADDER, "LADDER", portfolio)
+
+        caveat = _caveat(LADDER.render_report(self._rows(portfolio)))
+
+        assert "intfloat/e5-base-v2" in caveat
+        assert "were not trained with one" not in caveat
+        assert "never asked for one" not in caveat
+        # And it says outright that absence here is not absence of training.
+        assert "not about how a" in caveat
+
+    def test_the_worked_examples_are_dropped_when_their_model_is_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The twin site: the paragraph above the blockquote."""
+        base_study = self._specs(
+            "LiquidAI/LFM2.5-Embedding-350M",
+            "LiquidAI/LFM2.5-Encoder-350M",
+        )
+        monkeypatch.setattr(LADDER, "LADDER", base_study)
+
+        report = LADDER.render_report(self._rows(base_study))
+
+        assert "prefixes documents with" not in report
+        assert "Qwen/Qwen3-Embedding-*`'s documented instruction" not in report
+
+    def test_the_portfolio_ladder_keeps_its_worked_examples(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: those examples are correct where the models were measured."""
+        portfolio = self._specs("google/embeddinggemma-300m", "all-MiniLM-L6-v2")
+        monkeypatch.setattr(LADDER, "LADDER", portfolio)
+
+        report = LADDER.render_report(self._rows(portfolio))
+
+        assert "prefixes documents with" in report
+        assert "all-MiniLM-L6-v2" in _caveat(report)
+
+
+class TestTheLicenceSentenceDescribesTheActualLicence:
+    """ "in Gemma's case a prohibited-use policy" was rendered for EVERY restricted model.
+
+    So the LiquidAI `lfm1.0` entries described the wrong licence entirely, in the
+    one paragraph a reader consults to make a legal decision.
+    """
+
+    def test_an_lfm_checkpoint_gets_the_lfm_restriction(self) -> None:
+        sentence = LADDER._licence_restriction("lfm1.0")
+
+        assert "LFM Open License" in sentence
+        assert "$10M" in sentence
+        assert "Gemma" not in sentence
+
+    def test_a_gemma_checkpoint_still_gets_gemma_s(self) -> None:
+        assert "prohibited-use policy" in LADDER._licence_restriction("gemma")
+
+    def test_an_unknown_licence_invents_no_specifics(self) -> None:
+        """Silent about a licence it does not know, never wrong about one."""
+        sentence = LADDER._licence_restriction("some-new-licence-2.0")
+
+        assert "read the checkpoint's own LICENSE" in sentence
+        assert "$10M" not in sentence
+        assert "prohibited-use policy" not in sentence
+
+
+class TestTheArmClaimReadsRowsNotConfiguration:
+    """ "What this sweep ran" has to be read off the rows.
+
+    Keyed on the configured LADDER, it said Qwen 0.6B's own recipe "did run" and
+    that six absent models had the generic arm run against them -- in a document
+    whose next section says "7 of the 14 models in the ladder have a row" and
+    lists all seven under "What did not run". One document, two answers.
+    """
+
+    def test_a_configured_but_unmeasured_model_is_not_described_as_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        configured = tuple(
+            LADDER.MODELS_BY_NAME[name]
+            for name in ("all-MiniLM-L6-v2", "google/embeddinggemma-300m")
+        )
+        monkeypatch.setattr(LADDER, "LADDER", configured)
+        # Only the first model has rows; embeddinggemma was configured, never run.
+        measured = configured[:1]
+        rows = [
+            _cell(spec.name, arm)
+            for spec in measured
+            for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+        ]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "all-MiniLM-L6-v2" in caveat
+        assert "google/embeddinggemma-300m" not in caveat
+        assert "No model here had its own recipe measured" in caveat
+
+    def test_a_failed_row_does_not_count_as_measured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`ok`, not `current`: a failure row is a record of NOT measuring."""
+        configured = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", configured)
+        rows = [_cell("all-MiniLM-L6-v2", "none", status="failed", error="boom")]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "all-MiniLM-L6-v2" not in caveat
+
+
+class TestTheArmClaimIsPerArmNotPerModel:
+    """`measure_one` records failures per ARM, so model presence is too coarse.
+
+    A model whose `documented` arm failed while another arm succeeded was still
+    listed under "whose OWN recipe this sweep did run"; a model whose `instruct`
+    arm failed was still described as having had the generic instruction run
+    against it.
+    """
+
+    def test_a_failed_documented_arm_is_not_a_recipe_that_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
+        monkeypatch.setattr(LADDER, "LADDER", (spec,))
+        rows = [
+            _cell(spec.name, "none"),
+            _cell(spec.name, "instruct"),
+            _cell(spec.name, "documented", status="failed", error="OOM"),
+        ]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "No model here had its own recipe measured" in caveat
+        # It DID run the generic arms, so it belongs in that list instead.
+        assert "google/embeddinggemma-300m" in caveat.split("This list is about")[0]
+
+    def test_a_successful_documented_arm_is_a_recipe_that_ran(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: the ordinary case must still be reported."""
+        spec = LADDER.MODELS_BY_NAME["google/embeddinggemma-300m"]
+        monkeypatch.setattr(LADDER, "LADDER", (spec,))
+        rows = [_cell(spec.name, arm) for arm in ("none", "instruct", "documented")]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "whose OWN recipe this sweep did run" in caveat
+        assert "google/embeddinggemma-300m" in caveat
+
+
+class TestTheArmClaimCoversEveryModelTheDocumentIsAccountableFor:
+    """`--models` accepts a checkpoint outside the declared ladder.
+
+    `_ladder_specs(rows)` exists so the coverage denominator and every
+    enumeration drawn from it cannot disagree -- it row-expands the declared
+    tuple. The instruction block iterated `LADDER` instead, so a custom
+    checkpoint with a successful `documented` arm appeared in the tables while
+    the prose two sections later said no model's own recipe was measured.
+    """
+
+    def test_a_row_backed_model_outside_the_declared_ladder_is_credited(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        declared = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", declared)
+        # Measured via --models, absent from --ladder-models. `documented` is the
+        # arm whose presence the prose reports on.
+        rows = [
+            _cell("all-MiniLM-L6-v2", "none"),
+            _cell("acme/custom-checkpoint", "documented"),
+        ]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "acme/custom-checkpoint" in caveat
+        assert "No model here had its own recipe measured" not in caveat
+
+    def test_the_reproduce_command_carries_the_same_denominator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """LADDER_ALL_MODELS *is* the coverage denominator, and run_ladder.sh
+        refuses (exit 2) on a custom artifact whose denominator is wrong."""
+        declared = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", declared)
+        rows = [
+            _cell("all-MiniLM-L6-v2", "none"),
+            _cell("acme/custom-checkpoint", "documented"),
+        ]
+
+        report = LADDER.render_report(rows)
+        # The LADDER_ALL_MODELS assignments themselves. Slicing "everything after
+        # the reproduce heading" passed on the pre-fix code, because later sections
+        # of the document name the model too -- the assertion was reading the rest
+        # of the report, not the command.
+        denominators = [line for line in report.splitlines() if "LADDER_ALL_MODELS=" in line]
+
+        assert denominators
+        for line in denominators:
+            assert "acme/custom-checkpoint" in line
+
+    def test_the_random_init_control_is_still_excluded_from_the_claim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It has no training recipe to measure; widening the cohort must not add it."""
+        declared = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", declared)
+        control = LADDER.ModelSpec("random-init-probe", random_init=True)
+        monkeypatch.setattr(LADDER, "LADDER", (*declared, control))
+        rows = [_cell("all-MiniLM-L6-v2", "none"), _cell("random-init-probe", "none")]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "random-init-probe" not in caveat
