@@ -1028,7 +1028,9 @@ def _missing_p_value(row: Row) -> bool:
     One predicate, read by both the resume check and the publish guard, so a
     stale row can neither survive ``--resume`` nor reach the report.
     """
-    return row.k == HEADLINE_K and row.arm != "none" and row.ci_low is not None and row.p_value is None
+    return (
+        row.k == HEADLINE_K and row.arm != "none" and row.ci_low is not None and row.p_value is None
+    )
 
 
 def _cell_complete(
@@ -1522,13 +1524,15 @@ def render_report(rows: Sequence[Row]) -> str:
     sizes = sorted(
         {sum(1 for key in verdicts if key[:2] == family) for family in {k[:2] for k in verdicts}}
     )
-    if sizes != [len(BENCHMARKS)]:
+    if sizes and sizes != [len(BENCHMARKS)]:
         # The paragraph below *claims* the family size is fixed by the design. Nothing
         # made that true: the size is counted from the verdicts, so a comparison that
         # failed to produce a p-value would quietly shrink its family and the sentence
         # would report the shrunken number as the design. An expectation regenerated
         # from the thing that broke cannot detect it breaking -- so the declared
         # benchmark count, which is upstream of any measurement, is the expectation.
+        # An EMPTY set is a different condition (nothing comparable was measured at
+        # all, e.g. a single-arm smoke render) and is not this guard's business.
         raise ValueError(
             f"refusing to render: every Holm family must span all {len(BENCHMARKS)} "
             f"declared benchmarks ({', '.join(BENCHMARKS)}), but the observed family "

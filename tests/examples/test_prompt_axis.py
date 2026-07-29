@@ -506,12 +506,16 @@ def test_nothing_holds_that_did_not_already_exclude_zero() -> None:
         assert not harness._spans_zero(headline[key]), key
 
 
-def test_holm_withdraws_exactly_the_e5_documented_comparisons() -> None:
+def test_holm_withdraws_exactly_these_five_comparisons() -> None:
     """Pin the retraction: the correction changed the study's answer, and by how much.
 
-    e5's documented arms are the only claims multiplicity costs us -- both its
-    families fail at Holm's *first* step -- which is why the headline reads
-    "three of four instruction-trained models", not four.
+    Both of e5's documented families fail at Holm's *first* step, which is why the
+    headline reads "three of four instruction-trained models", not four. Two bge
+    cells go with them -- and those two are the reason the p-value had to come
+    from the replicates rather than from a normal tail fitted to an interval
+    endpoint: the approximation put `official_symmetric`/`abt_buy` inside a
+    threshold the achieved significance level misses by 0.0049, so the published
+    retraction list was short by two.
     """
     rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
     verdicts = harness._multiplicity(rows)
@@ -519,10 +523,13 @@ def test_holm_withdraws_exactly_the_e5_documented_comparisons() -> None:
     excluded_zero = {(r.model, r.arm, r.benchmark) for r in headline if not harness._spans_zero(r)}
     held = {key for key, (_, rejected) in verdicts.items() if rejected}
     assert len(excluded_zero) == 40
+    assert len(held) == 35
     assert excluded_zero - held == {
         ("intfloat/e5-base-v2", "official_asymmetric", "abt_buy"),
         ("intfloat/e5-base-v2", "official_symmetric", "amazon_google"),
         ("intfloat/e5-base-v2", "official_symmetric", "wdc_computers"),
+        ("BAAI/bge-base-en-v1.5", "official_symmetric", "abt_buy"),
+        ("BAAI/bge-base-en-v1.5", "er_query_only", "wdc_computers"),
     }
     # Every documented-arm claim that survives belongs to one of the other three.
     documented = {"official_retrieval", "official_query_instruction", "official_query_instruct"}
@@ -531,6 +538,153 @@ def test_holm_withdraws_exactly_the_e5_documented_comparisons() -> None:
         "BAAI/bge-base-en-v1.5",
         "Qwen/Qwen3-Embedding-0.6B",
     }
+
+
+def test_an_interval_without_its_p_value_is_neither_resumable_nor_publishable() -> None:
+    """The guard the round-6 review found missing, exercised from both sides.
+
+    A headline row carrying an interval but no p-value is dropped by
+    `_row_p_value`, which shrinks its Holm family -- and the report then prints a
+    family size counted from the survivors, so the number that would reveal the
+    loss is derived from the loss. Nothing observed it. Both the resume check and
+    the publish guard must now refuse the row.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    assert harness.render_report(rows), "the guard must pass on the real artifact first"
+
+    stale = [
+        dataclasses.replace(row, p_value=None, p_value_standard_error=None)
+        if row.k == harness.HEADLINE_K and row.arm != "none"
+        else row
+        for row in rows
+    ]
+    assert any(harness._missing_p_value(row) for row in stale)
+    with pytest.raises(ValueError, match="no p-value"):
+        harness.render_report(stale)
+
+    # And resume must recompute such a cell rather than skip it.
+    spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
+    cell = [r for r in rows if r.model == spec.name and r.benchmark == "abt_buy" and r.k == 20]
+    assert harness._cell_complete(cell, spec, "abt_buy", spec.recipes, [20])
+    blanked = [dataclasses.replace(r, p_value=None) for r in cell]
+    assert not harness._cell_complete(blanked, spec, "abt_buy", spec.recipes, [20])
+
+
+def test_a_family_short_of_a_benchmark_is_refused_rather_than_reported() -> None:
+    """Family size is checked against the DECLARED benchmarks, not against itself.
+
+    The report asserts in prose that the family size is fixed by the design. That
+    sentence used to be rendered from a count of the comparisons that survived,
+    so a family which lost one would have printed its own shrunken size as if it
+    were the design -- an expectation regenerated from the thing that broke.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    dropped = [r for r in rows if not (r.benchmark == "amazon_google" and r.k == 20)]
+    with pytest.raises(ValueError, match="must span all"):
+        harness.render_report(dropped)
+
+
+def test_holm_is_tie_safe_and_agrees_with_the_step_down_form_on_the_real_rows() -> None:
+    """Equal p-values must share a verdict, however `sorted` broke the tie.
+
+    Ties are not hypothetical here: a comparison that moved no record's recall is
+    exactly 1.0, and every sufficiently strong effect is pinned at the resolution
+    floor 2/(B+1), so both ends of the range are atoms. The adjusted-p form gives
+    tied comparisons the same adjusted p by construction.
+    """
+    # Three tied at a p that clears only the LAST threshold in a family of 3.
+    # Stop-at-first-failure would reject none; so does this -- but the point is
+    # that all three get the same answer, which is what a tie must produce.
+    assert harness._holm({"a": 0.03, "b": 0.03, "c": 0.03}) == set()
+    # Tied at a p every threshold admits: all three, never a prefix of them.
+    assert harness._holm({"a": 0.001, "b": 0.001, "c": 0.001}) == {"a", "b", "c"}
+    # Order of insertion must not matter.
+    assert harness._holm({"c": 0.001, "a": 0.04, "b": 0.001}) == harness._holm(
+        {"a": 0.04, "b": 0.001, "c": 0.001}
+    )
+
+    def step_down(p_values: dict[str, float]) -> set[str]:
+        out: set[str] = set()
+        for step in harness._holm_steps(p_values):
+            if step.p_value > step.threshold:
+                break
+            out.add(step.key)
+        return out
+
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    families: dict[tuple[str, str], dict[str, float]] = {}
+    for row in rows:
+        if row.k != harness.HEADLINE_K or row.arm == "none":
+            continue
+        p_value = harness._row_p_value(row)
+        if p_value is not None:
+            families.setdefault((row.model, row.arm), {})[row.benchmark] = p_value
+    assert families
+    # The published verdicts are unchanged by the switch -- the fix removes an
+    # order dependence these rows happen not to trigger, and saying so is the
+    # difference between a verified claim and an assumed one.
+    for key, family in families.items():
+        assert harness._holm(family) == step_down(family), key
+
+
+def test_withdrawn_means_the_correction_took_something_away() -> None:
+    """Two different failures had one label; only one of them is a withdrawal."""
+    row = dataclasses.replace(
+        _row("BAAI/bge-base-en-v1.5", "abt_buy", arm="official_symmetric"),
+        delta_per_record_recall=0.0064,
+        ci_low=0.0010,
+        ci_high=0.0122,
+    )
+    # Significant on its own (p <= alpha), not rejected by Holm: a real withdrawal.
+    assert harness._holm_cell(row, (0.0216, False)) == "withdrawn"
+    # Interval excludes zero yet the p-value never cleared the uncorrected alpha,
+    # so multiplicity removed nothing -- calling that "withdrawn" overstates it.
+    assert harness._holm_cell(row, (0.0600, False)) == "n.s."
+    assert harness._holm_cell(row, (0.0216, True)) == "**holds**"
+
+
+def test_every_interval_in_the_hand_written_findings_exists_in_the_rows() -> None:
+    """The generated report cannot drift; the hand-written analysis beside it can.
+
+    `20260728_prompt_axis.md` is rendered from the rows, so its numbers are true
+    by construction. `20260728_prompt_axis_findings.md` is prose a human typed,
+    and re-running the sweep at a different replicate count silently invalidated
+    **46** of its intervals at once -- every one still readable as a confident
+    measurement. Retyping them by eye is how that happened; this asks the rows.
+
+    Deliberately weak on purpose: it does not parse the tables, only whether each
+    pair of bounds is a real measured interval *somewhere*. That is enough to
+    catch a stale re-run, and it cannot go stale itself the way a hard-coded
+    expected list would.
+    """
+    import re
+
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    measured = {
+        (round(row.ci_low, 4), round(row.ci_high, 4))
+        for row in rows
+        if row.k == harness.HEADLINE_K and row.ci_low is not None and row.ci_high is not None
+    }
+    assert measured, "a vacuous pass here would hide the property entirely"
+
+    findings = (ROOT / "docs" / "research" / "20260728_prompt_axis_findings.md").read_text()
+    # The one deliberate exception: a withdrawn value quoted *as* withdrawn.
+    retracted = "[+0.0009, +0.0308]"
+    stale = []
+    for line in findings.splitlines():
+        for match in re.finditer(r"\[([+−-]?\d*\.\d+),\s*([+−-]?\d*\.\d+)\]", line):
+            if match.group(0) == retracted:
+                continue
+            bounds = tuple(
+                round(float(group.replace("−", "-").replace("+", "")), 4)
+                for group in (match.group(1), match.group(2))
+            )
+            if bounds not in measured:
+                stale.append(f"{match.group(0)} in: {line[:90]}")
+    assert not stale, "intervals in the prose that no row holds:\n" + "\n".join(stale)
+    assert retracted in findings, (
+        "the exception above must stay pinned to a value the doc actually quotes"
+    )
 
 
 def test_every_model_pins_the_revision_it_was_measured_on() -> None:

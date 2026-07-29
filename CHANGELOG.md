@@ -14,10 +14,13 @@ uncalibrated at exactly the levels a correction reads.
 - **`BootstrapInterval.p_value`** — the two-sided *achieved significance level*,
   computed from the **same replicates** as the interval:
   `2 * min(P(diff* <= 0), P(diff* >= 0))` with the standard `(count + 1) / (B + 1)`
-  correction. This is the percentile interval inverted, so `p_value <= t` is
-  equivalent to "the `1 - t` percentile interval over this draw excludes zero" at
-  *every* `t` — the coherence property, tested at six levels. `None` when
-  `status="insufficient"`.
+  correction. This is the percentile interval inverted, so `p_value <= t`
+  **implies** "the `1 - t` percentile interval over this draw excludes zero",
+  exactly and at *every* `t` — the coherence property, tested at six levels on a
+  fixture calibrated so the check changes its answer across them. The converse
+  holds only up to the draw's order-statistic granularity, within a band of
+  `4 / (samples + 1)`, and the p-value is always the conservative side of it.
+  `None` when `status="insufficient"`.
 - **`BootstrapInterval.p_value_standard_error`** — `sqrt(p (2 - p) / samples)`.
   Note `2 - p`, not the `1 - p` of an ordinary proportion: the p-value is a tail
   proportion *doubled* for two-sidedness, and doubling a statistic doubles its

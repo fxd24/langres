@@ -213,6 +213,20 @@ def test_the_monte_carlo_error_treats_the_p_value_as_a_doubled_proportion() -> N
     assert bigger.p_value_standard_error < result.p_value_standard_error
 
 
+def test_the_public_argument_guards_reject_rather_than_silently_degrade() -> None:
+    """Error paths on the public contract, uncovered until this file started backing
+    a published multiplicity correction."""
+    observations = _shifted(0.01, count=4)
+    with pytest.raises(ValueError, match="at least 100 samples"):
+        paired_entity_bootstrap(observations, samples=99)
+    with pytest.raises(ValueError, match="confidence_level"):
+        paired_entity_bootstrap(observations, confidence_level=1.0)
+    with pytest.raises(ValueError, match="at least one observation"):
+        paired_entity_bootstrap(())
+    with pytest.raises(ValueError, match="at least one split value"):
+        split_instability({})
+
+
 def test_an_insufficient_bootstrap_reports_no_p_value_rather_than_a_default() -> None:
     """One cluster cannot be resampled, so there is no p-value -- not p=1."""
     result = paired_entity_bootstrap(
