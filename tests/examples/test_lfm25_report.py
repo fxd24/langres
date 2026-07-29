@@ -78,6 +78,20 @@ def artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             vs_reference_ci_high=0.03,
             reference_model="intfloat/e5-base-v2",
         ),
+        # The checkpoint's own documented-prompt arm. The baseline does not run it,
+        # so it has NO paired interval and cannot appear in a win/loss verdict --
+        # while still scoring ABOVE the baseline's best (0.80). That is the real
+        # study's shape on abt_buy and the reason the headline is qualified by arm.
+        # Deliberately below this model's own paired best (0.87) so it does not
+        # move the best-arm cell that unrelated assertions here depend on.
+        _row(
+            "LiquidAI/LFM2.5-Embedding-350M",
+            "abt_buy",
+            prompt_arm="documented",
+            parameter_count=354_483_968,
+            candidate_recall=0.85,
+            reference_model="intfloat/e5-base-v2",
+        ),
     ]
     base = [
         _row("LiquidAI/LFM2.5-Embedding-350M", "abt_buy", parameter_count=354_483_968),
@@ -207,7 +221,38 @@ class TestDegenerateBounds:
         ahead, _behind = REPORT._wins(rows, "LiquidAI/LFM2.5-Embedding-350M", "intfloat/e5-base-v2")
 
         # abt_buy has low=0.02 (a real win); fodors_zagat has low=0.0 exactly.
-        assert ahead == ["abt_buy"]
+        # Verdicts are ARM-qualified: an arm the baseline never runs has no paired
+        # interval, so an unqualified benchmark name would claim more than was tested.
+        assert ahead == ["`abt_buy` (none)"]
+
+
+class TestHeadlineScope:
+    """The headline must not claim more than the paired test covered."""
+
+    def test_an_arm_without_a_counterpart_is_surfaced_not_dropped(self, artifacts: Path) -> None:
+        """Regression: the checkpoint's own best arm was invisible to the verdict.
+
+        A paired interval needs both models' per-record vectors, so an arm the
+        baseline never runs cannot be tested. ``_wins`` skips it. On the real
+        study that skipped arm is the documented-prompt arm, which on ``abt_buy``
+        scores ABOVE the baseline's best while every testable arm scores below —
+        so an unqualified "behind on abt_buy" asserted a checkpoint-level verdict
+        the data does not support.
+        """
+        rows = REPORT._read_rows(REPORT.TUNED_ROWS)
+
+        unpaired = REPORT._unpaired_arms(
+            rows, "LiquidAI/LFM2.5-Embedding-350M", "intfloat/e5-base-v2"
+        )
+
+        assert unpaired, "an arm with no paired interval must be reported, not skipped"
+        assert all(len(entry) == 4 for entry in unpaired)
+
+    def test_the_write_up_qualifies_the_verdict_by_arm(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "per-ARM verdicts, not a checkpoint-level one" in report
+        assert "cannot be tested at all" in report
 
 
 class TestMultiplicity:

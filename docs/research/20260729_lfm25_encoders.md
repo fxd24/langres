@@ -8,8 +8,18 @@ Measured with the standing embedder-ladder harness (`examples/research/embedder_
 
 `LiquidAI/LFM2.5-Embedding-350M` vs. `intfloat/e5-base-v2` — langres's current `DEFAULT_EMBEDDING_MODEL` and therefore the baseline every interval below is measured against.
 
-- Ahead with an interval excluding zero on: **no benchmark**.
-- Behind with an interval excluding zero on: `abt_buy`, `amazon_google`, `wdc_computers`.
+- Ahead with an interval excluding zero on: **no benchmark/arm**.
+- Behind with an interval excluding zero on: `abt_buy` (instruct), `abt_buy` (none), `amazon_google` (instruct), `amazon_google` (none), `wdc_computers` (instruct), `wdc_computers` (none).
+
+**These are per-ARM verdicts, not a checkpoint-level one**, and the distinction changes the reading. A paired interval needs both models' per-record vectors on the same records, so an arm the baseline never runs cannot be tested at all — it is silently absent from the two lines above rather than counted as a loss:
+
+- `abt_buy` arm `documented`: **0.9741** vs the baseline's best **0.9703** — **above the baseline**, and untested.
+- `amazon_google` arm `documented`: **0.8187** vs the baseline's best **0.8338** — below the baseline, and untested.
+- `fodors_zagat` arm `documented`: **1.0000** vs the baseline's best **1.0000** — level with the baseline, and untested.
+- `walmart_amazon` arm `documented`: **0.8764** vs the baseline's best **0.8810** — below the baseline, and untested.
+- `wdc_computers` arm `documented`: **0.7084** vs the baseline's best **0.7363** — below the baseline, and untested.
+
+So on any benchmark listed above, the honest statement is *"behind on the arms that could be tested"*, not *"behind"*. The untested arms are the checkpoint's own documented prompts, which is where a vendor would expect it to look best; closing that gap needs the baseline re-run under the same prompts, which this study did not do.
 
 **It cannot become langres's default regardless of how it scores** — see the licence section. That is a legal constraint, not a measurement.
 
@@ -201,6 +211,24 @@ A tempting explanation is that MLM training shapes token representations for a h
 
 This reframes `fodors_zagat` specifically. It was already labelled *saturated* — every usable embedder scoring near the ceiling. The control shows it is stronger than that: it is **uninformative in the strict sense**, because an untrained network also scores near the ceiling. Saturation says the models agree; this says the benchmark cannot tell a trained retriever from noise. It must never be cited as evidence that one embedder beats another.
 
+
+**Recalibrating the earlier portfolio study.** `docs/research/20260727_embedder_ladder.md` reports per-benchmark margins that predate any noise-floor control, so it has no way to say which of them clear noise. Read against this control:
+
+- On `fodors_zagat`, the best tuned model does not beat random weights at all (margin +0.0000), so **no margin measured there clears noise** — any ranking read off it is uninterpretable.
+- On `walmart_amazon`, **any margin below ~0.0183 is inside the noise band** — that is the entire distance between the best tuned model and a network with random weights.
+
+
+Concretely, every `walmart_amazon` margin that study reports as a win, with its interval:
+
+- `BAAI/bge-base-en-v1.5`: **+0.0098** [+0.0020, +0.0187]  ← point estimate inside the noise band
+- `BAAI/bge-small-en-v1.5`: **+0.0118** [+0.0033, +0.0213]  ← point estimate inside the noise band
+- `google/embeddinggemma-300m`: **+0.0092** [+0.0004, +0.0189]  ← point estimate inside the noise band
+- `intfloat/e5-base-v2`: **+0.0159** [+0.0078, +0.0246]  ← point estimate inside the noise band
+
+**4 of 4** have a *point estimate* below the 0.0183 noise band. Stated precisely, because the weaker claim is the true one: 4 of those intervals do extend past the band at their upper end, so this is not proof that any particular margin is noise — it is that the benchmark cannot distinguish these models from an untrained network with the resolution it has.
+
+That is not a claim this study can refute — different models, and the margin may well be real. But it is not separable from noise on the evidence available, and should not be cited as a model ranking. The earlier document is left as it stands; this is a recalibration note, not a rewrite.
+
 The control also exists because this harness *shipped* the bug it now guards against: a substitution that silently left random weights running scored 0.9911 recall and 0.9971 AUC on `fodors_zagat`, and nothing in the row looked wrong. A permanent noise-floor arm is how that stays visible instead of being rediscovered.
 
 ## Licence — this model must not become the default
@@ -234,7 +262,8 @@ The paired intervals were computed by `langres.experiments.statistics.paired_ent
 | `src/langres/experiments/statistics.py` | `5436b938b70e` | 9192ebf 2026-07-28T16:47:58+02:00 |
 | `examples/research/embedder_ladder.py` | `26ee49f473e7` | c23d95e 2026-07-29T01:17:51+02:00 |
 
-A **blob** hash, not a commit: it changes only when the file's *content* does, which is the property being recorded. `git log` over these paths restricted to the measurement window above is empty — no harness change landed mid-sweep, so these hashes apply to every row in both studies.
+A **blob** hash, not a commit: it changes only when the file's *content* does, which is the property being recorded. Written by `examples/research/write_provenance.py` as part of the **measurement** path — not derived from `HEAD` at render time, which would name whatever is checked out now instead of what measured the rows.
+No tracked file changed while the sweep was running, so these hashes apply to every row in both studies.
 
 ## Reproduce
 

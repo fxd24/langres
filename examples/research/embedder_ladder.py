@@ -330,6 +330,11 @@ MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in (*MODELS, *E
 #: report the standing ladder's absent models as gaps in it.
 LADDER: tuple[ModelSpec, ...] = MODELS
 
+#: Artifact path prefix for the study being rendered, set from ``--report`` in
+#: :func:`main`. The report's own reproduce commands are built from it, so they
+#: name the artifacts of the file they appear in rather than the defaults.
+ARTIFACT_PREFIX: str = "docs/research/20260727_embedder_ladder"
+
 
 def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
     """Every model this document is accountable for: :data:`MODELS` plus whatever ran.
@@ -1997,13 +2002,35 @@ def _render_recommendation(
     )
 
     out.append("\n### The OSI-licensed field — the only candidates for a default\n")
+    # Conditional on the REFERENCE's own licence, because this renderer is shared
+    # by studies that pick their own baseline. It used to state unconditionally
+    # that the default candidates were the OSI-licensed models "including the
+    # reference model" -- so a study whose reference is use-restricted published
+    # a paragraph listing a NON-OSI model as a candidate for the shipped default,
+    # and called it the current default besides. That is the one error in this
+    # document with real downstream consequence: it points a reader at exactly
+    # the model the licence section forbids defaulting to. (Cross-model review.)
+    from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
+
+    reference_spec = MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)
     out.append(
-        f"\nlangres ships under Apache-2.0. A default that carries a use-restricted "
-        f"licence pushes that restriction onto every user who never chose it, so the "
-        f"candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed "
-        f"models — including the reference model, `{REFERENCE_MODEL}` "
-        f"({(MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)).license}).\n"
+        "\nlangres ships under Apache-2.0. A default that carries a use-restricted "
+        "licence pushes that restriction onto every user who never chose it, so the "
+        "candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed models.\n"
     )
+    if _is_osi(reference_spec):
+        out.append(
+            f"\nThis study's reference, `{REFERENCE_MODEL}` "
+            f"({reference_spec.license}), is one of them.\n"
+        )
+    else:
+        out.append(
+            f"\n**This study's reference is not one of them.** `{REFERENCE_MODEL}` is "
+            f"licensed `{reference_spec.license}`, which is not on the OSI allow list, so "
+            f"it is a measurement baseline here and **not** a candidate for the shipped "
+            f"default. The actual `DEFAULT_EMBEDDING_MODEL` is "
+            f"`{DEFAULT_EMBEDDING_MODEL}`.\n"
+        )
     if not osi:
         out.append(
             "\n**No OSI-licensed challenger has a row at this metric revision**, so "
@@ -2347,14 +2374,37 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # unsourceable number is one that eventually has to be retracted.
     measured_ks = sorted({row.k for row in ok})
     out.append("\n## How to reproduce these numbers\n")
+    # Every command carries THIS study's artifact prefix, reference model and
+    # ladder. Bare `run_ladder.sh` writes the harness defaults, so a study that
+    # printed the bare form was telling its reader to overwrite a different
+    # study's rows -- and neither report could be reproduced as documented.
+    # NOT `ladder_names`: that name is already bound above to the LIST the
+    # recommendation section consumes. Rebinding it to a joined string made the
+    # coverage denominator count CHARACTERS ("7 of the 336 models in the ladder")
+    # and made the licence table iterate them, emptying it. Renamed so the two
+    # cannot collide.
+    ladder_arg = " ".join(spec.name for spec in LADDER)
+    env = (
+        f'LADDER_ARTIFACT="{ARTIFACT_PREFIX}" \\\n'
+        f'  LADDER_REFERENCE_MODEL="{REFERENCE_MODEL}" \\\n'
+        f'  LADDER_MODELS="{ladder_arg}" \\\n'
+    )
     out.append(
         "\n```bash\n"
-        "# every model, committing and pushing after each one\n"
-        "bash examples/research/run_ladder.sh\n"
-        "\n# or one model / a subset (space-separated)\n"
-        'LADDER_MODELS="intfloat/e5-base-v2" bash examples/research/run_ladder.sh\n'
+        "# every model in this study, committing and pushing after each one\n"
+        f"{env}  bash examples/research/run_ladder.sh\n"
+        "\n# or one model / a subset (space-separated) -- same artifact + baseline\n"
+        f'LADDER_ARTIFACT="{ARTIFACT_PREFIX}" \\\n'
+        f'  LADDER_REFERENCE_MODEL="{REFERENCE_MODEL}" \\\n'
+        f'  LADDER_MODELS="{REFERENCE_MODEL}" \\\n'
+        "  bash examples/research/run_ladder.sh\n"
         "\n# render this file from the existing rows, measuring nothing\n"
-        "uv run python examples/research/embedder_ladder.py --render-only\n"
+        "uv run python examples/research/embedder_ladder.py --render-only \\\n"
+        f"  --rows {ARTIFACT_PREFIX}_rows.jsonl \\\n"
+        f"  --report {ARTIFACT_PREFIX}.md \\\n"
+        f"  --reference {ARTIFACT_PREFIX}_reference_recall.json \\\n"
+        f'  --reference-model "{REFERENCE_MODEL}" \\\n'
+        f"  --ladder-models {ladder_arg}\n"
         "```\n"
     )
     out.append(
@@ -3054,7 +3104,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     # half-threaded parameter would print one baseline in the tables and another
     # in the sentences above them. Declared here because `--reference-model`
     # reads the current value as its default.
-    global REFERENCE_MODEL, LADDER
+    global REFERENCE_MODEL, LADDER, ARTIFACT_PREFIX
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", nargs="*", default=[m.name for m in MODELS])
@@ -3114,6 +3164,22 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     REFERENCE_MODEL = args.reference_model
     LADDER = tuple(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in args.ladder_models)
+    # The report prints its own reproduce commands. Without knowing which study it
+    # belongs to it printed the DEFAULTS, which write the 20260727 artifacts --
+    # so a reader following the instructions in the 20260729 reports would
+    # overwrite a different study's rows and never reproduce the table they were
+    # reading. Derived from --report so it cannot disagree with the file it is
+    # written into. (Cross-model review.)
+    # Relative to the repo root, never absolute: the defaults are absolute Paths,
+    # and interpolating them would bake this machine's checkout location into a
+    # committed document -- unreproducible anywhere else, and a different string
+    # on every clone.
+    report_path = Path(args.report).resolve()
+    try:
+        prefix = report_path.relative_to(REPO_ROOT)
+    except ValueError:
+        prefix = report_path
+    ARTIFACT_PREFIX = str(prefix).removesuffix(".md")
 
     if args.render_only:
         rows = read_rows(args.rows)

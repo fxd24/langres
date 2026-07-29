@@ -74,9 +74,8 @@ def _provenance_section() -> list[str]:
     lines += [
         f"The paired intervals were computed by `{boot['function']}` at "
         f"**B={boot['samples']}** replicates, resampling **{boot['resampled_unit']}s**. "
-        f"Measured between `{window['study_a_started']}` and "
-        f"`{window['study_b_finished']}`, with `HEAD` at "
-        f"`{window['head_when_sweep_started']}`.",
+        f"Measured between `{window['started']}` and `{window['finished']}`, with "
+        f"`HEAD` at `{window['head_when_sweep_started']}`.",
         "",
         "| file | blob | last commit touching it |",
         "|---|---|---|",
@@ -86,13 +85,31 @@ def _provenance_section() -> list[str]:
             f"| `{path}` | `{meta['blob'][:12]}` | {meta['last_commit']} "
             f"{meta['last_commit_date']} |"
         )
+    stable = doc.get("verified_unchanged_during_run")
     lines += [
         "",
         "A **blob** hash, not a commit: it changes only when the file's *content* does, "
-        "which is the property being recorded. `git log` over these paths restricted to "
-        "the measurement window above is empty — no harness change landed mid-sweep, so "
-        "these hashes apply to every row in both studies.",
+        "which is the property being recorded. Written by "
+        "`examples/research/write_provenance.py` as part of the **measurement** path — "
+        "not derived from `HEAD` at render time, which would name whatever is checked "
+        "out now instead of what measured the rows.",
     ]
+    if stable is True:
+        lines.append(
+            "No tracked file changed while the sweep was running, so these hashes apply "
+            "to every row in both studies."
+        )
+    elif stable is False:
+        lines.append(
+            "**A tracked file changed mid-sweep** "
+            f"({', '.join(f'`{p}`' for p in doc.get('changed_during_run', []))}), so no "
+            "single blob describes all the rows. Treat the table above as approximate."
+        )
+    else:
+        lines.append(
+            "The mid-sweep stability of these files was **not recorded**, so it is not "
+            "claimed here."
+        )
     return lines
 
 
@@ -236,18 +253,53 @@ def _interval_table(rows: list[dict[str, Any]], baseline: str) -> tuple[str, lis
 
 
 def _wins(rows: list[dict[str, Any]], model: str, baseline: str) -> tuple[list[str], list[str]]:
-    """Benchmarks where ``model``'s interval vs. the baseline excludes zero, by direction."""
-    ahead, behind = [], []
+    """Benchmarks where ``model``'s interval vs. the baseline excludes zero, by direction.
+
+    Reported **per arm**, because an arm without a counterpart in the baseline has
+    no paired interval and is skipped here. Reading the result as a
+    checkpoint-level verdict would then assert something broader than was
+    measured — see :func:`_unpaired_arms`, which surfaces exactly what this
+    function cannot see.
+    """
+    ahead: list[str] = []
+    behind: list[str] = []
     for benchmark in _benchmarks(rows):
         for row in _cells(rows, model=model, benchmark=benchmark, k=HEADLINE_K, status="ok"):
             low, high = row.get("vs_reference_ci_low"), row.get("vs_reference_ci_high")
             if low is None or high is None:
                 continue
-            if low > 0 and benchmark not in ahead:
-                ahead.append(benchmark)
-            elif high < 0 and benchmark not in behind:
-                behind.append(benchmark)
+            label = f"`{benchmark}` ({row['prompt_arm']})"
+            if low > 0 and label not in ahead:
+                ahead.append(label)
+            elif high < 0 and label not in behind:
+                behind.append(label)
     return ahead, behind
+
+
+def _unpaired_arms(
+    rows: list[dict[str, Any]], model: str, baseline: str
+) -> list[tuple[str, str, float, float]]:
+    """Arms of ``model`` with NO paired interval, and how they compare on raw recall.
+
+    An arm the baseline does not run cannot be bootstrapped against it — the
+    paired test needs both per-record vectors on the same records. Those arms are
+    invisible to :func:`_wins`, and on this study one of them is the checkpoint's
+    *best* configuration: on ``abt_buy`` the documented-prompt arm scores above
+    the baseline's best while every paired arm scores below it. Left unsaid, the
+    headline would read as a checkpoint-level verdict the data cannot support.
+
+    Returns ``(benchmark, arm, model_recall, baseline_best_recall)``.
+    """
+    out: list[tuple[str, str, float, float]] = []
+    for benchmark in _benchmarks(rows):
+        base_cells = _cells(rows, model=baseline, benchmark=benchmark, k=HEADLINE_K, status="ok")
+        if not base_cells:
+            continue
+        base_best = max(c["candidate_recall"] for c in base_cells)
+        for row in _cells(rows, model=model, benchmark=benchmark, k=HEADLINE_K, status="ok"):
+            if row.get("vs_reference_ci_low") is None:
+                out.append((benchmark, row["prompt_arm"], row["candidate_recall"], base_best))
+    return out
 
 
 CONTROL = "random-init-control-350M"
@@ -350,6 +402,112 @@ def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+#: The earlier portfolio study, whose margins predate any noise-floor control.
+PRIOR_LADDER = "docs/research/20260727_embedder_ladder.md"
+
+
+def _noise_band_warning(tuned: list[dict[str, Any]], base: list[dict[str, Any]]) -> list[str]:
+    """Tell a reader of the earlier ladder how to recalibrate its small margins.
+
+    That study reports per-benchmark wins with no noise floor, because none had
+    been measured. Its `walmart_amazon` margins are the ones at risk: the whole
+    tuned-vs-random range there is smaller than some of the differences it
+    reports as results. Computed here rather than asserted, so the threshold
+    cannot drift from the measurement.
+    """
+    lines: list[str] = []
+    walmart_band: float | None = None
+    for benchmark in sorted({row["benchmark"] for row in base}):
+        control = _best_arm(base, CONTROL, benchmark)
+        tuned_cells = [
+            cell
+            for model in sorted({row["model"] for row in tuned})
+            if (cell := _best_arm(tuned, model, benchmark))
+        ]
+        if control is None or not tuned_cells:
+            continue
+        margin = max(c["candidate_recall"] for c in tuned_cells) - control["candidate_recall"]
+        if margin >= 0.05:
+            continue
+        if margin <= 0:
+            lines.append(
+                f"- On `{benchmark}`, the best tuned model does not beat random weights "
+                f"at all (margin {margin:+.4f}), so **no margin measured there clears "
+                f"noise** — any ranking read off it is uninterpretable."
+            )
+        else:
+            if benchmark == "walmart_amazon":
+                walmart_band = margin
+            lines.append(
+                f"- On `{benchmark}`, **any margin below ~{margin:.4f} is inside the "
+                f"noise band** — that is the entire distance between the best tuned "
+                f"model and a network with random weights."
+            )
+    if not lines:
+        return []
+    return [
+        "",
+        f"**Recalibrating the earlier portfolio study.** `{PRIOR_LADDER}` reports "
+        "per-benchmark margins that predate any noise-floor control, so it has no way to "
+        "say which of them clear noise. Read against this control:",
+        "",
+        *lines,
+        "",
+        *_prior_walmart_row(walmart_band),
+        "",
+        "That is not a claim this study can refute — different models, and the margin may "
+        "well be real. But it is not separable from noise on the evidence available, and "
+        "should not be cited as a model ranking. The earlier document is left as it "
+        "stands; this is a recalibration note, not a rewrite.",
+    ]
+
+
+def _prior_walmart_row(noise_band: float | None = None) -> list[str]:
+    """Quote the earlier study's `walmart_amazon` margins, read from its own table.
+
+    Parsed rather than retyped: every factual error this repo shipped in one day
+    was in hand-copied prose sitting beside a correct generated table.
+    """
+    path = REPO_ROOT / PRIOR_LADDER
+    if not path.exists():
+        return []
+    rows = [
+        match
+        for line in path.read_text().splitlines()
+        if (
+            match := re.match(
+                r"\|\s*`([^`]+)`\s*\|\s*walmart_amazon\s*\|\s*([+-][\d.]+)\s*\|"
+                r"\s*\[([+-][\d.]+),\s*([+-][\d.]+)\]",
+                line.strip(),
+            )
+        )
+    ]
+    # Only the rows whose interval excludes zero were reported there as wins.
+    wins = [m for m in rows if float(m.group(3)) > 0]
+    if not wins:
+        return []
+    band = noise_band if noise_band is not None else 0.0
+    below = [m for m in wins if float(m.group(2)) < band]
+    spilling = [m for m in wins if float(m.group(4)) > band]
+    return [
+        "",
+        "Concretely, every `walmart_amazon` margin that study reports as a win, with its interval:",
+        "",
+        *[
+            f"- `{m.group(1)}`: **{m.group(2)}** [{m.group(3)}, {m.group(4)}]"
+            + ("  ← point estimate inside the noise band" if float(m.group(2)) < band else "")
+            for m in sorted(wins, key=lambda m: m.group(1))
+        ],
+        "",
+        f"**{len(below)} of {len(wins)}** have a *point estimate* below the "
+        f"{band:.4f} noise band. Stated precisely, because the weaker claim is the true "
+        f"one: {len(spilling)} of those intervals do extend past the band at their upper "
+        f"end, so this is not proof that any particular margin is noise — it is that the "
+        f"benchmark cannot distinguish these models from an untrained network with the "
+        f"resolution it has.",
+    ]
+
+
 def _licence_clauses() -> list[str]:
     """The clauses that decide whether this may be a shipped default, quoted from the file."""
     text = LICENSE.read_text()
@@ -397,6 +555,7 @@ def render() -> str:
     tuned_benchmarks = _benchmarks(tuned)
     interval_table, degenerate = _interval_table(tuned, TUNED_BASELINE)
     ahead, behind = _wins(tuned, "LiquidAI/LFM2.5-Embedding-350M", TUNED_BASELINE)
+    unpaired = _unpaired_arms(tuned, "LiquidAI/LFM2.5-Embedding-350M", TUNED_BASELINE)
     n_tests = sum(
         1
         for b in tuned_benchmarks
@@ -435,12 +594,39 @@ def render() -> str:
         "",
         (
             f"- Ahead with an interval excluding zero on: "
-            f"{', '.join(f'`{b}`' for b in ahead) if ahead else '**no benchmark**'}."
+            f"{', '.join(ahead) if ahead else '**no benchmark/arm**'}."
         ),
         (
             f"- Behind with an interval excluding zero on: "
-            f"{', '.join(f'`{b}`' for b in behind) if behind else '**no benchmark**'}."
+            f"{', '.join(behind) if behind else '**no benchmark/arm**'}."
         ),
+        "",
+        "**These are per-ARM verdicts, not a checkpoint-level one**, and the distinction "
+        "changes the reading. A paired interval needs both models' per-record vectors on "
+        "the same records, so an arm the baseline never runs cannot be tested at all — it "
+        "is silently absent from the two lines above rather than counted as a loss:",
+        "",
+        *(
+            [
+                f"- `{benchmark}` arm `{arm}`: **{recall:.4f}** vs the baseline's best "
+                f"**{base:.4f}** — "
+                + (
+                    "**above the baseline**, and untested."
+                    if recall > base
+                    else "level with the baseline, and untested."
+                    if recall == base
+                    else "below the baseline, and untested."
+                )
+                for benchmark, arm, recall, base in unpaired
+            ]
+            or ["- None — every arm has a counterpart in the baseline."]
+        ),
+        "",
+        'So on any benchmark listed above, the honest statement is *"behind on the arms '
+        'that could be tested"*, not *"behind"*. The untested arms are the checkpoint\'s '
+        "own documented prompts, which is where a vendor would expect it to look best; "
+        "closing that gap needs the baseline re-run under the same prompts, which this "
+        "study did not do.",
         "",
         "**It cannot become langres's default regardless of how it scores** — see the "
         "licence section. That is a legal constraint, not a measurement.",
@@ -619,6 +805,8 @@ def render() -> str:
         "also scores near the ceiling. Saturation says the models agree; this says the "
         "benchmark cannot tell a trained retriever from noise. It must never be cited as "
         "evidence that one embedder beats another.",
+        "",
+        *_noise_band_warning(tuned, base),
         "",
         "The control also exists because this harness *shipped* the bug it now guards "
         "against: a substitution that silently left random weights running scored 0.9911 "

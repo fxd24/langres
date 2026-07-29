@@ -355,6 +355,12 @@ for model in "${MODELS[@]}"; do
   }
 
   code=0
+  # Initialised HERE, before the mode branch, for two reasons. (1) `set -u` is on:
+  # the non-granular SUCCESS path never assigned it, so the expansion below exited
+  # the script with "unbound variable" *before* the commit block -- turning a clean
+  # sweep into lost, uncommitted measurements. Reproduced, not theorised. (2) It
+  # must reset per model, or one model's failures would be attributed to the next.
+  FAILED_BENCHMARKS=""
   if [ "${LADDER_BENCHMARK_GRANULAR:-}" = "1" ]; then
     # One BENCHMARK per process, not just one model. The model reload costs ~10s
     # per cell; against a multi-hour sweep that is trivial insurance against the
@@ -362,7 +368,6 @@ for model in "${MODELS[@]}"; do
     # already OOM'd this machine once (42.44 GiB of allocations for a 0.6B model
     # at 0.8 GB RSS).
     first=truncate
-    FAILED_BENCHMARKS=""
     for benchmark in $BENCHMARKS; do
       # Checked BEFORE the encode, not only after it. The 2026-07-29 kill landed
       # *inside* a cell, so a purely post-cell guard never got its turn to run.

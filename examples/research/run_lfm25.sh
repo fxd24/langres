@@ -82,6 +82,16 @@ case "$STUDY" in
 esac
 
 # ---------------------------------------------------------------------------
+# Provenance is captured HERE, in the measurement path, before a single row is
+# written -- not at render time. A provenance line derived from HEAD names
+# whatever is checked out when the report is generated, which is not what
+# measured the rows; the first commit touching the harness would silently
+# reattribute every row to code that never ran. Not stale: false.
+# ---------------------------------------------------------------------------
+say "opening the provenance window"
+uv run python examples/research/write_provenance.py --start || exit 1
+
+# ---------------------------------------------------------------------------
 # Study A -- the like-for-like comparison.
 #
 # The reference model MUST run first: the paired-CI sidecar it writes is what
@@ -122,14 +132,33 @@ fi
 # shipped factual errors on one day and every one was in hand-typed prose while
 # the generated tables beside them were correct.
 # ---------------------------------------------------------------------------
+# Close the provenance window BEFORE rendering: --finish refuses if a tracked
+# file changed mid-sweep, in which case no single blob describes all the rows and
+# the report must not claim one.
+say "closing the provenance window"
+uv run python examples/research/write_provenance.py --finish || exit 1
+
 say "rendering the write-up"
 uv run python examples/research/lfm25_report.py || exit 1
 
-git add docs/research/20260729_lfm25_encoders.md
-if ! git diff --cached --quiet -- docs/research/20260729_lfm25_encoders.md; then
-  git commit -q --only docs/research/20260729_lfm25_encoders.md \
+REPORT_MD="docs/research/20260729_lfm25_encoders.md"
+PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
+git add "$REPORT_MD" "$PROVENANCE_JSON" || {
+  say "FATAL: could not stage the write-up or its provenance"
+  exit 1
+}
+if ! git diff --cached --quiet -- "$REPORT_MD" "$PROVENANCE_JSON"; then
+  # A silent commit failure here is the durability hole that has already cost
+  # this repo a paid run: the script would print "complete" and exit 0 with the
+  # write-up still uncommitted, and a worktree teardown would take it. Guarded,
+  # exactly as run_ladder.sh already guards its own commit.
+  if ! git commit -q --only "$REPORT_MD" "$PROVENANCE_JSON" \
     -m "results(lfm25): generated write-up" \
-    -m "Rendered by examples/research/lfm25_report.py from the two committed rows files."
+    -m "Rendered by examples/research/lfm25_report.py from the two committed rows files, with the provenance captured across the measurement window."
+  then
+    say "FATAL: commit failed. The write-up is staged but NOT durable; stopping."
+    exit 1
+  fi
   git push -q origin HEAD 2>/dev/null && say "pushed" || say "push failed"
 fi
 say "complete"
