@@ -1571,8 +1571,8 @@ def render_report(rows: Sequence[Row]) -> str:
     # that deliberately measures a different set is coherent, and every table names the
     # benchmarks it used. (Found by automated review on PR #252.)
     #
-    # An empty set is a different condition (nothing comparable was measured at all,
-    # e.g. a single-arm smoke render) and is not this guard's business.
+    # A set of families that is *empty* cannot be seen here at all -- there is nothing
+    # to disagree -- so it is caught by the identity check below instead.
     if len(set(covered.values())) > 1:
         widest = max(covered.values(), key=len)
         short = {
@@ -1593,13 +1593,21 @@ def render_report(rows: Sequence[Row]) -> str:
         for recipe in spec.recipes
         if recipe.arm != "none"
     }
-    if observed_families and observed_families != declared_families:
+    if observed_families != declared_families:
         # Reachable through the documented CLI: `--models <one model>` against a fresh
         # rows file leaves every surviving family the full four benchmarks wide, so the
         # size check reads clean -- while "Where each prompt came from" and "The arms"
         # above still describe all of `MODELS`. That is the caption-and-measurement
         # drift this whole guard family exists to prevent, one level up from where it
         # was being checked. (Found by review of the round-6 fixes.)
+        #
+        # The check is deliberately NOT skipped when `observed_families` is empty. That
+        # carve-out was the same hole one level deeper: `--arms none`, or a `--k` that
+        # omits the headline, yields no comparison families at all, so the guard waved
+        # through a report whose prose describes all of `MODELS` while its results
+        # contain not one comparison -- and `main` then overwrote the committed
+        # artifact with it and exited 0. A guard that cannot observe its own most
+        # extreme violation is not a guard. (Found by automated review on PR #252.)
         missing = sorted(declared_families - observed_families)
         extra = sorted(observed_families - declared_families)
         raise ValueError(
@@ -1831,18 +1839,8 @@ def main() -> int:
             except ValueError as error:
                 logger.info("report not regenerated yet -- sweep still in progress: %s", error)
 
-    # Enforce at completion, where a mixed file really is wrong.
     final_rows = read_rows(args.rows)
-    mixed = find_mixed_provenance(final_rows)
-    if mixed:
-        logger.error(
-            "rows hold more than one checkpoint per model: %s. Every row is safely "
-            "on disk and nothing was deleted -- re-run the stale cells so each "
-            "model comes from one revision.",
-            "; ".join(f"{model}: {revisions}" for model, revisions in mixed.items()),
-        )
-        return 1
-    # Publish -- but only *enforce* publication when this invocation was asked to
+    # Publish -- but only *enforce* completeness when this invocation was asked to
     # produce the whole declared design. `prompt_axis_sweep.sh` runs one
     # (model, benchmark) per process, so a scoped run legitimately leaves the rows
     # short and the publish guard is right to refuse them; treating that refusal as
@@ -1858,6 +1856,34 @@ def main() -> int:
         scope.append("--benchmarks")
     if args.arms is not None:
         scope.append("--arms")
+
+    # Mixed provenance is enforced on the same footing, and for the same reason. A
+    # sweep restarted after a pinned revision changes necessarily passes *through* a
+    # mixed state: the first scoped process writes the new revision while that model's
+    # other benchmarks still hold the old one. `merge_rows` allows that on purpose and
+    # `_cell_complete` refuses to reuse the stale rows, so the state is transient and
+    # self-correcting -- but failing on it here aborted the documented sweep after its
+    # first expensive cell under `set -e`, which is the identical bug one line up.
+    # A mixed file is only *wrong* at publication. (Found by automated review on #252.)
+    mixed = find_mixed_provenance(final_rows)
+    if mixed:
+        detail = "; ".join(f"{model}: {revisions}" for model, revisions in mixed.items())
+        if not scope:
+            logger.error(
+                "rows hold more than one checkpoint per model: %s. Every row is safely "
+                "on disk and nothing was deleted -- re-run the stale cells so each "
+                "model comes from one revision.",
+                detail,
+            )
+            return 1
+        logger.info(
+            "not publishing: rows still hold more than one checkpoint per model (%s), "
+            "which a sweep narrowed by %s passes through while it re-measures. Every "
+            "measured row is on disk; run with --render-only once it is complete.",
+            detail,
+            "/".join(scope),
+        )
+        return 0
     try:
         args.report.write_text(render_report(final_rows))
     except ValueError as error:

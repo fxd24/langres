@@ -47,10 +47,12 @@ intervals are paired bootstraps resampled **by gold cluster**.
    take away the wrong instruction. You must use the checkpoint's *retrieval*
    template, and you must verify it on your data.
 3. **Writing your own instruction is not the lever.** A raw ER sentence used as a
-   bare prefix hurt **4 of the 5** checkpoints (up to **−0.1038**) — though *not*
-   all of them: EmbeddingGemma is significantly **positive** under it on
-   `amazon_google` (+0.0118), which is why the rule is "not the lever", not
-   "never do it". Putting our ER task text inside the checkpoint's own template
+   bare prefix significantly hurt **all 5** checkpoints somewhere (up to
+   **−0.1038**) — but it is not uniformly bad: EmbeddingGemma is the one
+   checkpoint it also *helped* somewhere, significantly **positive** on
+   `amazon_google` (+0.0118) while still significantly negative on `abt_buy`
+   (−0.0078). That mixed sign is why the rule is "not the lever", not "never do
+   it". Putting our ER task text inside the checkpoint's own template
    is a **coin flip**: it helped Qwen3 (+0.0388) and cost Gemma **−0.1589** — and
    it never beat the model's own default *on candidate recall*, even when that
    default describes *web search*. Take the checkpoint's retrieval prompt; do not
@@ -366,7 +368,7 @@ so the uniqueness is among the published recipes, not among all 20 prompted arms
 
 | arm | kind | abt_buy | amazon_google | wdc_computers |
 |---|---|---|---|---|
-| `official_retrieval` | documented | **+0.0088** [+0.0039, +0.0157] | **+0.0371** [+0.0268, +0.0483] | **+0.0394** [+0.0242, +0.0550] |
+| `official_retrieval` | documented | **+0.0088** [+0.0039, +0.0147] | **+0.0371** [+0.0268, +0.0483] | **+0.0394** [+0.0242, +0.0550] |
 | `official_sts` | documented | −0.0127 [−0.0217, −0.0039] | +0.0224 [+0.0131, +0.0321] | −0.0410 [−0.0590, −0.0233] |
 | `official_clustering` | documented | −0.0721 [−0.0885, −0.0564] | −0.0164 [−0.0281, −0.0050] | **−0.3183** [−0.3479, −0.2886] |
 | `er_in_official_template` | ours | −0.0181 [−0.0279, −0.0089] | +0.0238 [+0.0139, +0.0341] | **−0.1589** [−0.1826, −0.1357] |
@@ -551,7 +553,7 @@ distinction, and it is the more useful result:
 |---|---|---|
 | Use the checkpoint's **documented retrieval prompt** | **Reliable win on 3 of the 4 instruction-trained models**, and never significantly negative on any. | On `wdc_computers`: Gemma +0.0394, bge +0.1224, Qwen3 +0.0646 — all exclude zero and all survive Holm. **e5 is not in the list**: its `wdc_computers` +0.0152 does not exclude zero (p=0.0584), and its `abt_buy` +0.0069 was withdrawn by the correction (p=0.0174 against a 0.0125 threshold). |
 | Substitute **your own task text into its template shape** | **Coin flip, and model-specific.** Never beat the model's own default on candidate recall. | Qwen3 +0.0388 (helped, and the only non-documented arm clear of zero on 3/3); Gemma **−0.1589** (hurt badly) |
-| Use a **raw English sentence outside any template** | **Harmful on 4 of the 5 checkpoints — not universally.** | Hurt: −0.1038 e5, −0.0907 Qwen3, −0.0775 bge, −0.0632 MiniLM (all `wdc_computers`). **Exception: EmbeddingGemma**, which is *significantly positive* on `amazon_google` (+0.0118 [+0.0041, +0.0199]) and neutral on `wdc_computers` (+0.0004, spans 0). |
+| Use a **raw English sentence outside any template** | **Significantly harmful on all 5 checkpoints somewhere — but not uniformly.** | Hurt: −0.1038 e5, −0.0907 Qwen3, −0.0775 bge, −0.0632 MiniLM (all `wdc_computers`), and −0.0078 Gemma [−0.0138, −0.0020] on `abt_buy`. **EmbeddingGemma is the only one it also *helped*:** *significantly positive* on `amazon_google` (+0.0118 [+0.0041, +0.0199]), neutral on `wdc_computers` (+0.0004, spans 0) — the only checkpoint with a mixed sign, not one that escaped harm. |
 
 So the answer to *"can we pick good ones rather than guessing?"* is: **yes, by
 taking the checkpoint's own retrieval prompt — not by writing a better one.**

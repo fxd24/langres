@@ -438,7 +438,11 @@ def test_rendering_refuses_numbers_measured_under_a_different_prompt() -> None:
     """
     spec = harness.MODELS_BY_NAME["sentence-transformers/all-MiniLM-L6-v2"]
     good = _row(spec.name, "abt_buy")
-    assert harness.render_report([good])  # the check is not simply always-on
+    # The check is not simply always-on. Asserted against the provenance guard
+    # itself rather than a full render: a lone row can no longer be *published*
+    # (completeness is enforced unconditionally now), so a passing render would
+    # no longer be evidence about this guard.
+    harness._assert_rows_match_declaration([good])
 
     edited = dataclasses.replace(good, recipe_fingerprint="deadbeefdeadbeef")
     with pytest.raises(ValueError, match="prompt fingerprint"):
@@ -683,6 +687,82 @@ def test_a_family_that_vanishes_entirely_is_refused_too() -> None:
 
     with pytest.raises(ValueError, match="must cover every one of them"):
         harness.render_report(without_e5)
+
+
+def test_a_report_with_no_comparisons_at_all_is_refused_and_clobbers_nothing() -> None:
+    """The completeness guard must observe its own most extreme violation.
+
+    Skipping the check when *no* comparison family is present was the same hole
+    one level deeper. `--arms none`, or a `--k` that omits the headline, leaves
+    the verdicts empty; the guard waved that through, so the report rendered with
+    prose describing all of `MODELS` above results containing not one comparison
+    -- and the publication path then overwrote the committed artifact with it and
+    exited 0. Asserted together with the file, because a guard that raises while
+    the caller still writes has not protected anything.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    baseline_only = [row for row in rows if row.arm == "none"]
+    assert baseline_only, "the fixture must still contain the baseline arm"
+    assert not harness._multiplicity(baseline_only), "there must be no family left to check"
+
+    with pytest.raises(ValueError, match="must cover every one of them"):
+        harness.render_report(baseline_only)
+
+
+def test_a_vacuous_render_cannot_overwrite_the_published_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal has to reach the file, not just the return value."""
+    rows_path = tmp_path / "rows.jsonl"
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    harness.write_rows([row for row in rows if row.arm == "none"], rows_path)
+
+    report_path = tmp_path / "report.md"
+    report_path.write_text("the previously published study")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["prompt_axis", "--rows", str(rows_path), "--report", str(report_path), "--render-only"],
+    )
+    assert harness.main() == 1
+    assert report_path.read_text() == "the previously published study"
+
+
+def test_a_revision_change_mid_sweep_does_not_kill_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mixed provenance is a transient state of a sweep, and only wrong at publication.
+
+    Restarting the sweep after a pinned revision changes necessarily passes
+    *through* a mixed file: the first scoped process writes the new revision while
+    that model's other benchmarks still hold the old one. `merge_rows` allows that
+    on purpose. Failing on it at the end of every invocation aborted the
+    documented one-cell-per-process driver after its first expensive cell under
+    `set -e` -- the identical bug the publish guard had. Both halves are asserted,
+    since either alone is satisfiable by breaking the other.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    stale = [
+        dataclasses.replace(row, revision="0" * 40)
+        if row.model == "BAAI/bge-base-en-v1.5" and row.benchmark == "abt_buy"
+        else row
+        for row in rows
+    ]
+    assert "BAAI/bge-base-en-v1.5" in harness.find_mixed_provenance(stale)
+
+    rows_path = tmp_path / "rows.jsonl"
+    harness.write_rows(stale, rows_path)
+    report_path = tmp_path / "report.md"
+    # No cell is recomputed: this test is about the end-of-run decision, not measurement.
+    monkeypatch.setattr(harness, "evaluate_model_on_benchmark", lambda *a, **k: iter(()))
+
+    base = ["--rows", str(rows_path), "--report", str(report_path)]
+    monkeypatch.setattr(sys, "argv", ["prompt_axis", *base, "--models", "intfloat/e5-base-v2"])
+    assert harness.main() == 0, "a scoped cell must not fail the outer sweep loop"
+    assert not report_path.exists(), "a mixed file must not be published either"
+
+    monkeypatch.setattr(sys, "argv", ["prompt_axis", *base])
+    assert harness.main() == 1, "at completion a mixed file is a real failure"
 
 
 def test_holm_matches_an_independently_written_step_down_and_pins_its_thresholds() -> None:

@@ -24,9 +24,10 @@ uncalibrated at exactly the levels a correction reads.
 - **`BootstrapInterval.p_value_standard_error`** — `sqrt(p (2 - p) / samples)`.
   Note `2 - p`, not the `1 - p` of an ordinary proportion: the p-value is a tail
   proportion *doubled* for two-sidedness, and doubling a statistic doubles its
-  standard error. The naive form understates the error by ~40% at `p ≈ 0.02`,
-  which is where correction thresholds sit — it would be least accurate exactly
-  where it is relied on most.
+  standard error. At `p ≈ 0.02` — where correction thresholds sit — the correct
+  value is **~42% larger** than the naive `sqrt(p (1 - p) / samples)`
+  (equivalently, the naive form sits ~30% below the truth); it would be least
+  accurate exactly where it is relied on most.
   The p-value is an estimate from a finite draw; a decision taken within a few of
   these of a threshold is resolution-limited, not settled, and raising `samples`
   is the lever. Nothing below `2 / (B + 1)` is observable, so the estimator floors
