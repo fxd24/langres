@@ -258,6 +258,26 @@ why it is not a substitute for tuning. A shipped constant's job is to stop the
 out-of-the-box path being catastrophically wrong. It is not to be optimal on
 your encoder, and this table is the evidence that it cannot be.
 
+**What "checkpoint" identifies here, precisely.** Both artifacts record their
+encoder by *name* — `all-MiniLM-L6-v2` and `intfloat/e5-base-v2` — and neither
+pins a Hub revision, so each names a **branch as it resolved on the measurement
+date**, not a commit. Raised in review, and worth stating rather than leaving to
+the reader: a name is not an identity. (An aside outside this study's
+measurements, but the reason the point is not academic: the Hub cache on the
+machine that ran this holds three distinct `all-MiniLM-L6-v2` snapshots.
+Whatever fetched them, the name alone does not say which one a given run
+loaded.) The harness now accepts `--embedder repo@revision` and forwards it to
+`SentenceTransformer` as a real pin, so a later run can be exact; these two were
+measured before it could, and that is the one dimension of this study that is
+reproducible by convention rather than by construction: an exact re-run of these
+numbers is not guaranteed by the command in §10 alone. What that does and does
+not put at risk is worth separating. The shipped decision rests on `0.90` being
+**never worse than `0.5`** on both encoders, and that was verified on the
+weights these runs actually loaded; whether it survives a *different* revision
+of either model is untested here, which is the same open question as any other
+untested encoder — and §7's whole point is that the answer is a property of the
+scale, not of the family tag.
+
 ## 8. Verdict
 
 @@VERDICT@@

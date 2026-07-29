@@ -303,6 +303,7 @@ class _EmbedderOverride:
                 claims another one is the failure mode worth crashing over.
         """
         from langres.core.embeddings import SentenceTransformerEmbedder
+        from langres.core.model_ref import ModelRef
 
         blocker = self._bench.build_blocker(k_neighbors)
         index = getattr(blocker, "vector_index", None)
@@ -314,7 +315,18 @@ class _EmbedderOverride:
             )
         # Safe to mutate: build_blocker returns a FRESH blocker whose index has
         # not embedded anything yet (VectorBlocker embeds in prepare/stream).
-        index.embedder = SentenceTransformerEmbedder(self._embedder)
+        # A `repo@revision` spec becomes a real Hub pin: SentenceTransformerEmbedder
+        # forwards `ModelRef.revision` to SentenceTransformer. Without one, the
+        # name resolves through a BRANCH, and a branch is not an identity -- the
+        # weights can differ between two benchmark subprocesses of one sweep, or
+        # between a run and its `--resume`, while every guard here still pools the
+        # resulting cosine scales under a single embedder label (raised in
+        # review). The whole spec string, `@revision` included, is what each cell
+        # records and what the resume guard compares.
+        base, _, revision = self._embedder.partition("@")
+        index.embedder = SentenceTransformerEmbedder(
+            ModelRef(base=base, kind="hf", revision=revision or None)
+        )
         return blocker
 
 
@@ -461,6 +473,41 @@ def _source_fingerprint() -> str:
     except (OSError, subprocess.CalledProcessError):  # pragma: no cover - no git
         repo = "nogit"
     return f"{harness}/{repo}"
+
+
+def _is_git_ignored(path: Path) -> bool:
+    """Would git refuse to track ``path``?
+
+    Every recovery file this script writes -- the ``.partial`` checkpoint, each
+    worker artifact, every ``.rejected`` rescue -- is durable only because an
+    operator can SEE it in ``git status -uall`` and decide what to do with it.
+    Under a gitignored directory none of them appear there, and a transient
+    worktree takes the lot. That is not a hypothetical: it is the accident this
+    repo already paid for once, with a paid run.
+
+    Args:
+        path: Checked as an absolute path, so the answer does not depend on the
+            working directory the script was invoked from.
+
+    Returns:
+        True when git ignores the path. False when it does not -- **and also
+        when the question cannot be answered** (git missing, or the path lives
+        outside this checkout, which is a deliberate absolute-path choice that
+        outlives the worktree anyway). Stated rather than buried: this branch
+        fails open, so it is a tripwire for the common mistake, not a proof of
+        durability.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", str(path.resolve())],
+            cwd=Path(__file__).resolve().parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:  # pragma: no cover - no git binary
+        return False
+    return completed.returncode == 0
 
 
 # --------------------------------------------------------------------------
@@ -1147,7 +1194,26 @@ def to_transfer_markdown(baseline: SweepReport, variant: SweepReport) -> str:
 
     Returns:
         A markdown table, one row per variant cell, plus a per-family verdict.
+
+    Raises:
+        SystemExit: If the two artifacts do not measure the same portfolio, or
+            were bootstrapped/graded under different protocol constants. The
+            verdict is a claim that *the checkpoint* is what changed; grading a
+            full baseline against, say, a ``--only abt_buy`` variant would emit
+            TRANSFERS from one benchmark and the renderer would splice that into
+            the write-up as a checkpoint conclusion (raised in review).
     """
+    if baseline.bootstrap_resamples != variant.bootstrap_resamples:
+        raise SystemExit(
+            f"baseline was bootstrapped with {baseline.bootstrap_resamples} resamples and "
+            f"variant with {variant.bootstrap_resamples}: the intervals this verdict "
+            "compares were not computed under one protocol."
+        )
+    if baseline.shipped_threshold != variant.shipped_threshold:
+        raise SystemExit(
+            f"baseline grades against F1@{baseline.shipped_threshold} and variant against "
+            f"F1@{variant.shipped_threshold}: the deltas are measured from different origins."
+        )
     lines = [
         "| family | benchmark | seed | baseline t | F1@0.50 | F1@baseline t | Δ | 95% CI | "
         "variant's own argmax |",
@@ -1155,10 +1221,27 @@ def to_transfer_markdown(baseline: SweepReport, variant: SweepReport) -> str:
     ]
     verdicts: list[str] = []
     for family in sorted({c.score_family for c in variant.cells}):
-        base_eligible = [
-            c for c in baseline.cells if c.score_family == family and c.selection_eligible
-        ]
+        base_cells = [c for c in baseline.cells if c.score_family == family]
         var_cells = [c for c in variant.cells if c.score_family == family]
+        # The verdict below names the CHECKPOINT as the thing that changed, so
+        # the two artifacts have to have measured the same portfolio: the same
+        # (benchmark, method, seed) identities for this family. Compared on the
+        # MEASURED set, not the eligible one -- eligibility is a per-cell
+        # property that a different encoder is allowed to change, and demanding
+        # it match would reject exactly the divergence the study is looking for.
+        base_ids = {(c.benchmark, c.method, c.seed) for c in base_cells}
+        var_ids = {(c.benchmark, c.method, c.seed) for c in var_cells}
+        if base_cells and base_ids != var_ids:
+            missing = sorted(base_ids - var_ids)
+            extra = sorted(var_ids - base_ids)
+            raise SystemExit(
+                f"the two artifacts do not measure the same `{family}` portfolio: "
+                f"{len(missing)} identity(ies) only in the baseline "
+                f"(e.g. {missing[:3]}), {len(extra)} only in the variant "
+                f"(e.g. {extra[:3]}). A verdict from the overlap would be reported as a "
+                "checkpoint conclusion when the portfolio moved too."
+            )
+        base_eligible = [c for c in base_cells if c.selection_eligible]
         var_eligible = [c for c in var_cells if c.selection_eligible]
         if not base_eligible or not var_eligible:
             continue
@@ -1368,7 +1451,10 @@ def run_benchmark_isolated(
         name: Registry benchmark name.
         args: Parsed CLI namespace (methods/seeds/resamples are forwarded).
         scratch: The parent's checkpoint path -- the worker's own file is named
-            beside it so an abandoned one is visible to ``git status -uall``.
+            beside it, so an abandoned one is visible to ``git status -uall``.
+            That visibility is not free: it holds only because ``main`` refuses
+            a gitignored ``--out``, which is what puts this directory inside
+            git's view in the first place.
 
     Returns:
         The worker's cells.
@@ -1416,7 +1502,8 @@ def run_benchmark_isolated(
         # parent-crash window this file can be their only durable copy. Deleting
         # it here and then failing to re-measure loses an hour of compute for
         # nothing (raised in review). Move it aside instead -- it stays visible to
-        # `git status -uall`, so an operator decides rather than a crash deciding.
+        # `git status -uall` (which `main`'s gitignored-`--out` refusal is what
+        # guarantees), so an operator decides rather than a crash deciding.
         # A COLLISION-FREE name. `replace()` onto a fixed `.rejected` silently
         # overwrites an artifact rescued by an earlier invocation -- which may
         # itself be the only durable copy of an hour-long measurement, so the
@@ -1477,7 +1564,9 @@ def main() -> None:
             "run the blocker on this sentence-transformer instead of the benchmark's "
             "pinned all-MiniLM-L6-v2. Use it to test whether a sim_cos constant is a "
             "property of the FAMILY or of the CHECKPOINT -- e.g. --embedder "
-            "intfloat/e5-base-v2, the current DEFAULT_EMBEDDING_MODEL"
+            "intfloat/e5-base-v2, the current DEFAULT_EMBEDDING_MODEL. Accepts "
+            "repo@revision to pin the Hub commit; a bare name resolves through a "
+            "BRANCH, which can move between this run and its --resume"
         ),
     )
     parser.add_argument(
@@ -1533,6 +1622,15 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    # Same trap `--only` had: a repeated value measures an expensive cell twice,
+    # per-identity reconciliation keeps one copy, and `expected_cells` counts
+    # both -- so the run refuses to publish at the final length check, after
+    # paying for all the duplicated work (raised in review). First-occurrence
+    # order is preserved rather than sorted, because `is_full_sweep` below
+    # compares these as ORDERED tuples against the defaults.
+    args.methods = list(dict.fromkeys(args.methods))
+    args.seeds = list(dict.fromkeys(args.seeds))
+
     if args.compare is not None:
         print("Does the constant transfer across embedding checkpoints?")
         print(to_transfer_markdown(read_report(args.compare[0]), read_report(args.compare[1])))
@@ -1571,16 +1669,30 @@ def main() -> None:
         parser.error(
             "a narrowed run measures a subset and the write replaces the whole file, "
             f"which would reduce {CANONICAL_OUT} to just what was measured. "
-            "Send it elsewhere (e.g. --out tmp/threshold_subset.json)."
+            f"Send it elsewhere (e.g. --out {CANONICAL_OUT.parent}/threshold_subset.json)."
         )
 
     # Durability and publication are two different files: cells are checkpointed
     # as they land (a sweep costs ~an hour and usually runs in a transient
-    # worktree), but `out` is written only once the whole matrix succeeded. The
-    # checkpoint is deliberately NOT gitignored -- an interrupted run must show up
-    # in `git status -uall` and force a decision rather than vanish with the
-    # worktree.
+    # worktree), but `out` is written only once the whole matrix succeeded.
     scratch = out.with_name(out.name + ".partial")
+    # The checkpoint's durability is the whole reason it exists, and it is not a
+    # property of this code -- it is a property of WHERE the operator sent it.
+    # Under a gitignored directory the checkpoint, the worker artifacts and the
+    # `.rejected` rescues are invisible to `git status -uall` and die with the
+    # worktree, so every "an operator will see this and decide" claim below
+    # would be false. Enforced rather than documented, because the earlier
+    # version of this script SUGGESTED `--out tmp/...` two lines up while
+    # asserting the opposite in a comment (raised in review).
+    if _is_git_ignored(scratch):
+        parser.error(
+            f"{out} is gitignored, so the checkpoint {scratch.name}, the per-benchmark "
+            "worker artifacts and any .rejected rescue would never show up in "
+            "`git status -uall` and would vanish with a transient worktree -- taking "
+            "the only copy of an interrupted sweep with them. Choose a tracked path "
+            f"(e.g. --out {CANONICAL_OUT.parent}/threshold_subset.json) or an absolute "
+            "path outside the worktree."
+        )
     fingerprint = _source_fingerprint()
     cells: list[CellResult] = []
     # A surviving `.writing` means a checkpoint was fully staged but crashed

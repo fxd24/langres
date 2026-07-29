@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from examples.research.threshold_constant_sweep import (
+    CANONICAL_OUT,
     GRID,
     SHIPPED_INDEX,
     CellResult,
@@ -37,6 +38,7 @@ from examples.research.threshold_constant_sweep import (
     _EmbedderOverride,
     _exact_oracle,
     _f1,
+    _is_git_ignored,
     _select_constant,
     _source_fingerprint,
     _worker_command,
@@ -297,8 +299,12 @@ class TestCheckpointTransfer:
         )
 
     def _variant(self, *, ci_hi: float, curve: list[float]) -> list[CellResult]:
+        # The SAME benchmark names as the baseline. These fixtures used to say
+        # alpha/beta/gamma against a baseline of a/b/c -- i.e. they asserted a
+        # checkpoint verdict computed across two disjoint portfolios, which is
+        # precisely the confound review caught in the renderer. Now rejected.
         cells = []
-        for name in ("alpha", "beta", "gamma"):
+        for name in ("a", "b", "c"):
             cell = _cell(name, curve=curve)
             cell.embedder = "intfloat/e5-base-v2"
             cell.ci_hi_blocked = [ci_hi] * len(GRID)
@@ -853,3 +859,174 @@ class TestDuplicateBenchmarkNamesAreCollapsed:
 
     def test_only_deduplicates(self) -> None:
         assert select_benchmarks(fast=False, only=["abt_buy", "abt_buy"]) == ["abt_buy"]
+
+
+class TestTransferRefusesAMismatchedPortfolio:
+    """A checkpoint verdict must not be computed across two different portfolios.
+
+    Grading a full baseline against, say, an ``--only abt_buy`` variant emits
+    TRANSFERS from a single benchmark, and the renderer splices that into the
+    write-up as a *checkpoint* conclusion -- when the portfolio moved too. Found
+    in review.
+    """
+
+    def _report(
+        self, cells: list[CellResult], *, resamples: int = 10, shipped: float = 0.5
+    ) -> SweepReport:
+        return SweepReport(
+            grid=list(GRID),
+            shipped_threshold=shipped,
+            bootstrap_resamples=resamples,
+            cells=cells,
+        )
+
+    def test_a_subset_variant_is_refused(self) -> None:
+        baseline = self._report([_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")])
+        variant = self._report([_cell("a", curve=_peak_at(0.80))])
+        with pytest.raises(SystemExit, match="do not measure the same"):
+            to_transfer_markdown(baseline, variant)
+
+    def test_differing_resamples_are_refused(self) -> None:
+        """Two intervals computed under different protocols are not comparable."""
+        cells = [_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")]
+        with pytest.raises(SystemExit, match="resamples"):
+            to_transfer_markdown(self._report(cells), self._report(cells, resamples=999))
+
+    def test_differing_incumbents_are_refused(self) -> None:
+        """Deltas measured from different origins are not the same quantity."""
+        cells = [_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")]
+        with pytest.raises(SystemExit, match="different origins"):
+            to_transfer_markdown(self._report(cells), self._report(cells, shipped=0.7))
+
+    def test_eligibility_may_differ_without_being_refused(self) -> None:
+        """A different encoder is ALLOWED to change which cells are eligible.
+
+        The guard compares the MEASURED identities, not the eligible ones --
+        demanding those match would reject exactly the divergence the study
+        exists to find.
+        """
+        baseline = self._report([_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")])
+        cells = [_cell(n, curve=_peak_at(0.80)) for n in ("a", "b", "c")]
+        cells[2].selection_eligible = False
+        for cell in cells:
+            cell.ci_hi_blocked = [0.4] * len(GRID)
+        assert "TRANSFER" in to_transfer_markdown(baseline, self._report(cells))
+
+
+class TestRecoveryFilesMayNotLandInAnIgnoredDirectory:
+    """The checkpoint's durability is a property of WHERE it was sent.
+
+    Under a gitignored directory the checkpoint, the worker artifacts and every
+    ``.rejected`` rescue are invisible to ``git status -uall`` and die with a
+    transient worktree -- so every "an operator will see this and decide" claim
+    in the script would be false. The script used to *suggest* ``--out tmp/...``
+    while asserting the opposite two lines below. Found in review.
+    """
+
+    def test_git_check_ignore_is_actually_consulted(self) -> None:
+        """The helper must be able to observe the failure it exists to catch."""
+        assert _is_git_ignored(Path("tmp/threshold_probe.json.partial"))
+        assert not _is_git_ignored(Path("examples/research/results/threshold_probe.json.partial"))
+
+    def test_an_ignored_out_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # run_benchmark is stubbed to raise rather than left alone: if this
+        # guard ever regresses the test must fail in milliseconds, not sit
+        # there measuring the real --fast portfolio.
+        def _unreachable(name: str, **_k: Any) -> Any:
+            raise AssertionError("refused runs must not reach measurement")
+
+        monkeypatch.setattr(
+            "examples.research.threshold_constant_sweep.run_benchmark", _unreachable
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "threshold_constant_sweep.py",
+                "--out",
+                "tmp/threshold_probe.json",
+                "--fast",
+                "--in-process",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            main()
+
+    def test_the_suggested_narrowing_path_is_not_ignored(self) -> None:
+        """The refusal names an alternative; a suggestion into `tmp/` is what
+        created this bug in the first place.
+        """
+        assert not _is_git_ignored(CANONICAL_OUT.parent / "threshold_subset.json.partial")
+
+
+class TestDuplicateMethodsAndSeedsAreCollapsed:
+    """Same trap as duplicate `--only`, one argument over.
+
+    A repeated value measures an expensive cell twice, per-identity
+    reconciliation keeps one copy, and `expected_cells` counts both -- so the
+    run refuses to publish at the final length check, after paying for all the
+    duplicated work. Found in review.
+    """
+
+    def test_a_repeated_method_and_seed_still_publishes(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "sweep.json"
+
+        def one_cell(name: str, **_k: Any) -> Any:
+            yield _cell(name).model_copy(update={"method": "rapidfuzz", "seed": 0})
+
+        monkeypatch.setattr("examples.research.threshold_constant_sweep.run_benchmark", one_cell)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "threshold_constant_sweep.py",
+                "--out",
+                str(out),
+                "--in-process",
+                "--methods",
+                "rapidfuzz",
+                "rapidfuzz",
+                "--seeds",
+                "0",
+                "0",
+                "--only",
+                "abt_buy",
+                "--no-tables",
+            ],
+        )
+        main()
+        assert out.exists(), "the run paid for the work and must publish it"
+        assert len(read_report(out).cells) == 1
+
+
+class TestTheEmbedderSpecCanPinAHubRevision:
+    """A bare model name resolves through a BRANCH, and a branch is not an identity.
+
+    The weights can differ between two benchmark subprocesses of one sweep while
+    every guard still pools the resulting cosine scales under a single embedder
+    label. Found in review.
+    """
+
+    class _Index:
+        embedder: Any = None
+
+    class _Blocker:
+        def __init__(self) -> None:
+            self.vector_index = TestTheEmbedderSpecCanPinAHubRevision._Index()
+
+    class _Bench:
+        def build_blocker(self, k_neighbors: int) -> Any:
+            return TestTheEmbedderSpecCanPinAHubRevision._Blocker()
+
+    def test_a_revision_suffix_becomes_a_real_pin(self) -> None:
+        wrapped = _EmbedderOverride(self._Bench(), "intfloat/e5-base-v2@abc1234")  # type: ignore[arg-type]
+        embedder = wrapped.build_blocker(5).vector_index.embedder
+        assert embedder.model_name == "intfloat/e5-base-v2"
+        assert embedder.model_ref.revision == "abc1234"
+
+    def test_a_bare_name_still_works_and_pins_nothing(self) -> None:
+        """The committed artifacts were measured this way; the write-up says so."""
+        wrapped = _EmbedderOverride(self._Bench(), "intfloat/e5-base-v2")  # type: ignore[arg-type]
+        embedder = wrapped.build_blocker(5).vector_index.embedder
+        assert embedder.model_name == "intfloat/e5-base-v2"
+        assert embedder.model_ref.revision is None
