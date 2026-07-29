@@ -51,6 +51,7 @@ Averaging those into one number would report a middling win or loss and hide bot
 | `LiquidAI/LFM2.5-Encoder-230M` | 229.7M | default (fp32) | 1024 | — |
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | default (fp32) | 1024 | document, negative_0, negative_1, negative_2, negative_3, negative_4, negative_5, negative_6, positive, query |
 | `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | default (fp32) | 1024 | — |
+| `random-init-control-350M` | 354.5M | default (fp32) | 1024 | — |
 
 ## Candidate recall at k=20, no instruction
 
@@ -65,6 +66,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Encoder-230M` | 229.7M | 0.4406 | 0.4475 | 0.9272 | 4,357 | 9888 | 33.7 | 2,173 |
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.9416 | 0.9562 | 0.9964 | 11,165 | 11858 | 0.4 | 0 |
 | `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.3218 | 0.3268 | 0.8413 | 4,789 | 14880 | 56.2 | 2,173 |
+| `random-init-control-350M` | 354.5M | 0.9109 | 0.9251 | 0.9821 | 10,815 | 11873 | 39.5 | 2,173 |
 
 ### amazon_google
 
@@ -75,6 +77,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Encoder-230M` | 229.7M | 0.5978 | 0.7121 | 0.9500 | 18,625 | 31154 | 20.0 | 4,589 |
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.7928 | 0.9443 | 0.9977 | 20,773 | 26202 | 0.7 | 0 |
 | `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.5619 | 0.6692 | 0.9222 | 20,411 | 36327 | 42.4 | 4,589 |
+| `random-init-control-350M` | 354.5M | 0.6942 | 0.8269 | 0.9756 | 19,300 | 27800 | 34.7 | 4,589 |
 
 ### fodors_zagat
 
@@ -85,6 +88,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Encoder-230M` | 229.7M | 0.9286 | 0.9286 | 0.9691 | 3,497 | 3766 | 6.8 | 864 |
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 1.0000 | 1.0000 | 0.9999 | 4,874 | 4874 | 0.2 | 0 |
 | `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.9464 | 0.9464 | 0.9871 | 3,658 | 3865 | 10.8 | 864 |
+| `random-init-control-350M` | 354.5M | 1.0000 | 1.0000 | 0.9979 | 2,408 | 2408 | 7.3 | 864 |
 
 ### walmart_amazon
 
@@ -95,6 +99,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Encoder-230M` | 229.7M | 0.7711 | 0.8725 | 0.9959 | 47,930 | 62161 | 249.8 | 24,628 |
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.8791 | 0.9948 | 0.9999 | 50,276 | 57189 | 3.8 | 0 |
 | `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.7253 | 0.8207 | 0.9806 | 49,732 | 68570 | 339.1 | 24,628 |
+| `random-init-control-350M` | 354.5M | 0.8626 | 0.9762 | 0.9977 | 48,305 | 55997 | 174.0 | 24,628 |
 
 ### wdc_computers
 
@@ -105,6 +110,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Encoder-230M` | 229.7M | 0.3564 | 0.3960 | 0.9125 | 32,769 | 91935 | 47.2 | 4,647 |
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.6913 | 0.7680 | 0.9782 | 32,193 | 46571 | 0.5 | 0 |
 | `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.3933 | 0.4370 | 0.8621 | 33,103 | 84159 | 77.8 | 4,647 |
+| `random-init-control-350M` | 354.5M | 0.5788 | 0.6430 | 0.9319 | 33,388 | 57689 | 51.9 | 4,647 |
 
 ## Does an instruction prompt help? (k=20)
 
@@ -161,6 +167,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | instruct | 0.9464 | 0.8482 | -0.0982 | -0.0982 | [-0.1696, -0.0268] | 0.9871 | 0.9649 | -0.0222 |
 | `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | instruct | 0.7253 | 0.6429 | -0.0824 | -0.0868 | [-0.1126, -0.0605] | 0.9806 | 0.9654 | -0.0152 |
 | `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | instruct | 0.3933 | 0.4014 | +0.0081 | +0.0068 | [-0.0127, +0.0254] (spans 0) | 0.8621 | 0.8501 | -0.0120 |
+| `random-init-control-350M` | abt_buy | instruct | 0.9109 | 0.9042 | -0.0067 | -0.0069 | [-0.0166, +0.0029] (spans 0) | 0.9821 | 0.9785 | -0.0036 |
+| `random-init-control-350M` | amazon_google | instruct | 0.6942 | 0.7058 | +0.0115 | +0.0110 | [-0.0077, +0.0302] (spans 0) | 0.9756 | 0.9779 | +0.0024 |
+| `random-init-control-350M` | fodors_zagat | instruct | 1.0000 | 1.0000 | +0.0000 | +0.0000 | [+0.0000, +0.0000] (exactly 0) | 0.9979 | 0.9950 | -0.0029 |
+| `random-init-control-350M` | walmart_amazon | instruct | 0.8626 | 0.8626 | +0.0000 | +0.0000 | [-0.0055, +0.0056] (spans 0) | 0.9977 | 0.9966 | -0.0010 |
+| `random-init-control-350M` | wdc_computers | instruct | 0.5788 | 0.5770 | -0.0018 | -0.0011 | [-0.0141, +0.0130] (spans 0) | 0.9319 | 0.9274 | -0.0044 |
 
 ### The asymmetric recipe, and how to drive it (corrected)
 
@@ -214,10 +225,15 @@ A model with no interval is shown with `—` rather than dropped: a measured mod
 | `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | -0.0536 | [-0.0982, -0.0179] | 112 |
 | `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | -0.1593 | [-0.1824, -0.1352] | 846 |
 | `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | -0.3192 | [-0.3522, -0.2892] | 877 |
+| `random-init-control-350M` | abt_buy | -0.0299 | [-0.0469, -0.0128] | 1,012 |
+| `random-init-control-350M` | amazon_google | -0.1030 | [-0.1227, -0.0836] | 995 |
+| `random-init-control-350M` | fodors_zagat | +0.0000 | [+0.0000, +0.0000] (exactly 0) | 112 |
+| `random-init-control-350M` | walmart_amazon | -0.0194 | [-0.0295, -0.0099] | 846 |
+| `random-init-control-350M` | wdc_computers | -0.1218 | [-0.1488, -0.0978] | 877 |
 
 ## Recommendation (k=20, no instruction)
 
-**3 of the 4 models in the ladder have a row at metric revision 1.** Everything below is a statement about those and only those; the rest are named under 'What did not run'. A recommendation drawn from a partial field is still a recommendation, but it is not a survey — do not read the absence of a model here as evidence against it.
+**4 of the 4 models in the ladder have a row at metric revision 1.** Everything below is a statement about those and only those; the rest are named under 'What did not run'. A recommendation drawn from a partial field is still a recommendation, but it is not a survey — do not read the absence of a model here as evidence against it.
 
 **This document does not change `DEFAULT_EMBEDDING_MODEL`.** It states what was measured and what the licences are; the default is a human decision.
 
@@ -241,6 +257,13 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
   ```python
   # opt in explicitly, having read the licence
   SentenceTransformerEmbedder("LiquidAI/LFM2.5-Encoder-230M")
+  ```
+
+- **`random-init-control-350M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
+
+  ```python
+  # opt in explicitly, having read the licence
+  SentenceTransformerEmbedder("random-init-control-350M")
   ```
 
 ## The recall/cost frontier (every k)
@@ -389,16 +412,52 @@ Recall is bought with `k`. This is the table that makes an operating-point compa
 | `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 10 | 0.2988 | 16,637 | 55674 |
 | `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 20 | 0.3933 | 33,103 | 84159 |
 | `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 50 | 0.5221 | 82,827 | 158657 |
+| `random-init-control-350M` | abt_buy | instruct | 5 | 0.7011 | 2,583 | 3684 |
+| `random-init-control-350M` | abt_buy | instruct | 10 | 0.8190 | 5,618 | 6860 |
+| `random-init-control-350M` | abt_buy | instruct | 20 | 0.9042 | 12,374 | 13685 |
+| `random-init-control-350M` | abt_buy | instruct | 50 | 0.9464 | 35,000 | 36984 |
+| `random-init-control-350M` | abt_buy | none | 5 | 0.6839 | 2,165 | 3166 |
+| `random-init-control-350M` | abt_buy | none | 10 | 0.8190 | 4,803 | 5865 |
+| `random-init-control-350M` | abt_buy | none | 20 | 0.9109 | 10,815 | 11873 |
+| `random-init-control-350M` | abt_buy | none | 50 | 0.9550 | 31,550 | 33037 |
+| `random-init-control-350M` | amazon_google | instruct | 5 | 0.5547 | 4,740 | 8546 |
+| `random-init-control-350M` | amazon_google | instruct | 10 | 0.6468 | 10,368 | 16031 |
+| `random-init-control-350M` | amazon_google | instruct | 20 | 0.7058 | 22,204 | 31461 |
+| `random-init-control-350M` | amazon_google | instruct | 50 | 0.7568 | 60,557 | 80014 |
+| `random-init-control-350M` | amazon_google | none | 5 | 0.5489 | 4,064 | 7404 |
+| `random-init-control-350M` | amazon_google | none | 10 | 0.6396 | 8,849 | 13836 |
+| `random-init-control-350M` | amazon_google | none | 20 | 0.6942 | 19,300 | 27800 |
+| `random-init-control-350M` | amazon_google | none | 50 | 0.7532 | 54,410 | 72235 |
+| `random-init-control-350M` | fodors_zagat | instruct | 5 | 0.9643 | 549 | 569 |
+| `random-init-control-350M` | fodors_zagat | instruct | 10 | 0.9643 | 1,200 | 1244 |
+| `random-init-control-350M` | fodors_zagat | instruct | 20 | 1.0000 | 2,844 | 2844 |
+| `random-init-control-350M` | fodors_zagat | instruct | 50 | 1.0000 | 8,566 | 8566 |
+| `random-init-control-350M` | fodors_zagat | none | 5 | 0.9911 | 465 | 469 |
+| `random-init-control-350M` | fodors_zagat | none | 10 | 1.0000 | 1,012 | 1012 |
+| `random-init-control-350M` | fodors_zagat | none | 20 | 1.0000 | 2,408 | 2408 |
+| `random-init-control-350M` | fodors_zagat | none | 50 | 1.0000 | 7,643 | 7643 |
+| `random-init-control-350M` | walmart_amazon | instruct | 5 | 0.8196 | 9,799 | 11956 |
+| `random-init-control-350M` | walmart_amazon | instruct | 10 | 0.8526 | 21,910 | 25699 |
+| `random-init-control-350M` | walmart_amazon | instruct | 20 | 0.8626 | 48,416 | 56126 |
+| `random-init-control-350M` | walmart_amazon | instruct | 50 | 0.8690 | 135,673 | 156117 |
+| `random-init-control-350M` | walmart_amazon | none | 5 | 0.8178 | 9,804 | 11989 |
+| `random-init-control-350M` | walmart_amazon | none | 10 | 0.8462 | 21,691 | 25635 |
+| `random-init-control-350M` | walmart_amazon | none | 20 | 0.8626 | 48,305 | 55997 |
+| `random-init-control-350M` | walmart_amazon | none | 50 | 0.8736 | 134,990 | 154517 |
+| `random-init-control-350M` | wdc_computers | instruct | 5 | 0.3951 | 8,536 | 21602 |
+| `random-init-control-350M` | wdc_computers | instruct | 10 | 0.4914 | 16,932 | 34453 |
+| `random-init-control-350M` | wdc_computers | instruct | 20 | 0.5770 | 34,268 | 59394 |
+| `random-init-control-350M` | wdc_computers | instruct | 50 | 0.6697 | 86,767 | 129567 |
+| `random-init-control-350M` | wdc_computers | none | 5 | 0.3969 | 8,469 | 21336 |
+| `random-init-control-350M` | wdc_computers | none | 10 | 0.5005 | 16,574 | 33118 |
+| `random-init-control-350M` | wdc_computers | none | 20 | 0.5788 | 33,388 | 57689 |
+| `random-init-control-350M` | wdc_computers | none | 50 | 0.6760 | 84,671 | 125259 |
 
 ## What did not run (and why)
 
 Derived from the recorded rows, not written by hand — a hand-kept list of gaps is exactly the thing that goes stale and turns a partial sweep into a table that reads as complete.
 
-**1 of the 4 models in the ladder have no usable row at metric revision 1.** The `state` column says why for each — this table cannot speak about any of them.
-
-| model | state |
-|---|---|
-| `random-init-control-350M` | not run |
+Every model, benchmark and prompt arm in the ladder was measured.
 
 ## Failures (reported, not skipped)
 
