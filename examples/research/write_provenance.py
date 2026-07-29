@@ -251,7 +251,35 @@ def _snapshot() -> dict[str, Any]:
     }
 
 
-def start(output: Path) -> None:
+def _uncommitted(path: Path) -> list[str]:
+    """Pending changes for ``path``; empty when git cannot describe it at all."""
+    try:
+        rel = path.resolve().relative_to(REPO_ROOT)
+    except ValueError:
+        return []
+    return _dirty((str(rel),))
+
+
+def start(output: Path, force: bool = False) -> None:
+    # UNCOMMITTED CHANGES ARE SACRED, and this function's whole job is to
+    # overwrite a tracked file. The realistic loss: a prior run is killed between
+    # `--finish` writing the closed record and the driver committing it, so the
+    # sidecar on disk is the ONLY description of rows that run_ladder.sh already
+    # committed -- and the next `--start` silently replaced those bytes. Nothing
+    # in git can bring them back. Refused, with `--force` as the deliberate
+    # escape rather than a dead end. An UNTRACKED sidecar counts as pending too
+    # (`_dirty` passes --untracked-files=all): a first-ever run has nothing to
+    # lose and is trivially forced, while a killed run's brand-new sidecar is
+    # exactly the file worth protecting. (Cross-model review.)
+    pending = _uncommitted(output)
+    if pending and not force:
+        raise SystemExit(
+            f"Refusing to open a new window over {output}: it has uncommitted changes "
+            f"({', '.join(pending)}). Those bytes may be the only record of rows already "
+            "committed by a run that was killed before its provenance was. Commit it, or "
+            "copy it somewhere outside this worktree, then re-run. Pass --force to "
+            "overwrite it deliberately."
+        )
     # A dirty tree is not fatal -- research often measures uncommitted code -- but
     # it must be recorded, because the blob hashes then name content that exists
     # nowhere in history and cannot be recovered by anyone reading this file.
@@ -438,6 +466,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "with --start: overwrite an existing sidecar that has uncommitted "
+            "changes. Those bytes can be the only record of rows a killed run "
+            "already committed, so it is refused unless you say so."
+        ),
+    )
+    parser.add_argument(
         "--studies",
         nargs="*",
         default=["a", "b"],
@@ -449,7 +486,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.start:
-        start(args.output)
+        start(args.output, force=args.force)
         doc = json.loads(args.output.read_text())
         doc["studies_measured"] = list(args.studies)
         args.output.write_text(json.dumps(doc, indent=2) + "\n")

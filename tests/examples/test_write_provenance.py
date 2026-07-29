@@ -111,6 +111,53 @@ class TestAClosedWindowStaysClosed:
             PROV.finish(tmp_path / "absent.json", partial=True)
 
 
+class TestStartDoesNotDestroyUncommittedProvenance:
+    """``start()``'s job is to overwrite a tracked file. That is the hazard.
+
+    A run killed between ``--finish`` writing the closed record and the driver
+    committing it leaves the sidecar on disk as the ONLY description of rows
+    ``run_ladder.sh`` already committed. Opening the next window replaced those
+    bytes, and nothing in git can bring them back.
+    """
+
+    def test_a_sidecar_with_uncommitted_changes_refuses(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
+        before = path.read_text()
+        monkeypatch.setattr(PROV, "_uncommitted", lambda _p: ["docs/research/prov.json"])
+
+        with pytest.raises(SystemExit, match="uncommitted changes"):
+            PROV.start(path)
+
+        assert path.read_text() == before
+
+    def test_force_overwrites_deliberately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refusal with no way past it is a dead end, not a safeguard."""
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
+        monkeypatch.setattr(PROV, "_uncommitted", lambda _p: ["docs/research/prov.json"])
+
+        PROV.start(path, force=True)
+
+        assert json.loads(path.read_text())["measurement_window"]["finished"] is None
+
+    def test_a_clean_sidecar_opens_normally(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
+        monkeypatch.setattr(PROV, "_uncommitted", lambda _p: [])
+
+        PROV.start(path)
+
+        assert json.loads(path.read_text())["measurement_window"]["finished"] is None
+
+    def test_a_path_outside_the_repo_is_not_blocked_by_git(self, tmp_path: Path) -> None:
+        """`_uncommitted` must not explode on a pathspec git cannot resolve."""
+        assert PROV._uncommitted(tmp_path / "elsewhere.json") == []
+
+
 class TestDirtyScopeCoversEveryTrackedFile:
     """The dirty check ran over directories, so a root-level file escaped it.
 

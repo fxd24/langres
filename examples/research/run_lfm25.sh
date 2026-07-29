@@ -174,7 +174,19 @@ case "$STUDY" in
   *) PROVENANCE_STUDIES="$STUDY" ;;
 esac
 # shellcheck disable=SC2086  # word splitting is the interface here
-uv run python examples/research/write_provenance.py --start --studies $PROVENANCE_STUDIES || exit 1
+uv run python examples/research/write_provenance.py --start --studies $PROVENANCE_STUDIES || {
+  # --start refuses when the existing sidecar has uncommitted changes: a run
+  # killed between --finish and its commit leaves the ONLY description of rows
+  # that ARE committed sitting in that file, and opening a window would replace
+  # it with no way back. The refusal is a stop, not a dead end -- say what the
+  # two ways out are rather than leaving a bare exit code.
+  say "could not open the provenance window."
+  say "  If it refused because $PROVENANCE_JSON has uncommitted changes, those bytes may"
+  say "  be the only record of rows a killed run already committed. Commit them, or"
+  say "  copy the file outside this worktree, then re-run. To discard them deliberately:"
+  say "    uv run python examples/research/write_provenance.py --start --force --studies $PROVENANCE_STUDIES"
+  exit 1
+}
 
 # Committed BEFORE the first measurement, not only at the end.
 #
