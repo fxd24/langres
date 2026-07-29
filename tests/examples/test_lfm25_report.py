@@ -827,6 +827,22 @@ class TestCohortIsNotMetricRevision:
         with pytest.raises(SystemExit, match="different populations"):
             REPORT._assert_comparable_cohorts(tuned, base)
 
+    def test_a_split_population_inside_ONE_study_is_refused(self) -> None:
+        """`setdefault` kept only the first tuple, so this passed.
+
+        A partial model re-run across a dataset change leaves both populations
+        in one file; the noise floor then picks a refreshed best-tuned row and
+        subtracts a stale control.
+        """
+        tuned = [
+            _row("intfloat/e5-base-v2", "abt_buy", n_records=2173, n_gold_pairs=1044),
+            _row("LiquidAI/LFM2.5-Embedding-350M", "abt_buy", n_records=2100, n_gold_pairs=1044),
+        ]
+        base = [_row(REPORT.CONTROL, "abt_buy", n_records=2173, n_gold_pairs=1044)]
+
+        with pytest.raises(SystemExit, match="DIFFERENT"):
+            REPORT._assert_comparable_cohorts(tuned, base)
+
     def test_a_benchmark_present_in_only_one_study_is_not_compared(self) -> None:
         """Study B measures fewer benchmarks; that is not a cohort mismatch."""
         tuned = [
@@ -860,14 +876,68 @@ class TestLoadProbeStaleness:
 
     def test_a_matching_environment_says_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "4.57.6")
+        monkeypatch.setattr(
+            REPORT,
+            "_window_bounds",
+            lambda: ("2026-07-29T05:00:00+02:00", "2026-07-29T07:00:00+02:00"),
+        )
 
-        assert REPORT._probe_staleness({"transformers_version": "4.57.6"}) == []
+        probe = {"transformers_version": "4.57.6", "captured_at": "2026-07-29T06:00:00+02:00"}
 
-    def test_transformers_absent_makes_no_claim(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert REPORT._probe_staleness(probe) == []
+
+    def test_transformers_absent_makes_no_version_claim(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Silence beats asserting a mismatch against a version that is not there."""
         monkeypatch.setattr(REPORT, "_installed_transformers", lambda: None)
+        monkeypatch.setattr(REPORT, "_window_bounds", lambda: None)
 
-        assert REPORT._probe_staleness({"transformers_version": "4.57.6"}) == []
+        probe = {"transformers_version": "4.57.6", "captured_at": "2026-07-29T05:00:00+02:00"}
+
+        assert REPORT._probe_staleness(probe) == []
+
+    def test_a_probe_older_than_the_window_is_disclosed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Version equality is NOT freshness.
+
+        A refresh that failed offline leaves the old probe in place; if its
+        transformers version happens to match, the version check says nothing
+        while remote code and cache contents may have moved.
+        """
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "4.57.6")
+        monkeypatch.setattr(
+            REPORT,
+            "_window_bounds",
+            lambda: ("2026-07-29T09:00:00+02:00", "2026-07-29T11:00:00+02:00"),
+        )
+
+        lines = REPORT._probe_staleness(
+            {"transformers_version": "4.57.6", "captured_at": "2026-07-28T22:00:00+02:00"}
+        )
+
+        assert any("predates the measurement window" in line for line in lines)
+
+    def test_a_probe_inside_the_window_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "4.57.6")
+        monkeypatch.setattr(
+            REPORT,
+            "_window_bounds",
+            lambda: ("2026-07-29T09:00:00+02:00", "2026-07-29T11:00:00+02:00"),
+        )
+
+        probe = {"transformers_version": "4.57.6", "captured_at": "2026-07-29T09:30:00+02:00"}
+
+        assert REPORT._probe_staleness(probe) == []
+
+    def test_a_probe_with_no_capture_time_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The committed probe predates the field; that is 'unknown', not 'fresh'."""
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "4.57.6")
+
+        lines = REPORT._probe_staleness({"transformers_version": "4.57.6"})
+
+        assert any("capture time was not recorded" in line for line in lines)
 
 
 class TestPartialWindowCaveat:

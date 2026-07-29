@@ -281,6 +281,35 @@ if [ -n "$WAIT_PID" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1b. Refuse to overwrite artifacts that hold uncommitted work.
+#
+# This guard lived only in run_lfm25.sh, while the destruction happens HERE: this
+# script merges, renders, stages and commits all three artifacts. Every generated
+# study document advertises `run_ladder.sh` directly as its reproduce command, so
+# an operator following the published instructions after a granular process left
+# uncommitted rows got no refusal at all -- the guard sitting one caller upstream
+# of the thing it guards. It belongs where the write is.
+#
+# Deliberately no `-e` existence test: git already tells a never-created path
+# (silence) from an uncommitted DELETION (" D"/"D "), and testing for existence
+# skipped exactly the second one.
+# ---------------------------------------------------------------------------
+DIRTY_ARTIFACTS=""
+for artifact in "$ROWS" "$REPORT" "$REFERENCE"; do
+  if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
+    DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
+  fi
+done
+if [ -n "${DIRTY_ARTIFACTS// /}" ] && [ "${LADDER_FORCE:-0}" != "1" ]; then
+  log "REFUSING to start: these artifacts have uncommitted changes:"
+  for artifact in $DIRTY_ARTIFACTS; do log "    $artifact"; done
+  log "  A killed sweep leaves measured cells here that no commit holds, and this run"
+  log "  would rewrite and commit over them. Commit them, or copy them outside this"
+  log "  worktree, then re-run. To discard them deliberately, set LADDER_FORCE=1."
+  exit 2
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Record a process-level death as a real result row.
 #    Stdlib python only, and explicitly NOT the venv interpreter -- this runs
 #    right after a `uv run` and must not become the second one.
@@ -613,12 +642,27 @@ for model in "${MODELS[@]}"; do
   # edit. The paths and the ladder set must match the measuring call above:
   # rendering the DEFAULT artifact here would rewrite the 2026-07-27 ladder's
   # report from a different study's rows.
+  #
+  # The exit status is CHECKED. There is no `set -e` here, so a failed render --
+  # cohort validation, a full disk, any renderer guard -- used to fall straight
+  # through to the staging block, which committed the edited rows beside the
+  # PREVIOUS report: two artifacts published together that disagree, on the one
+  # path where something has already gone wrong. The rows are still committed
+  # (they are the durable record of a real failure, and dropping them is the
+  # larger loss), but the stale report is left out of the commit and the sweep
+  # stops. (Cross-model review.)
+  RENDER_FAILED=0
   if [ $ROWS_EDITED -eq 1 ]; then
-    uv run python examples/research/embedder_ladder.py --render-only \
+    if ! uv run python examples/research/embedder_ladder.py --render-only \
       --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
       --ladder-models "${LADDER_ACCOUNTABLE[@]}" \
       ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
-      >> "$LOG_DIR/$safe.log" 2>&1
+      >> "$LOG_DIR/$safe.log" 2>&1; then
+      RENDER_FAILED=1
+      log "$model: the report FAILED to render over the edited rows. See $LOG_DIR/$safe.log."
+      log "  Committing the rows without it: a report generated before the edit would"
+      log "  contradict them. Re-render once the cause is fixed."
+    fi
   fi
 
   # Stage only the artifacts that EXIST. `git add` fails atomically on a
@@ -629,6 +673,10 @@ for model in "${MODELS[@]}"; do
   # the very failure record this path exists to preserve. (Cross-model review.)
   ARTIFACT_PATHS=()
   for artifact_path in "$ROWS" "$REPORT" "$REFERENCE"; do
+    # The report is excluded when it could not be re-rendered over the edited
+    # rows: staging it would publish a document that contradicts the file beside
+    # it. Everything else still goes, so the failure record stays durable.
+    [ $RENDER_FAILED -eq 1 ] && [ "$artifact_path" = "$REPORT" ] && continue
     [ -e "$artifact_path" ] && ARTIFACT_PATHS+=("$artifact_path")
   done
   if [ ${#ARTIFACT_PATHS[@]} -eq 0 ]; then
@@ -678,6 +726,13 @@ for model in "${MODELS[@]}"; do
   if [ $code -eq 2 ]; then
     log "stopping: configuration refused. Fix the invocation and re-run; the rows are intact."
     exit 2
+  fi
+  # Same order for the same reason: the failure rows are committed above, then
+  # the sweep stops. Carrying on would keep editing rows whose report cannot be
+  # regenerated, widening the disagreement one model at a time.
+  if [ $RENDER_FAILED -eq 1 ]; then
+    log "stopping: the report could not be re-rendered. The rows are committed WITHOUT it."
+    exit 4
   fi
 done
 

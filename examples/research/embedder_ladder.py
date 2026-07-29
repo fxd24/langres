@@ -2495,6 +2495,13 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "```\n"
     )
     out.append(
+        "\n`run_ladder.sh` **refuses to start** (exit 2) when this study's rows, report or "
+        "reference sidecar hold uncommitted changes: a killed sweep leaves measured cells "
+        "there that no commit holds, and a new run rewrites and commits over them. Commit "
+        "them or copy them out of the worktree first; `LADDER_FORCE=1` discards them "
+        "deliberately.\n"
+    )
+    out.append(
         f"\n**$0 — no paid API and no key.** Not offline, though: the first run of a "
         "checkpoint downloads it from the Hugging Face Hub "
         "(`SentenceTransformerEmbedder` leaves `local_files_only` false), and `uv run` "

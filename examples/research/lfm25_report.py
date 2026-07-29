@@ -495,13 +495,22 @@ def _assert_comparable_cohorts(tuned: list[dict[str, Any]], base: list[dict[str,
     return ", ".join(sorted(str(r) for r in tuned_revs | base_revs)) or "unrecorded"
 
 
-def _population(rows: list[dict[str, Any]]) -> dict[str, tuple[Any, ...]]:
-    """Per benchmark, the dataset's own size — the cohort the recalls describe."""
-    sizes: dict[str, tuple[Any, ...]] = {}
+def _populations(rows: list[dict[str, Any]]) -> dict[str, set[tuple[Any, ...]]]:
+    """Per benchmark, EVERY dataset size seen — not just the first one.
+
+    ``setdefault`` kept only the first row's tuple, which hid the reachable case:
+    a partial model re-run after a dataset refresh leaves old and new populations
+    side by side *within one study*, and ``_noise_floor_table`` then picks a
+    refreshed best-tuned row and subtracts a stale control. A set makes the
+    within-study split visible. (Cross-model review.)
+    """
+    sizes: dict[str, set[tuple[Any, ...]]] = {}
     for row in rows:
         if row.get("status") != "ok":
             continue
-        sizes.setdefault(row["benchmark"], (row.get("n_records"), row.get("n_gold_pairs")))
+        sizes.setdefault(row["benchmark"], set()).add(
+            (row.get("n_records"), row.get("n_gold_pairs"))
+        )
     return sizes
 
 
@@ -515,27 +524,45 @@ def _assert_same_populations(tuned: list[dict[str, Any]], base: list[dict[str, A
     floor would subtract recalls measured over different denominators, in a
     document whose own text says cross-cohort subtraction is refused.
 
-    No new measurement is needed to catch it: every row already records
-    ``n_records`` and ``n_gold_pairs``, which are properties of the dataset and
-    not of the model. Compared per benchmark, across the two studies.
-    (Cross-model review.)
+    Checked in both directions, because both are reachable: **within** a study
+    (a partial model re-run across a dataset change) and **across** the two.
+
+    **What this does not catch, stated rather than implied.** ``n_records`` and
+    ``n_gold_pairs`` are cardinalities, not identities: a same-sized replacement
+    of the underlying records passes. Closing that needs a dataset fingerprint
+    the rows do not carry, which means a schema change and a re-measure — so it
+    is named here as a known limit instead of being papered over by a check that
+    sounds stronger than it is. (Cross-model review.)
     """
-    tuned_pop = _population(tuned)
-    base_pop = _population(base)
+    for label, rows in (("A", tuned), ("B", base)):
+        split = {b: pops for b, pops in _populations(rows).items() if len(pops) > 1}
+        if split:
+            detail = "; ".join(
+                f"`{b}` ({', '.join(f'{n}/{g}' for n, g in sorted(map(tuple, pops)))})"
+                for b, pops in sorted(split.items())
+            )
+            raise SystemExit(
+                f"Refusing to render: study {label} holds rows measured over DIFFERENT "
+                f"populations for the same benchmark — {detail} (records/gold pairs). A "
+                "partial re-run across a dataset change leaves both in one file, and every "
+                "comparison drawn from it silently mixes them. Re-measure that study whole."
+            )
+
+    tuned_pop = _populations(tuned)
+    base_pop = _populations(base)
     mismatched = [
-        f"`{b}` (study A {tuned_pop[b][0]} records / {tuned_pop[b][1]} gold pairs, "
-        f"study B {base_pop[b][0]} / {base_pop[b][1]})"
+        f"`{b}` (study A {next(iter(tuned_pop[b]))}, study B {next(iter(base_pop[b]))})"
         for b in sorted(set(tuned_pop) & set(base_pop))
         if tuned_pop[b] != base_pop[b]
     ]
     if mismatched:
         raise SystemExit(
-            "Refusing to render: the two studies measured different populations on "
-            f"{', '.join(mismatched)}. The metric revision matches, but that field tracks "
-            "how a metric is COMPUTED, not which records it was computed over — so the "
-            "noise floor would subtract recalls with different denominators. Re-measure "
-            "both studies (LFM25_STUDY=both) over the same data before generating this "
-            "report."
+            "Refusing to render: the two studies measured different populations "
+            f"(records, gold pairs) on {', '.join(mismatched)}. The metric revision "
+            "matches, but that field tracks how a metric is COMPUTED, not which records it "
+            "was computed over — so the noise floor would subtract recalls with different "
+            "denominators. Re-measure both studies (LFM25_STUDY=both) over the same data "
+            "before generating this report."
         )
 
 
@@ -550,32 +577,91 @@ def _installed_transformers() -> str | None:
 
 
 def _probe_staleness(probe: dict[str, Any]) -> list[str]:
-    """Disclose a load probe captured under a different transformers than this one.
+    """Disclose a load probe that does not belong to this measurement window.
 
     Everything in the section below — which class is instantiated, how many keys
     fail to load, whether unrelated records collapse onto one vector — is a
-    property of the *installed* transformers, not of the checkpoint alone. But
-    ``run_lfm25.sh`` re-measures rows without re-running the probe, so a rerun
-    after a dependency bump commits fresh recalls beside loading claims captured
-    under a different library. The rows and the probe are two artifacts with two
-    lifetimes and no link between them; this is the link. Disclosed rather than
-    fatal — the probe is still the best record there is, and refusing the render
-    would delete the disclosure along with the report. (Cross-model review.)
+    property of the *installed* transformers and of the checkpoints' remote code,
+    not of the checkpoint's scores. The rows and the probe are two artifacts with
+    two lifetimes, and this is the link between them.
+
+    **Version equality is not freshness.** The first version of this check
+    compared ``transformers_version`` only, so a refresh that failed offline or
+    on a rate limit — leaving the OLD probe in place — raised nothing whenever
+    the version happened to agree, while remote code and cache contents could
+    have moved underneath it. ``captured_at`` against the measurement window is
+    what actually answers "did this probe run in this sweep". (Cross-model
+    review.)
+
+    Disclosed rather than fatal: the probe is still the best record there is, and
+    refusing the render would delete the disclosure along with the report.
     """
+    lines: list[str] = []
+    captured = probe.get("captured_at")
+    if captured is None:
+        lines.append(
+            "⚠️ **This section's capture time was not recorded**, so this document cannot "
+            "say whether the probe ran inside the sweep that produced the scores. Probes "
+            "written before `captured_at` existed are in this state; re-running "
+            "`uv run python examples/research/lfm25_load_probe.py` fixes it."
+        )
+    elif (window := _window_bounds()) and not (window[0] <= captured <= (window[1] or captured)):
+        started, finished = window
+        side = "predates" if captured < started else "postdates"
+        lines.append(
+            f"⚠️ **This section {side} the measurement window.** The probe was captured at "
+            f"`{captured}`; the sweep ran from `{started}` to `{finished or 'unclosed'}`. "
+            + (
+                "So the driver's refresh did not take — offline, a rate limit, or a failure "
+                "it logged and continued past — and these loading findings describe an "
+                "earlier environment than the scores do."
+                if captured < started
+                else "So it was refreshed after the fact rather than inside the sweep: it "
+                "describes today's environment, which may not be the one the scores were "
+                "measured under."
+            )
+        )
     recorded = probe.get("transformers_version")
     installed = _installed_transformers()
-    if installed is None or installed == recorded:
+    if installed is not None and installed != recorded:
+        lines.append(
+            f"⚠️ **This section was captured under transformers `{recorded}`; the "
+            f"environment rendering this document has `{installed}`.** Which class is "
+            "instantiated, how many weights fail to load and whether the untrusted load "
+            "collapses are all properties of the installed library, so these findings may "
+            "no longer describe what a reader would see."
+        )
+    if not lines:
         return []
-    return [
-        f"⚠️ **This section was captured under transformers `{recorded}`; the environment "
-        f"rendering this document has `{installed}`.** Which class is instantiated, how "
-        "many weights fail to load and whether the untrusted load collapses are all "
-        "properties of the installed library, so these findings may no longer describe "
-        "what a reader would see. Re-run `uv run python examples/research/"
-        "lfm25_load_probe.py` to refresh them. The *scores* are unaffected: they carry "
-        "their own provenance and were measured under the sweep's own environment.",
-        "",
-    ]
+    lines.append(
+        "The *scores* are unaffected either way: they carry their own provenance and "
+        "were measured under the sweep's own environment."
+    )
+    # One blank line between every note, so two warnings do not run together into
+    # a single paragraph that reads as one claim.
+    spaced: list[str] = []
+    for note in lines:
+        spaced += [note, ""]
+    return spaced
+
+
+def _window_bounds() -> tuple[str, str | None] | None:
+    """The sweep's measurement window, if there is a sidecar recording one.
+
+    **Both** ends, not just the start. A probe captured *after* the window closed
+    was refreshed retroactively — it describes today's environment, not the one
+    the scores were measured under — and checking only the lower bound would pass
+    it silently, which is the same "it looks fresh so it must be right" mistake
+    the version comparison already made once.
+    """
+    if not PROVENANCE.exists():
+        return None
+    window = json.loads(PROVENANCE.read_text()).get("measurement_window", {})
+    started = window.get("started")
+    if not started:
+        return None
+    finished = window.get("finished")
+    return str(started), str(finished) if finished else None
 
 
 def _cross_study_caveat() -> list[str]:

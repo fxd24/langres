@@ -70,6 +70,10 @@ export KMP_DUPLICATE_LIB_OK=TRUE
 # aborts on a monotonic climb.
 export LADDER_BENCHMARK_GRANULAR=1
 
+# The force decision travels to run_ladder.sh, which carries the same guard over
+# the artifacts it actually writes. Set once here rather than on each invocation.
+[ "${LFM25_FORCE:-0}" = "1" ] && export LADDER_FORCE=1
+
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
 PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
@@ -193,7 +197,11 @@ DIRTY_ARTIFACTS=""
 for study in $PROVENANCE_STUDIES; do
   prefix="$(study_artifacts "$study")"
   for artifact in "${prefix}_rows.jsonl" "${prefix}.md" "${prefix}_reference_recall.json"; do
-    [ -e "$artifact" ] || continue
+    # No `-e` guard: git already distinguishes a never-created path (silence)
+    # from an uncommitted DELETION (" D"/"D "), and the existence test skipped
+    # exactly the second one. A pending deletion of the rows file let a new
+    # sweep recreate it from empty and commit a partial replacement over every
+    # other expensive result, with no refusal. (Cross-model review.)
     if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
       DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
     fi

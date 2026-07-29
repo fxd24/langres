@@ -1,4 +1,5 @@
 {
+  "captured_at": "2026-07-29T10:40:52+02:00",
   "lfm2_natively_implemented": true,
   "probe_texts": [
     "Sony STR-DH550 5.2 Channel 4K AV Receiver",
@@ -28,7 +29,7 @@
       "AutoModel": {
         "class": "Lfm2BidirectionalModel",
         "missing_keys": 132,
-        "two_load_max_drift": 0.17028185725212097,
+        "two_load_max_drift": 0.1693040132522583,
         "unexpected_keys": 132
       },
       "AutoModelForMaskedLM": {
@@ -41,7 +42,7 @@
       "AutoModel": {
         "class": "Lfm2BidirectionalModel",
         "missing_keys": 148,
-        "two_load_max_drift": 0.16817328333854675,
+        "two_load_max_drift": 0.1684936285018921,
         "unexpected_keys": 148
       },
       "AutoModelForMaskedLM": {

@@ -42,6 +42,7 @@ import logging
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 # Set before torch/faiss import, not in `.env`: `.env` is gitignored and absent
 # from a fresh worktree, and without OMP_NUM_THREADS the process DEADLOCKS in
@@ -152,6 +153,14 @@ def main() -> None:
     from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 
     report: dict[str, Any] = {
+        # WHEN, not just under-what. The write-up used to infer this probe's
+        # freshness from `transformers_version` matching the installed one, so an
+        # offline or rate-limited refresh that left the OLD file in place raised
+        # no warning whenever the version happened to agree -- while checkpoint
+        # remote code, cache contents and every other dependency could have moved.
+        # Freshness is now stated by the artifact and compared against the
+        # measurement window. (Cross-model review.)
+        "captured_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "transformers_version": transformers.__version__,
         # The trap's precondition: transformers implements this model_type
         # itself, so a missing trust_remote_code is a silent substitution rather

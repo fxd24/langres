@@ -25,6 +25,10 @@ So on any benchmark listed above, the honest statement is *"behind on the arms t
 
 ## Was the checkpoint even the thing measured?
 
+⚠️ **This section postdates the measurement window.** The probe was captured at `2026-07-29T10:40:52+02:00`; the sweep ran from `2026-07-29T01:18:12+02:00` to `2026-07-29T03:44:51+02:00`. So it was refreshed after the fact rather than inside the sweep: it describes today's environment, which may not be the one the scores were measured under.
+
+The *scores* are unaffected either way: they carry their own provenance and were measured under the sweep's own environment.
+
 This has to come before any score. All three checkpoints declare `model_type: "lfm2"`, which the transformers the probe ran under (4.57.6) implements natively (`lfm2` in `CONFIG_MAPPING_NAMES`: **True**) as a **causal decoder**, while pointing `auto_map.AutoModel` at their own *bidirectional* class. Dropping `trust_remote_code` therefore substitutes a different architecture in silence — no exception, no warning.
 
 | `trust_remote_code` | class actually instantiated | from checkpoint's code | cos(two unrelated records) | max prompt shift |
