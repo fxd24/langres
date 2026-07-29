@@ -166,6 +166,33 @@ fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+# Push the just-committed results -- but NEVER onto the default branch.
+#
+# `git push origin HEAD` resolves to whatever branch is checked out. Run from
+# `main` (which is where someone reaching for a sweep script most plausibly is),
+# that publishes generated results straight to the default branch, bypassing the
+# PR-only rule this repo treats as an irreversible-action guardrail. The commits
+# are still made -- the durability the sweep depends on is untouched -- only the
+# publish step is withheld, with the branch to create printed. (Cross-model
+# review.)
+push_results() {
+  local branch default
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  default=${default#origin/}
+  default=${default:-main}
+  if [ "$branch" = "$default" ] || [ "$branch" = "HEAD" ]; then
+    log "NOT pushing: on '$branch'. Results are COMMITTED locally; publish via a PR:"
+    log "    git switch -c results/$(basename "$ARTIFACT") && git push -u origin HEAD"
+    return 0
+  fi
+  if git push -q origin HEAD 2>/dev/null; then
+    log "pushed"
+  else
+    log "push failed (will retry next model)"
+  fi
+}
+
 # `${VAR:+...}` tests only that the variable is NON-EMPTY, so
 # LADDER_TRUST_EXISTING_CACHE=0 / false / a typo would all have forwarded
 # --trust-existing-cache -- silently adopting unverified vectors on precisely the
@@ -370,8 +397,18 @@ check_memory() {
 #: Back-compat alias -- the call sites below read as "check swap" historically.
 check_swap() { check_memory; }
 
+# Position in the sweep, so the POST-cell memory guard can tell "stop before the
+# next cell" from "nothing left to stop". Aborting after the final cell of the
+# final model commits every row and still exits 9, which makes run_lfm25.sh stop
+# before closing provenance and rendering the write-up -- discarding the report
+# for a sweep that actually finished. (Cross-model review.)
+MODEL_INDEX=0
+N_MODELS=${#MODELS[@]}
+N_BENCHMARKS=$(echo "$BENCHMARKS" | wc -w | tr -d ' ')
+
 for model in "${MODELS[@]}"; do
   safe="${model//\//__}"
+  MODEL_INDEX=$((MODEL_INDEX + 1))
   log "=== $model ==="
 
   # No --device: the harness passes None to sentence-transformers, whose
@@ -410,7 +447,9 @@ for model in "${MODELS[@]}"; do
     # already OOM'd this machine once (42.44 GiB of allocations for a 0.6B model
     # at 0.8 GB RSS).
     first=truncate
+    BENCH_INDEX=0
     for benchmark in $BENCHMARKS; do
+      BENCH_INDEX=$((BENCH_INDEX + 1))
       # Checked BEFORE the encode, not only after it. The 2026-07-29 kill landed
       # *inside* a cell, so a purely post-cell guard never got its turn to run.
       check_memory || { code=9; break; }
@@ -431,14 +470,22 @@ for model in "${MODELS[@]}"; do
       # A cache-integrity refusal must stop immediately, not after the remaining
       # benchmarks have each recorded their own failure row.
       [ $cell_code -eq 3 ] && break
-      check_swap || { code=9; break; }
+      # Only guard if something still has to run. After the final cell of the
+      # final model there is nothing left to protect, and exiting 9 there costs
+      # the write-up for a sweep that completed.
+      if [ $BENCH_INDEX -lt "$N_BENCHMARKS" ] || [ $MODEL_INDEX -lt "$N_MODELS" ]; then
+        check_swap || { code=9; break; }
+      fi
     done
   else
     measure_cell "$BENCHMARKS" truncate
     code=$?
     # Non-granular: one process covers every benchmark, so all of them are lost.
     [ $code -ne 0 ] && FAILED_BENCHMARKS="$BENCHMARKS"
-    check_swap || code=9
+    # Same rule as the granular branch: only abort if another model still runs.
+    if [ $MODEL_INDEX -lt "$N_MODELS" ]; then
+      check_swap || code=9
+    fi
   fi
 
   # Flush cell deaths BEFORE the terminal branches below, both of which return
@@ -550,7 +597,7 @@ for model in "${MODELS[@]}"; do
       exit 1
     fi
     log "committed $model"
-    git push -q origin HEAD 2>/dev/null && log "pushed" || log "push failed (will retry next model)"
+    push_results
   fi
 
   # Committed first, THEN stop: the whole point of aborting on memory pressure or

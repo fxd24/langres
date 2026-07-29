@@ -166,6 +166,20 @@ if ! git diff --cached --quiet -- "$REPORT_MD" "$PROVENANCE_JSON"; then
     say "FATAL: commit failed. The write-up is staged but NOT durable; stopping."
     exit 1
   fi
-  git push -q origin HEAD 2>/dev/null && say "pushed" || say "push failed"
+  # Never onto the default branch: `git push origin HEAD` follows whatever is
+  # checked out, so running this from `main` would publish generated results
+  # straight there, past the PR-only guardrail. The commit above already made
+  # them durable; only the publish is withheld. (Cross-model review.)
+  BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  DEFAULT=${DEFAULT#origin/}
+  if [ "$BRANCH" = "${DEFAULT:-main}" ] || [ "$BRANCH" = "HEAD" ]; then
+    say "NOT pushing: on '$BRANCH'. The write-up is COMMITTED; publish via a PR:"
+    say "    git switch -c results/lfm25 && git push -u origin HEAD"
+  elif git push -q origin HEAD 2>/dev/null; then
+    say "pushed"
+  else
+    say "push failed"
+  fi
 fi
 say "complete"

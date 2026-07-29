@@ -43,6 +43,9 @@ def _row(model: str, benchmark: str, **overrides: Any) -> dict[str, Any]:
         "k": 20,
         "status": "ok",
         "parameter_count": 109_000_000,
+        # The cohort key. The noise floor subtracts study B's control from study
+        # A's best tuned score, which is only meaningful within one cohort.
+        "metric_revision": 1,
         "candidate_recall": 0.80,
         "reachable_recall_ceiling": 0.9,
         "recall_of_reachable": 0.888,
@@ -424,6 +427,122 @@ class TestNoiseFloor:
     def test_rendering_twice_gives_the_same_bytes(self, artifacts: Path) -> None:
         """The harness must reproduce its own committed table on a re-run."""
         assert REPORT.render() == REPORT.render()
+
+    def test_the_gap_is_called_observed_not_a_dynamic_range(self, artifacts: Path) -> None:
+        """One seeded control does not establish a benchmark's range.
+
+        Neither endpoint is a bound: a different seed moves the floor by an
+        amount never measured (no replicates), and a better model moves the
+        ceiling. Calling it "the entire usable dynamic range" made the
+        percentage-of-range figures look calibrated when they are ratios to a
+        single observed interval.
+        """
+        report = REPORT.render()
+
+        assert "observed gap" in report
+        assert "neither endpoint is a bound" in report
+        assert "entire usable dynamic range" not in report.split("earlier wording")[0]
+
+    def test_the_correction_quotes_intervals_read_from_the_rows(self, artifacts: Path) -> None:
+        """The retraction's numbers must come from the artifact, not the prose.
+
+        A supported re-run replaces the JSONL and regenerates this document; a
+        hard-coded interval would then contradict the table directly above it.
+        """
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        intervals = REPORT._control_intervals(base, "walmart_amazon")
+
+        # The fixture's control interval on walmart_amazon is [-0.03, -0.01].
+        assert intervals == ["`[-0.0300, -0.0100]`"]
+        assert "".join(intervals).strip("`") in REPORT.render()
+
+    def test_no_correction_is_printed_when_nothing_was_misclassified(self, artifacts: Path) -> None:
+        """Do not retract a claim about a benchmark this run did not measure."""
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        assert REPORT._correction_paragraph(base, ["fodors_zagat"], []) == []
+
+
+class TestCohortSafety:
+    """The noise floor is the one figure computed ACROSS the two studies."""
+
+    def test_mismatched_metric_revisions_refuse_to_render(self, artifacts: Path) -> None:
+        """`LFM25_STUDY=a|b` makes drifting cohorts a supported workflow.
+
+        A fresh study-A score minus a stale study-B control is not a
+        like-for-like gap, and publishing it as one would repeat the
+        cross-cohort error this document already had to retract.
+        """
+        tuned = REPORT._read_rows(REPORT.TUNED_ROWS)
+        base = [dict(row, metric_revision=999) for row in REPORT._read_rows(REPORT.BASE_ROWS)]
+
+        with pytest.raises(SystemExit, match="different metric revisions"):
+            REPORT._assert_comparable_cohorts(tuned, base)
+
+    def test_matching_cohorts_are_accepted(self, artifacts: Path) -> None:
+        """The check must not block every legitimate render."""
+        tuned = REPORT._read_rows(REPORT.TUNED_ROWS)
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        assert REPORT._assert_comparable_cohorts(tuned, base) == "1"
+
+    def test_the_report_states_the_comparison_is_cross_study(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "across the two studies" in report
+        assert "metric revision" in report
+
+
+class TestMatchedArms:
+    """A pretraining claim cannot rest on a comparison where the prompt varies."""
+
+    def test_the_control_encoder_comparison_holds_the_arm_fixed(self, artifacts: Path) -> None:
+        """Regression: each side picked its OWN best arm.
+
+        On the real rows that compared control `none` against encoder
+        `instruct` on ``abt_buy``, and the reverse on ``amazon_google`` — so
+        prompt configuration varied alongside the weights while the conclusion
+        claimed only pretraining differed.
+        """
+        report = REPORT.render()
+
+        assert "comparing the same prompt arm on both sides" in report
+        assert "matched backbone and matched prompt arm" in report
+
+    def test_only_shared_arms_are_compared(self, artifacts: Path) -> None:
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        control_arms = REPORT._arm_cells(base, REPORT.CONTROL, "abt_buy")
+        encoder_arms = REPORT._arm_cells(base, "LiquidAI/LFM2.5-Encoder-350M", "abt_buy")
+
+        assert set(control_arms) & set(encoder_arms), "the fixture must share an arm"
+
+    def test_best_arm_and_matched_arm_disagree_and_matched_arm_wins(self) -> None:
+        """The regression itself: the two methods reach OPPOSITE verdicts here.
+
+        Control is far ahead on ``instruct`` and behind on ``none``; the encoder
+        is the other way round. Comparing each side's own best arm hands the
+        benchmark to the control (0.90 vs 0.60) purely because they were
+        measured under different prompts. Holding the arm fixed, the control
+        loses ``none`` and so does not sweep the benchmark — which is the honest
+        answer and the one a pretraining claim has to rest on.
+        """
+        encoder = REPORT.MATCHED_BACKBONE_ENCODER
+        base = [
+            _row(REPORT.CONTROL, "abt_buy", prompt_arm="instruct", candidate_recall=0.90),
+            _row(REPORT.CONTROL, "abt_buy", prompt_arm="none", candidate_recall=0.50),
+            _row(encoder, "abt_buy", prompt_arm="instruct", candidate_recall=0.40),
+            _row(encoder, "abt_buy", prompt_arm="none", candidate_recall=0.60),
+        ]
+
+        # Best-arm-vs-best-arm, the old comparison, would call this a sweep.
+        assert REPORT._best_arm(base, REPORT.CONTROL, "abt_buy")["candidate_recall"] == 0.90
+        assert REPORT._best_arm(base, encoder, "abt_buy")["candidate_recall"] == 0.60
+
+        lines = REPORT._control_vs_base_encoders(base)
+
+        assert "**0 of 1**" in lines[0], lines[0]
 
 
 class TestProvenance:

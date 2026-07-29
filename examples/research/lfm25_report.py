@@ -380,6 +380,115 @@ CONTROL = "random-init-control-350M"
 NARROW_RANGE = 0.05
 
 
+def _assert_comparable_cohorts(tuned: list[dict[str, Any]], base: list[dict[str, Any]]) -> str:
+    """Refuse to subtract study B's control from study A's best across cohorts.
+
+    The noise floor is the only number in this document computed ACROSS the two
+    studies, and ``LFM25_STUDY=a|b`` explicitly supports re-measuring one of them
+    alone. So the two rows files can drift apart — a fresh study-A score minus a
+    stale study-B control is not a like-for-like gap, and publishing it as one
+    would be exactly the cross-cohort error this document already had to retract
+    once. ``metric_revision`` is what the harness bumps when the measured
+    quantity changes; a mismatch means the subtraction is meaningless and is
+    refused rather than rendered with a caveat. (Cross-model review.)
+
+    Returns the shared revision, for the report to state.
+    """
+    tuned_revs = {row.get("metric_revision") for row in tuned if row.get("status") == "ok"}
+    base_revs = {row.get("metric_revision") for row in base if row.get("status") == "ok"}
+    if tuned_revs != base_revs:
+        raise SystemExit(
+            "Refusing to render: the two studies were measured at different metric "
+            f"revisions (study A {sorted(map(str, tuned_revs))}, study B "
+            f"{sorted(map(str, base_revs))}). The noise floor subtracts study B's control "
+            "from study A's best tuned score, which is only meaningful within one cohort. "
+            "Re-measure both studies (LFM25_STUDY=both) before generating this report."
+        )
+    return ", ".join(sorted(str(r) for r in tuned_revs)) or "unrecorded"
+
+
+def _cross_study_caveat() -> list[str]:
+    """Say so when the sidecar shows only one study was re-measured.
+
+    A partial re-run leaves the other study's rows untouched, so the noise floor
+    then spans two measurement windows. The provenance section records the scope;
+    this surfaces it where the cross-study number is actually used.
+    """
+    if not PROVENANCE.exists():
+        return []
+    studies = json.loads(PROVENANCE.read_text()).get("studies_measured")
+    if studies is None or sorted(studies) == ["a", "b"]:
+        return []
+    named = ", ".join(s.upper() for s in studies)
+    return [
+        "",
+        f"⚠️ **This gap spans two measurement windows.** The provenance sidecar records that "
+        f"only study {named} was re-measured in the last run, so the tuned score and the "
+        f"control below come from rows captured at different times. Both cohorts share a "
+        f"metric revision — that is checked, and rendering is refused otherwise — but a "
+        f"single re-measured study is still weaker evidence than one sweep over both.",
+    ]
+
+
+def _control_intervals(base: list[dict[str, Any]], benchmark: str) -> list[str]:
+    """Every measured paired interval for the control on ``benchmark``, formatted.
+
+    Read from the rows rather than typed into the prose beside them. The
+    paragraph these feed used to quote two endpoints literally, which is the
+    failure this repo keeps paying for: a re-measure replaces the JSONL and
+    regenerates the document, and the hard-coded sentence would then contradict
+    the table directly above it while the page still claimed every number came
+    from the artifact. (Cross-model review.)
+    """
+    seen: list[str] = []
+    for row in _cells(base, model=CONTROL, benchmark=benchmark, k=HEADLINE_K, status="ok"):
+        low, high = row.get("vs_reference_ci_low"), row.get("vs_reference_ci_high")
+        if low is None or high is None:
+            continue
+        formatted = f"`{_ci(low, high)}`"
+        if formatted not in seen:
+            seen.append(formatted)
+    return sorted(seen)
+
+
+def _correction_paragraph(
+    base: list[dict[str, Any]], uninformative: list[str], narrow: list[str]
+) -> list[str]:
+    """State the retracted claim, with its refuting numbers taken from the rows.
+
+    Kept in the document deliberately: the earlier revision published the
+    opposite verdict, and a correction that quietly disappears is how a reader
+    ends up trusting the wrong version they already read. Every quantity is
+    derived, so a re-measure cannot leave the retraction contradicting the table.
+    """
+    if not narrow:
+        # Nothing was misclassified by the old rule on these rows, so there is
+        # nothing to retract -- do not print a correction about a benchmark this
+        # run did not measure that way.
+        return []
+    quoted = []
+    for benchmark in narrow:
+        intervals = _control_intervals(base, benchmark)
+        if intervals:
+            quoted.append(f"on `{benchmark}` they are {' and '.join(intervals)}")
+    if not quoted:
+        return []
+    unusable = ", ".join(f"`{b}`" for b in uninformative) if uninformative else "**no benchmark**"
+    return [
+        "",
+        "**A correction, stated plainly because it was published the other way round for "
+        "one revision of this document.** An earlier version called a benchmark "
+        f"*uninformative* whenever the tuned-vs-random gap was under {NARROW_RANGE:g} recall, "
+        f"and on that basis said {', '.join(f'`{b}`' for b in narrow)} could not distinguish "
+        "a trained retriever from noise. That was wrong, and this study's own rows say so: "
+        f"of the control's paired intervals, {'; '.join(quoted)} — all excluding zero. The "
+        "gap between one seeded control and the best tuned score is a point estimate, not a "
+        "variance estimate, and it cannot be used as a significance test — least of all "
+        f"against measured intervals sitting in the same file. Only {unusable} genuinely "
+        "fails to separate.",
+    ]
+
+
 def _noise_floor_table(
     tuned: list[dict[str, Any]], base: list[dict[str, Any]]
 ) -> tuple[str, list[str], list[str], list[str]]:
@@ -403,7 +512,7 @@ def _noise_floor_table(
     """
     benchmarks = sorted({row["benchmark"] for row in tuned} | {row["benchmark"] for row in base})
     table = (
-        "| benchmark | random-init control | best tuned model | range | "
+        "| benchmark | random-init control | best tuned model | observed gap | "
         "control's paired CI | verdict |\n"
     )
     table += "|---|---|---|---|---|---|\n"
@@ -468,13 +577,31 @@ def _noise_floor_table(
 MATCHED_BACKBONE_ENCODER = "LiquidAI/LFM2.5-Encoder-350M"
 
 
+def _arm_cells(rows: list[dict[str, Any]], model: str, benchmark: str) -> dict[str, dict[str, Any]]:
+    """The model's best cell per prompt arm on this benchmark, at the headline k."""
+    best: dict[str, dict[str, Any]] = {}
+    for row in _cells(rows, model=model, benchmark=benchmark, k=HEADLINE_K, status="ok"):
+        if row.get("candidate_recall") is None:
+            continue
+        arm = str(row.get("prompt_arm"))
+        if arm not in best or row["candidate_recall"] > best[arm]["candidate_recall"]:
+            best[arm] = row
+    return best
+
+
 def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
     """Where the untrained control outscores the *real* base encoders.
 
-    Both sides wear the same untrained mean-pooling head. For the 350M encoder
-    that isolates the pretrained weights themselves, because the control shares
-    its architecture. For the 230M encoder it does not — that row is reported as
-    an observation, not as evidence about pretraining.
+    **Compared ARM BY ARM, not best-arm against best-arm.** Both sides wear the
+    same untrained mean-pooling head, so pooling is held fixed either way — but
+    taking each side's own best arm let the prompt configuration vary too: on
+    ``abt_buy`` the control's best arm was ``none`` while the encoder's was
+    ``instruct``, and on ``amazon_google`` it was the other way round. A claim
+    that *only* pretrained-versus-random weights differ cannot rest on a
+    comparison where the prompt also differs. Holding the arm fixed makes the
+    remaining difference the weights — for the matched-backbone encoder. For the
+    230M encoder the backbone and size differ as well, so that row stays an
+    observation. (Cross-model review.)
     """
     encoders = sorted(
         {row["model"] for row in base if "Encoder" in row["model"]},
@@ -482,23 +609,40 @@ def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
     benchmarks = sorted({row["benchmark"] for row in base})
     lines: list[str] = []
     for encoder in encoders:
-        beaten = []
+        beaten: list[str] = []
+        compared: list[str] = []
+        arms_used: set[str] = set()
         for benchmark in benchmarks:
-            control = _best_arm(base, CONTROL, benchmark)
-            cell = _best_arm(base, encoder, benchmark)
-            if control and cell and control["candidate_recall"] >= cell["candidate_recall"]:
+            control_arms = _arm_cells(base, CONTROL, benchmark)
+            encoder_arms = _arm_cells(base, encoder, benchmark)
+            shared = sorted(set(control_arms) & set(encoder_arms))
+            if not shared:
+                continue
+            compared.append(benchmark)
+            arms_used.update(shared)
+            if all(
+                control_arms[a]["candidate_recall"] >= encoder_arms[a]["candidate_recall"]
+                for a in shared
+            ):
                 beaten.append(benchmark)
         matched = encoder == MATCHED_BACKBONE_ENCODER
         note = (
-            " — **matched backbone**, so this pair isolates pretraining"
+            " — **matched backbone and matched prompt arm**, so this pair isolates pretraining"
             if matched
             else " — *different backbone and size*, so this pair confounds pretraining "
             "with model size and is an observation only"
         )
+        arm_note = (
+            f", comparing the same prompt arm on both sides "
+            f"({', '.join(f'`{a}`' for a in sorted(arms_used))})"
+            if arms_used
+            else ""
+        )
         lines.append(
             f"- Random weights match or beat `{encoder}` on **{len(beaten)} of "
-            f"{len(benchmarks)}** benchmarks"
+            f"{len(compared)}** benchmarks where both ran a shared arm"
             + (f" ({', '.join(f'`{b}`' for b in beaten)})" if beaten else "")
+            + arm_note
             + note
             + "."
         )
@@ -597,25 +741,24 @@ def _prior_walmart_row(noise_band: float | None = None) -> list[str]:
     return [
         "",
         "Concretely, every `walmart_amazon` margin that study reports as a win, with its "
-        f"interval, set against the {band:.4f} total trained-vs-random range measured here:",
+        f"interval, set against the {band:.4f} gap measured here between the best tuned "
+        "model and one seeded random initialisation:",
         "",
         *[
             f"- `{m.group(1)}`: **{m.group(2)}** [{m.group(3)}, {m.group(4)}]"
-            + (
-                f"  ← {float(m.group(2)) / band:.0%} of the benchmark's entire range"
-                if band > 0
-                else ""
-            )
+            + (f"  ← {float(m.group(2)) / band:.0%} of that observed gap" if band > 0 else "")
             for m in sorted(wins, key=lambda m: m.group(1))
         ],
         "",
-        f"**{len(below)} of {len(wins)}** are smaller than the whole range. Those "
-        f"intervals exclude zero, so they are **real effects and this study does not call "
-        f"them noise** — `walmart_amazon` does separate trained models from random "
-        f"weights. The narrower point is about resolution: on a benchmark whose entire "
-        f"range is {band:.4f}, a margin of that order is a large share of everything "
-        f"there is to measure, so it is a fragile basis for ranking and should be quoted "
-        f"with the range beside it rather than on its own.",
+        f"**{len(below)} of {len(wins)}** are smaller than the gap. Those intervals "
+        f"exclude zero, so they are **real effects and this study does not call them "
+        f"noise** — `walmart_amazon` does separate trained models from random weights. "
+        f"The narrower point is about resolution: on a benchmark where the whole measured "
+        f"distance from a random network to the best tuned model is {band:.4f}, a margin "
+        f"of that order is a large share of it, so it is a fragile basis for ranking and "
+        f"should be quoted with that distance beside it rather than on its own. The "
+        f"percentages are ratios to one observed gap, not to a calibrated range — see the "
+        f"noise-floor preamble.",
     ]
 
 
@@ -682,6 +825,10 @@ def render() -> str:
     expected_by_chance = 0.05 * n_tests
 
     base_interval_table, base_degenerate = _interval_table(base, BASE_BASELINE)
+    # Checked BEFORE the table is built: the noise floor is the one figure here
+    # computed across the two studies, and a partial re-run can leave them in
+    # different cohorts.
+    metric_revision = _assert_comparable_cohorts(tuned, base)
     noise_table, uninformative, informative, narrow = _noise_floor_table(tuned, base)
 
     parts = [
@@ -869,8 +1016,25 @@ def render() -> str:
         "architecture with **seeded random weights and no training whatsoever**, run through "
         "the identical pipeline. A random transformer is a random feature map: near-duplicate "
         "strings still land near each other, so it retrieves real candidates. Its recall is "
-        "therefore what a benchmark hands a model that knows *nothing*, and the gap above it "
-        "is the benchmark's entire usable dynamic range.",
+        "therefore roughly what a benchmark hands a model that knows *nothing*.",
+        "",
+        "**What the gap above it is, stated precisely.** It is the **observed gap** between "
+        "the best of the tuned models measured here and **one seeded random initialisation** "
+        "— not the benchmark's dynamic range, and neither endpoint is a bound. A different "
+        "seed would move the floor by an amount this study did not measure (one control, no "
+        "replicates), and a stronger model than any tested here would move the ceiling. Every "
+        '"% of the gap" figure below is therefore a ratio to *that* observed interval, not a '
+        "calibrated fraction of what the benchmark could in principle resolve. It is still the "
+        "right order-of-magnitude check — a margin comparable to the whole gap is fragile "
+        "however the endpoints move — but it is an observation, not a bound, and the earlier "
+        'wording ("the benchmark\'s entire usable dynamic range") claimed more than one '
+        "control can support. (Cross-model review.)",
+        "",
+        f"The control lives in study B and the tuned scores in study A, so this is the one "
+        f"figure here computed **across the two studies**. Both were measured at metric "
+        f"revision **{metric_revision}**; a mismatch refuses the render outright rather than "
+        f"publishing a cross-cohort subtraction with a footnote.",
+        *_cross_study_caveat(),
         "",
         noise_table,
         "",
@@ -897,17 +1061,7 @@ def render() -> str:
             f"Benchmarks that separate the two with room to spare: "
             f"{', '.join(f'`{b}`' for b in informative if b not in narrow) or '**none**'}."
         ),
-        "",
-        "**A correction, stated plainly because it was published the other way round for "
-        "one revision of this document.** An earlier version called a benchmark "
-        "*uninformative* whenever the tuned-vs-random gap was under five recall points, and "
-        "on that basis said `walmart_amazon` could not distinguish a trained retriever from "
-        "noise. That was wrong, and this study's own rows say so: the control's paired "
-        "intervals on `walmart_amazon` are `[-0.0275, -0.0072]` and `[-0.0295, -0.0099]`, "
-        "both excluding zero. The gap between one seeded control and the best tuned score is "
-        "a point estimate, not a variance estimate, and it cannot be used as a significance "
-        "test — least of all against measured intervals sitting in the same file. Only "
-        "`fodors_zagat` genuinely fails to separate.",
+        *_correction_paragraph(base, uninformative, narrow),
         "",
         "**The control also outscores the real base encoders.** All three wear the same "
         "untrained mean-pooling head, so pooling is held fixed throughout; whether "

@@ -185,9 +185,13 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 
 ## The noise floor — which benchmarks can separate signal from noise
 
-**A named finding, not a footnote.** `random-init-control-350M` is the LFM2.5 350M architecture with **seeded random weights and no training whatsoever**, run through the identical pipeline. A random transformer is a random feature map: near-duplicate strings still land near each other, so it retrieves real candidates. Its recall is therefore what a benchmark hands a model that knows *nothing*, and the gap above it is the benchmark's entire usable dynamic range.
+**A named finding, not a footnote.** `random-init-control-350M` is the LFM2.5 350M architecture with **seeded random weights and no training whatsoever**, run through the identical pipeline. A random transformer is a random feature map: near-duplicate strings still land near each other, so it retrieves real candidates. Its recall is therefore roughly what a benchmark hands a model that knows *nothing*.
 
-| benchmark | random-init control | best tuned model | range | control's paired CI | verdict |
+**What the gap above it is, stated precisely.** It is the **observed gap** between the best of the tuned models measured here and **one seeded random initialisation** — not the benchmark's dynamic range, and neither endpoint is a bound. A different seed would move the floor by an amount this study did not measure (one control, no replicates), and a stronger model than any tested here would move the ceiling. Every "% of the gap" figure below is therefore a ratio to *that* observed interval, not a calibrated fraction of what the benchmark could in principle resolve. It is still the right order-of-magnitude check — a margin comparable to the whole gap is fragile however the endpoints move — but it is an observation, not a bound, and the earlier wording ("the benchmark's entire usable dynamic range") claimed more than one control can support. (Cross-model review.)
+
+The control lives in study B and the tuned scores in study A, so this is the one figure here computed **across the two studies**. Both were measured at metric revision **1**; a mismatch refuses the render outright rather than publishing a cross-cohort subtraction with a footnote.
+
+| benchmark | random-init control | best tuned model | observed gap | control's paired CI | verdict |
 |---|---|---|---|---|---|
 | `abt_buy` | 0.9109 | 0.9741 (`LiquidAI/LFM2.5-Embedding-350M`) | **+0.0632** | [-0.0469, -0.0128] | separates, wide |
 | `amazon_google` | 0.7058 | 0.8338 (`intfloat/e5-base-v2`) | **+0.1281** | [-0.1445, -0.1047] | separates, wide |
@@ -202,12 +206,12 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 
 Benchmarks that separate the two with room to spare: `abt_buy`, `amazon_google`, `wdc_computers`.
 
-**A correction, stated plainly because it was published the other way round for one revision of this document.** An earlier version called a benchmark *uninformative* whenever the tuned-vs-random gap was under five recall points, and on that basis said `walmart_amazon` could not distinguish a trained retriever from noise. That was wrong, and this study's own rows say so: the control's paired intervals on `walmart_amazon` are `[-0.0275, -0.0072]` and `[-0.0295, -0.0099]`, both excluding zero. The gap between one seeded control and the best tuned score is a point estimate, not a variance estimate, and it cannot be used as a significance test — least of all against measured intervals sitting in the same file. Only `fodors_zagat` genuinely fails to separate.
+**A correction, stated plainly because it was published the other way round for one revision of this document.** An earlier version called a benchmark *uninformative* whenever the tuned-vs-random gap was under 0.05 recall, and on that basis said `walmart_amazon` could not distinguish a trained retriever from noise. That was wrong, and this study's own rows say so: of the control's paired intervals, on `walmart_amazon` they are `[-0.0275, -0.0072]` and `[-0.0295, -0.0099]` — all excluding zero. The gap between one seeded control and the best tuned score is a point estimate, not a variance estimate, and it cannot be used as a significance test — least of all against measured intervals sitting in the same file. Only `fodors_zagat` genuinely fails to separate.
 
 **The control also outscores the real base encoders.** All three wear the same untrained mean-pooling head, so pooling is held fixed throughout; whether *pretraining* is the only remaining difference depends on the backbone, and is stated per row:
 
-- Random weights match or beat `LiquidAI/LFM2.5-Encoder-230M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`) — *different backbone and size*, so this pair confounds pretraining with model size and is an observation only.
-- Random weights match or beat `LiquidAI/LFM2.5-Encoder-350M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`) — **matched backbone**, so this pair isolates pretraining.
+- Random weights match or beat `LiquidAI/LFM2.5-Encoder-230M` on **5 of 5** benchmarks where both ran a shared arm (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`), comparing the same prompt arm on both sides (`instruct`, `none`) — *different backbone and size*, so this pair confounds pretraining with model size and is an observation only.
+- Random weights match or beat `LiquidAI/LFM2.5-Encoder-350M` on **5 of 5** benchmarks where both ran a shared arm (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`), comparing the same prompt arm on both sides (`instruct`, `none`) — **matched backbone and matched prompt arm**, so this pair isolates pretraining.
 
 **What this supports, and what it does not.** On `LiquidAI/LFM2.5-Encoder-350M` vs the control, architecture and pooling are held fixed and only pretrained-vs-random weights differ. So the *finding* is exactly this: **under this untrained mean-pooling configuration, the pretrained checkpoint scores worse than random weights.** The 230M row points the same way but cannot even support that, because it varies backbone and size as well as pretraining.
 
@@ -222,14 +226,14 @@ This reframes `fodors_zagat` specifically. It was already labelled *saturated* �
 - On `walmart_amazon`, the **entire** distance between the best tuned model and a network with random weights is **0.0183**. A margin is best read as a fraction of that, not in isolation.
 
 
-Concretely, every `walmart_amazon` margin that study reports as a win, with its interval, set against the 0.0183 total trained-vs-random range measured here:
+Concretely, every `walmart_amazon` margin that study reports as a win, with its interval, set against the 0.0183 gap measured here between the best tuned model and one seeded random initialisation:
 
-- `BAAI/bge-base-en-v1.5`: **+0.0098** [+0.0020, +0.0187]  ← 54% of the benchmark's entire range
-- `BAAI/bge-small-en-v1.5`: **+0.0118** [+0.0033, +0.0213]  ← 64% of the benchmark's entire range
-- `google/embeddinggemma-300m`: **+0.0092** [+0.0004, +0.0189]  ← 50% of the benchmark's entire range
-- `intfloat/e5-base-v2`: **+0.0159** [+0.0078, +0.0246]  ← 87% of the benchmark's entire range
+- `BAAI/bge-base-en-v1.5`: **+0.0098** [+0.0020, +0.0187]  ← 54% of that observed gap
+- `BAAI/bge-small-en-v1.5`: **+0.0118** [+0.0033, +0.0213]  ← 64% of that observed gap
+- `google/embeddinggemma-300m`: **+0.0092** [+0.0004, +0.0189]  ← 50% of that observed gap
+- `intfloat/e5-base-v2`: **+0.0159** [+0.0078, +0.0246]  ← 87% of that observed gap
 
-**4 of 4** are smaller than the whole range. Those intervals exclude zero, so they are **real effects and this study does not call them noise** — `walmart_amazon` does separate trained models from random weights. The narrower point is about resolution: on a benchmark whose entire range is 0.0183, a margin of that order is a large share of everything there is to measure, so it is a fragile basis for ranking and should be quoted with the range beside it rather than on its own.
+**4 of 4** are smaller than the gap. Those intervals exclude zero, so they are **real effects and this study does not call them noise** — `walmart_amazon` does separate trained models from random weights. The narrower point is about resolution: on a benchmark where the whole measured distance from a random network to the best tuned model is 0.0183, a margin of that order is a large share of it, so it is a fragile basis for ranking and should be quoted with that distance beside it rather than on its own. The percentages are ratios to one observed gap, not to a calibrated range — see the noise-floor preamble.
 
 This study does not refute those margins and does not call them noise — different models, measured intervals that exclude zero, and nothing here contradicts them. The recalibration is about **resolution**: quote a `walmart_amazon` margin with the trained-vs-random range beside it, because a margin that is a large fraction of everything the benchmark can measure is a fragile basis for ranking even when it is real. The earlier document is left as it stands; this is a recalibration note, not a rewrite.
 
