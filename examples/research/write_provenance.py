@@ -104,15 +104,41 @@ def _git(*args: str) -> str:
 
 
 def _worktree_blob(path: str) -> str:
-    """Hash the file **as it exists on disk**, not as committed.
+    """Hash the file **as it exists on disk**, not as committed; ``"absent"`` if deleted.
 
     ``run_lfm25.sh`` executes the working tree. Recording ``HEAD:<path>`` meant an
     uncommitted edit was invisible: both snapshots read the same committed blob
     and ``--finish`` certified the run unchanged while the rows came from code
     that was never committed. ``git hash-object`` gives the blob id the working
     file *would* have, so an uncommitted edit changes it. (Cross-model review.)
+
+    **A deleted input is a provenance change, not a crash.** ``git hash-object``
+    exits 128 on a missing file, and with ``check=True`` that propagated out of
+    ``--verify``/``--finish`` *while the snapshot was being built* — before
+    ``finished`` or ``verified_unchanged_during_run=false`` had been written. The
+    driver then committed measured rows beside a still-open start sidecar: the
+    one event most worth recording, deleting the code mid-run, was the one event
+    that guaranteed it went unrecorded. A sentinel makes the deletion a differing
+    blob, which is exactly what ``changed_during_run`` already reports.
+    (Cross-model review.)
+
+    Non-zero for a file that *does* exist stays fatal. Mapping every failure to
+    the sentinel would turn a permissions error or a broken git into "absent" —
+    a fail-open guard, which is the failure mode this repo keeps hitting.
     """
-    return _git("hash-object", str(REPO_ROOT / path))
+    target = REPO_ROOT / path
+    result = subprocess.run(
+        ["git", "hash-object", "--", str(target)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    if target.exists():
+        raise RuntimeError(f"git hash-object failed for {path}: {result.stderr.strip()}")
+    return "absent"
 
 
 def _tree_digest() -> dict[str, str]:
@@ -160,10 +186,7 @@ def _changed_drivers(before: dict[str, str], after: dict[str, str]) -> list[str]
 
 def _environment_blobs() -> dict[str, str]:
     """Blob hash per resolved-environment file, or ``"absent"`` when it is missing."""
-    return {
-        path: (_worktree_blob(path) if (REPO_ROOT / path).exists() else "absent")
-        for path in ENVIRONMENT
-    }
+    return {path: _worktree_blob(path) for path in ENVIRONMENT}
 
 
 def _blobs() -> dict[str, dict[str, str]]:
@@ -364,7 +387,21 @@ def finish(output: Path, partial: bool = False) -> None:
             "left untouched by this run predate the window described here."
         )
     after = _snapshot()
-    changed = [p for p, meta in doc["blobs"].items() if meta["blob"] != after["blobs"][p]["blob"]]
+    # Keyed on what the START snapshot actually observed, with the finish lookup
+    # DEFAULTED. ``after["blobs"][p]`` assumed the two snapshots carry identical
+    # key sets -- true only while ``TRACKED`` itself holds still, and this study's
+    # own harness was edited mid-sweep three times. A KeyError here is the same
+    # defect as the one the "absent" sentinel fixes: it aborts while BUILDING the
+    # verdict, before `finished` is written, so the event that caused it goes
+    # unrecorded. Not keyed on the union: a path the start snapshot never recorded
+    # has no baseline to differ from, and calling that "changed" would invent a
+    # finding out of a missing observation. (Cross-model review.)
+    after_blobs = after["blobs"]
+    changed = [
+        path
+        for path, meta in doc["blobs"].items()
+        if meta["blob"] != after_blobs.get(path, {}).get("blob", "absent")
+    ]
     changed += [
         f"{tree}/**"
         for tree, d in doc.get("tree_digests", {}).items()

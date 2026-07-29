@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -576,6 +577,44 @@ def _installed_transformers() -> str | None:
         return None
 
 
+def _outside_window(captured: str, window: tuple[str, str | None]) -> str | None:
+    """``"predates"`` / ``"postdates"`` if the probe fell outside the sweep, else ``None``.
+
+    **Compared as instants, not as strings.** The first version tested
+    ``started <= captured <= finished`` on the raw ISO-8601 text. That is only
+    ordering when every stamp carries the *same* UTC offset, which held here by
+    accident — one host, one sweep, all ``+02:00``. A probe written under a
+    different offset breaks it in both directions: with this window
+    (``01:18:12+02:00`` … ``03:44:51+02:00``), ``2026-07-29T02:00:00+00:00`` is
+    04:00 local — half an hour *after* the sweep closed — yet ``"02" < "03"``
+    reads it as comfortably inside, and ``2026-07-29T00:30:00+00:00`` is 02:30
+    local, inside the window, yet sorts before ``"01:18"`` and would be reported
+    as predating it. A wrong diagnosis and a silent pass from the same line.
+    (Cross-model review.)
+
+    Unparseable or offset-less stamps return ``"unanchored"`` rather than
+    crashing the render or silently passing: comparing a naive datetime with an
+    aware one raises, and the point of this function is disclosure.
+    """
+    stamps = [_instant(value) for value in (captured, window[0], window[1] or captured)]
+    if any(stamp is None for stamp in stamps):
+        return "unanchored"
+    at, started, finished = stamps
+    assert at is not None and started is not None and finished is not None  # narrowed above
+    if at < started:
+        return "predates"
+    return "postdates" if at > finished else None
+
+
+def _instant(value: str) -> datetime | None:
+    """Parse an ISO-8601 stamp to an aware datetime, or ``None`` if it is not one."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 def _probe_staleness(probe: dict[str, Any]) -> list[str]:
     """Disclose a load probe that does not belong to this measurement window.
 
@@ -605,21 +644,31 @@ def _probe_staleness(probe: dict[str, Any]) -> list[str]:
             "written before `captured_at` existed are in this state; re-running "
             "`uv run python examples/research/lfm25_load_probe.py` fixes it."
         )
-    elif (window := _window_bounds()) and not (window[0] <= captured <= (window[1] or captured)):
+    elif (window := _window_bounds()) and (side := _outside_window(captured, window)):
         started, finished = window
-        side = "predates" if captured < started else "postdates"
+        reason = {
+            "predates": "So the driver's refresh did not take — offline, a rate limit, or a "
+            "failure it logged and continued past — and these loading findings describe an "
+            "earlier environment than the scores do.",
+            "postdates": "So it was refreshed after the fact rather than inside the sweep: "
+            "it describes today's environment, which may not be the one the scores were "
+            "measured under.",
+            # Not "outside the window": one of the three stamps carries no UTC
+            # offset (or does not parse), so there is no instant to place it
+            # against and the honest answer is that the question is unanswerable
+            # here -- not that the probe is stale.
+            "unanchored": "One of those stamps carries no UTC offset, so they name wall "
+            "clocks rather than instants and cannot be ordered. This document therefore "
+            "cannot say whether the probe ran inside the sweep.",
+        }[side]
+        headline = (
+            "**This section's capture time cannot be placed against the measurement window.**"
+            if side == "unanchored"
+            else f"**This section {side} the measurement window.**"
+        )
         lines.append(
-            f"⚠️ **This section {side} the measurement window.** The probe was captured at "
-            f"`{captured}`; the sweep ran from `{started}` to `{finished or 'unclosed'}`. "
-            + (
-                "So the driver's refresh did not take — offline, a rate limit, or a failure "
-                "it logged and continued past — and these loading findings describe an "
-                "earlier environment than the scores do."
-                if captured < started
-                else "So it was refreshed after the fact rather than inside the sweep: it "
-                "describes today's environment, which may not be the one the scores were "
-                "measured under."
-            )
+            f"⚠️ {headline} The probe was captured at "
+            f"`{captured}`; the sweep ran from `{started}` to `{finished or 'unclosed'}`. " + reason
         )
     recorded = probe.get("transformers_version")
     installed = _installed_transformers()
@@ -767,6 +816,32 @@ def _correction_paragraph(
     ]
 
 
+def _control_reference(base: list[dict[str, Any]]) -> str | None:
+    """The one model the control's paired intervals are computed against, if there is one.
+
+    Every ``vs_reference_*`` interval in study B is paired with study B's own
+    baseline. The noise-floor table's *gap* column, by contrast, is the distance
+    to the best model in **study A** — a different model on some benchmarks
+    (``walmart_amazon``: gap to ``intfloat/e5-base-v2``, interval against
+    ``LiquidAI/LFM2.5-Embedding-350M``). Reading the interval as a significance
+    test for the gap's endpoint is therefore wrong, and the prose said exactly
+    that. This names the endpoint the interval *does* cover so both the column
+    header and the narrow-benchmark sentence can be about that model and no
+    other. (Cross-model review.)
+
+    ``None`` when the rows disagree — in which case nothing is named rather than
+    the wrong thing being named.
+    """
+    references = {
+        row["reference_model"]
+        for row in base
+        if row.get("model") == CONTROL
+        and row.get("vs_reference_ci_low") is not None
+        and row.get("reference_model")
+    }
+    return references.pop() if len(references) == 1 else None
+
+
 def _noise_floor_table(
     tuned: list[dict[str, Any]], base: list[dict[str, Any]]
 ) -> tuple[str, list[str], list[str], list[str], list[str]]:
@@ -798,15 +873,22 @@ def _noise_floor_table(
     (Cross-model review.)
     """
     benchmarks = sorted({row["benchmark"] for row in tuned} | {row["benchmark"] for row in base})
+    # The CI column names its own other endpoint. Headed "control's paired CI"
+    # beside a "best tuned model" column, it read as an interval about THAT
+    # model; it is not, on any benchmark where the best study-A model is not
+    # study B's baseline. (Cross-model review.)
+    reference = _control_reference(base)
+    ci_header = f"control's paired CI vs `{reference}`" if reference else "control's paired CI"
     table = (
         "| benchmark | random-init control | best tuned model | observed gap | "
-        "control's paired CI | verdict |\n"
+        f"{ci_header} | verdict |\n"
     )
     table += "|---|---|---|---|---|---|\n"
     uninformative: list[str] = []
     informative: list[str] = []
     narrow: list[str] = []
     inverted: list[str] = []
+    unpaired_rows: list[str] = []
     for benchmark in benchmarks:
         control = _best_arm(base, CONTROL, benchmark)
         # sorted(), not the raw set: iteration order over a set of strings varies
@@ -860,9 +942,23 @@ def _noise_floor_table(
         else:
             verdict = "separates, wide"
             informative.append(benchmark)
+        # ‡ marks the rows where the gap and the interval have DIFFERENT other
+        # endpoints, which is the whole content of the caveat below.
+        unpaired = reference is not None and best["model"] != reference
+        if unpaired:
+            unpaired_rows.append(benchmark)
         table += (
             f"| `{benchmark}` | {_fmt(floor)} | {_fmt(best['candidate_recall'])} "
-            f"(`{best['model']}`) | **{margin:+.4f}** | {_ci(low, high)} | {verdict} |\n"
+            f"(`{best['model']}`){' ‡' if unpaired else ''} | **{margin:+.4f}** | "
+            f"{_ci(low, high)} | {verdict} |\n"
+        )
+    if unpaired_rows:
+        table += (
+            f"\n‡ On {', '.join(f'`{b}`' for b in unpaired_rows)} the best tuned model is "
+            f"not `{reference}`, so **no paired interval was computed between the control "
+            f"and the model in that cell**. The gap there is a point estimate spanning the "
+            f"two studies; the interval beside it is about `{reference}` alone. Nothing in "
+            f"this table is a significance test against the named best model.\n"
         )
     return table, uninformative, informative, narrow, inverted
 
@@ -1196,14 +1292,34 @@ def _prior_walmart_row(noise_band: float | None = None) -> list[str]:
 
 
 def _licence_clauses() -> list[str]:
-    """The clauses that decide whether this may be a shipped default, quoted from the file."""
-    text = LICENSE.read_text()
-    wanted = (r'^"Threshold" shall mean', r"^5\. Commercial Use Limitation", r"^\(a\) ", r"^\(b\) ")
-    return [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip() and any(re.match(pattern, line.strip()) for pattern in wanted)
+    """Section 5 **entire**, plus the terms it turns on, quoted from the file.
+
+    Extracted by SECTION, not by line shape. The first version matched
+    ``^\\(a\\) `` / ``^\\(b\\) ``, which is the shape of every lettered
+    sub-clause in the document — so it pulled §4(a) and §4(b), redistribution
+    conditions with nothing to do with whether this can be a default, and,
+    keying on (a) and (b) alone, **silently dropped §5(c)**: the exemption for a
+    Qualified Non-Profit Organization's non-commercial or research use. Quoting a
+    restriction while omitting its exemption is a misquote, and the prose built
+    on it ("every langres user above $10M … outside the licence") was false for
+    exactly the readers the exemption is written for. (Cross-model review.)
+
+    The definitions are selected by whether §5's own text uses the defined term,
+    so they cannot drift out of step with it — no second hand-kept list.
+    """
+    lines = [line.strip() for line in LICENSE.read_text().splitlines() if line.strip()]
+    start = next(i for i, line in enumerate(lines) if re.match(r"^5\. Commercial Use", line))
+    end = next(
+        i for i, line in enumerate(lines[start + 1 :], start + 1) if re.match(r"^\d+\. ", line)
+    )
+    section = lines[start:end]
+    defined = [
+        line
+        for line in lines[:start]
+        if (match := re.match(r'^"([^"]+)" shall mean', line))
+        and any(match.group(1) in clause for clause in section)
     ]
+    return defined + section
 
 
 def _load_probe_section(probe: dict[str, Any]) -> str:
@@ -1263,6 +1379,9 @@ def render() -> str:
     # different cohorts.
     metric_revision = _assert_comparable_cohorts(tuned, base)
     noise_table, uninformative, informative, narrow, inverted = _noise_floor_table(tuned, base)
+    # The model the control's intervals are ACTUALLY paired against, so the prose
+    # below names it instead of "the tuned models".
+    reference = _control_reference(base)
     # Both are unusable for ranking, for OPPOSITE reasons: `blind` fails to
     # exclude zero, `inverted` excludes it the wrong way. One sentence cannot
     # justify both.
@@ -1512,10 +1631,24 @@ def render() -> str:
             f"(&lt;{NARROW_RANGE:.2f} of range): "
             f"{', '.join(f'`{b}`' for b in narrow) if narrow else 'none'}.** "
             f"This is a statement about **resolution, not significance**. The control *is* "
-            f"significantly below the tuned models here — the separation is real. But the "
-            f"whole trained-vs-random range is small, so a reported margin can be a large "
-            f"fraction of it, and a ranking built from differences of that size is fragile "
-            f"rather than meaningless."
+            # NOT "below the tuned models". The interval this verdict reads is
+            # paired with study B's baseline and nothing else; the best tuned
+            # model in the row can be a study-A model with no paired control
+            # interval at all -- as it is on `walmart_amazon`, where the gap runs
+            # to `intfloat/e5-base-v2` and the interval to
+            # `LiquidAI/LFM2.5-Embedding-350M`. Naming "the tuned models" claimed
+            # a comparison that was never computed. (Cross-model review.)
+            + (
+                f"significantly below `{reference}` — the model its paired interval is "
+                f"computed against, and the only one this column can speak for. "
+                if reference
+                else "significantly below the paired baseline its interval is computed "
+                "against — the only model this column can speak for. "
+            )
+            + "That separation is real. But the "
+            "whole trained-vs-random range is small, so a reported margin can be a large "
+            "fraction of it, and a ranking built from differences of that size is fragile "
+            "rather than meaningless."
         ),
         "",
         (
@@ -1560,16 +1693,21 @@ def render() -> str:
         "All three checkpoints declare `license: other`, `license_name: lfm1.0` (LFM Open "
         "License v1.0). The three repos ship a **byte-identical** LICENSE file, verified by "
         "sha256; it is committed beside this file as "
-        "`20260729_lfm25_license.txt`. The operative clauses, quoted from it:",
+        "`20260729_lfm25_license.txt`. Section 5 in full — the section that decides this "
+        "— with the terms it turns on, quoted from the file:",
         "",
     ]
     parts += [f"> {clause}" for clause in _licence_clauses()]
     parts += [
         "",
-        "**Consequence.** langres is Apache-2.0, which carries no such restriction. Making "
-        "any of these the `DEFAULT_EMBEDDING_MODEL` would silently put every langres user "
-        "above $10M annual revenue outside the licence on the *default* path — a condition "
-        "they never opted into. So:",
+        "**Consequence.** langres is Apache-2.0, which carries no such restriction. The "
+        "restriction is on **Commercial Use**, not on all use, and §5(c) exempts a "
+        "Qualified Non-Profit Organization using the model for non-commercial or research "
+        "purposes — but neither narrows the problem for a *default*, because a default is "
+        "the path taken by users who never read this section. Making any of these the "
+        "`DEFAULT_EMBEDDING_MODEL` would put the commercial use of every langres user "
+        "whose legal entity is at or above $10M annual revenue outside the licence, "
+        "silently, on the path they did not choose. So:",
         "",
         "- These models **may** be offered as an **opt-in named model with a licence note**.",
         "- They **must not** become `DEFAULT_EMBEDDING_MODEL`.",

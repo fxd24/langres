@@ -261,3 +261,58 @@ class TestEnvironmentIsObserved:
         PROV.finish(path)
 
         assert json.loads(path.read_text())["environment_unchanged_during_run"] is True
+
+
+class TestADeletedInputIsRecordedNotFatal:
+    """The one event most worth recording used to be the one guaranteed to be lost.
+
+    ``git hash-object`` exits 128 on a missing file. With ``check=True`` that
+    propagated out of ``--finish`` *while the snapshot was being built* — before
+    ``finished`` or ``verified_unchanged_during_run`` had been written — so the
+    driver committed measured rows beside a still-open start sidecar. Deleting a
+    tracked input mid-sweep is still fatal; it is now fatal **after** being
+    written down.
+    """
+
+    def test_a_missing_file_hashes_to_the_sentinel(self) -> None:
+        assert PROV._worktree_blob("does/not/exist.toml") == "absent"
+
+    def test_a_present_file_still_hashes_normally(self) -> None:
+        blob = PROV._worktree_blob("pyproject.toml")
+
+        assert blob != "absent"
+        assert len(blob) == 40
+
+    def test_the_deletion_is_persisted_as_a_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The start snapshot holds a real blob; the finish snapshot holds "absent"."""
+        monkeypatch.setattr(PROV, "TRACKED", ("docs/deleted-by-this-test.py",))
+        path = _sidecar(
+            tmp_path,
+            blobs={"docs/deleted-by-this-test.py": {"blob": "0" * 40, "last_commit": "abc"}},
+        )
+
+        with pytest.raises(SystemExit):
+            PROV.finish(path)
+
+        doc = json.loads(path.read_text())
+        assert doc["measurement_window"]["finished"] is not None
+        assert doc["verified_unchanged_during_run"] is False
+        assert doc["changed_during_run"] == ["docs/deleted-by-this-test.py"]
+
+    def test_a_real_git_failure_is_not_mapped_to_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fail-open is the failure mode this repo keeps hitting; the sentinel is not one."""
+        import subprocess
+
+        class _Broken:
+            returncode = 1
+            stdout = ""
+            stderr = "fatal: not a git repository"
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Broken())
+
+        with pytest.raises(RuntimeError, match="git hash-object failed"):
+            PROV._worktree_blob("pyproject.toml")

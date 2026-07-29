@@ -397,7 +397,7 @@ class TestNoiseFloor:
         report = REPORT.render()
 
         assert "resolution, not significance" in report
-        assert "the separation is real" in report
+        assert "That separation is real" in report
 
     def test_a_tie_credits_a_deterministic_model(self, artifacts: Path) -> None:
         """A tie must not hand the credit to whichever row was hashed first.
@@ -593,6 +593,33 @@ class TestLicenceBlocker:
         """The claim has to be re-checkable without the network."""
         assert REPORT.LICENSE.exists()
         assert '"Threshold" shall mean' in REPORT.LICENSE.read_text()
+
+    def test_the_nonprofit_exemption_is_quoted_with_the_restriction(self) -> None:
+        """§5(c) exempts a qualifying non-profit; a restriction quoted without it is a misquote.
+
+        The extraction keyed on ``^\\(a\\) ``/``^\\(b\\) ``, which is the shape of
+        every lettered sub-clause in the document — so it silently dropped
+        §5(c), and the prose built on it said every user above $10M was outside
+        the licence. False for exactly the readers the exemption is written for.
+        """
+        clauses = REPORT._licence_clauses()
+
+        assert any("Qualified Non-Profit Organization's use of the Work" in c for c in clauses)
+        assert any('"Qualified Non-Profit Organization" shall mean' in c for c in clauses)
+
+    def test_no_clause_from_another_section_is_quoted(self) -> None:
+        """§4's redistribution conditions have nothing to do with being a default."""
+        clauses = REPORT._licence_clauses()
+
+        assert not any("You must give any other recipients" in c for c in clauses)
+        assert not any("prominent notices stating that You changed" in c for c in clauses)
+
+    def test_the_consequence_is_scoped_to_commercial_use(self, artifacts: Path) -> None:
+        """The restriction is on Commercial Use, not on all use."""
+        report = REPORT.render()
+
+        assert "restriction is on **Commercial Use**, not on all use" in report
+        assert "put the commercial use of every langres user" in report
 
 
 class TestLoadVerification:
@@ -938,6 +965,88 @@ class TestLoadProbeStaleness:
         lines = REPORT._probe_staleness({"transformers_version": "4.57.6"})
 
         assert any("capture time was not recorded" in line for line in lines)
+
+
+class TestProbeTimestampsAreInstants:
+    """Two ISO-8601 stamps at different UTC offsets do not sort chronologically.
+
+    Every stamp in this study carries ``+02:00`` — one host, one sweep — so the
+    original string comparison was right by accident. Both of these cases are
+    inside this study's real window bounds and both come out **wrong** under a
+    lexicographic test, in opposite directions.
+    """
+
+    WINDOW = ("2026-07-29T01:18:12+02:00", "2026-07-29T03:44:51+02:00")
+
+    def test_a_probe_after_the_close_is_not_read_as_inside(self) -> None:
+        """04:00 local, half an hour past the close — but ``"02" < "03"`` as text."""
+        assert REPORT._outside_window("2026-07-29T02:00:00+00:00", self.WINDOW) == "postdates"
+
+    def test_a_probe_inside_the_window_is_not_read_as_predating(self) -> None:
+        """02:30 local, comfortably inside — but ``"00:30" < "01:18"`` as text."""
+        assert REPORT._outside_window("2026-07-29T00:30:00+00:00", self.WINDOW) is None
+
+    def test_z_suffix_and_offset_agree(self) -> None:
+        """The same instant written two ways must give the same verdict."""
+        assert REPORT._outside_window(
+            "2026-07-29T02:00:00Z", self.WINDOW
+        ) == REPORT._outside_window("2026-07-29T04:00:00+02:00", self.WINDOW)
+
+    def test_an_offsetless_stamp_is_disclosed_not_silently_passed(self) -> None:
+        """No offset means no instant. Comparing it would raise; ignoring it would lie."""
+        assert REPORT._outside_window("2026-07-29T02:00:00", self.WINDOW) == "unanchored"
+
+    def test_an_unparseable_stamp_is_disclosed(self) -> None:
+        assert REPORT._outside_window("last Tuesday", self.WINDOW) == "unanchored"
+
+    def test_the_unanchored_note_does_not_claim_staleness(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(REPORT, "_installed_transformers", lambda: "4.57.6")
+        monkeypatch.setattr(REPORT, "_window_bounds", lambda: self.WINDOW)
+
+        lines = REPORT._probe_staleness(
+            {"transformers_version": "4.57.6", "captured_at": "2026-07-29T02:00:00"}
+        )
+
+        assert any("cannot be placed against the measurement window" in line for line in lines)
+        assert not any("predates" in line or "postdates" in line for line in lines)
+
+
+class TestSignificanceIsPairedWithOneBaseline:
+    """The control's interval covers study B's baseline and no other model.
+
+    The noise-floor table's *gap* column runs to the best model in study A. On
+    every benchmark here those are different models, so "the control is
+    significantly below the tuned models" asserted a comparison that was never
+    computed.
+    """
+
+    def test_the_reference_is_read_from_the_rows(self, artifacts: Path) -> None:
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        assert REPORT._control_reference(base) == REPORT.BASE_BASELINE
+
+    def test_disagreeing_references_name_nothing(self) -> None:
+        """Naming the wrong model is worse than naming none."""
+        rows = [
+            {"model": REPORT.CONTROL, "reference_model": "a", "vs_reference_ci_low": -0.1},
+            {"model": REPORT.CONTROL, "reference_model": "b", "vs_reference_ci_low": -0.1},
+        ]
+
+        assert REPORT._control_reference(rows) is None
+
+    def test_the_narrow_verdict_names_the_paired_model(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "significantly below the tuned models" not in report
+        assert f"significantly below `{REPORT.BASE_BASELINE}`" in report
+
+    def test_rows_whose_best_model_is_unpaired_are_marked(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "no paired interval was computed between the control" in report
+        assert "Nothing in this table is a significance test against the named best model" in report
 
 
 class TestPartialWindowCaveat:

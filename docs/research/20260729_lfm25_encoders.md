@@ -195,18 +195,20 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 
 The control lives in study B and the tuned scores in study A, so this is the one figure here computed **across the two studies**. Both were measured at metric revision **1**; a mismatch refuses the render outright rather than publishing a cross-cohort subtraction with a footnote.
 
-| benchmark | random-init control | best tuned model | observed gap | control's paired CI | verdict |
+| benchmark | random-init control | best tuned model | observed gap | control's paired CI vs `LiquidAI/LFM2.5-Embedding-350M` | verdict |
 |---|---|---|---|---|---|
 | `abt_buy` | 0.9109 | 0.9741 (`LiquidAI/LFM2.5-Embedding-350M`) | **+0.0632** | [-0.0469, -0.0128] | separates, wide |
-| `amazon_google` | 0.7058 | 0.8338 (`intfloat/e5-base-v2`) | **+0.1281** | [-0.1445, -0.1047] | separates, wide |
-| `fodors_zagat` | 1.0000 | 1.0000 (`intfloat/e5-base-v2`) | **+0.0000** | [+0.0000, +0.0000] | **cannot separate trained from random** |
-| `walmart_amazon` | 0.8626 | 0.8810 (`intfloat/e5-base-v2`) | **+0.0183** | [-0.0275, -0.0072] | separates, but narrow (<0.05) |
-| `wdc_computers` | 0.5788 | 0.7363 (`intfloat/e5-base-v2`) | **+0.1575** | [-0.1488, -0.0978] | separates, wide |
+| `amazon_google` | 0.7058 | 0.8338 (`intfloat/e5-base-v2`) ‡ | **+0.1281** | [-0.1445, -0.1047] | separates, wide |
+| `fodors_zagat` | 1.0000 | 1.0000 (`intfloat/e5-base-v2`) ‡ | **+0.0000** | [+0.0000, +0.0000] | **cannot separate trained from random** |
+| `walmart_amazon` | 0.8626 | 0.8810 (`intfloat/e5-base-v2`) ‡ | **+0.0183** | [-0.0275, -0.0072] | separates, but narrow (<0.05) |
+| `wdc_computers` | 0.5788 | 0.7363 (`intfloat/e5-base-v2`) ‡ | **+0.1575** | [-0.1488, -0.0978] | separates, wide |
+
+‡ On `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers` the best tuned model is not `LiquidAI/LFM2.5-Embedding-350M`, so **no paired interval was computed between the control and the model in that cell**. The gap there is a point estimate spanning the two studies; the interval beside it is about `LiquidAI/LFM2.5-Embedding-350M` alone. Nothing in this table is a significance test against the named best model.
 
 
 **Benchmarks that cannot tell a trained retriever from random weights: `fodors_zagat`.** The control's paired interval there does not exclude zero, so a model ranking read off it is not evidence about any embedder.
 
-**Benchmarks that do separate the two, but narrowly (&lt;0.05 of range): `walmart_amazon`.** This is a statement about **resolution, not significance**. The control *is* significantly below the tuned models here — the separation is real. But the whole trained-vs-random range is small, so a reported margin can be a large fraction of it, and a ranking built from differences of that size is fragile rather than meaningless.
+**Benchmarks that do separate the two, but narrowly (&lt;0.05 of range): `walmart_amazon`.** This is a statement about **resolution, not significance**. The control *is* significantly below `LiquidAI/LFM2.5-Embedding-350M` — the model its paired interval is computed against, and the only one this column can speak for. That separation is real. But the whole trained-vs-random range is small, so a reported margin can be a large fraction of it, and a ranking built from differences of that size is fragile rather than meaningless.
 
 Benchmarks that separate the two with room to spare: `abt_buy`, `amazon_google`, `wdc_computers`.
 
@@ -245,16 +247,21 @@ The control also exists because this harness *shipped* the bug it now guards aga
 
 ## Licence — this model must not become the default
 
-All three checkpoints declare `license: other`, `license_name: lfm1.0` (LFM Open License v1.0). The three repos ship a **byte-identical** LICENSE file, verified by sha256; it is committed beside this file as `20260729_lfm25_license.txt`. The operative clauses, quoted from it:
+All three checkpoints declare `license: other`, `license_name: lfm1.0` (LFM Open License v1.0). The three repos ship a **byte-identical** LICENSE file, verified by sha256; it is committed beside this file as `20260729_lfm25_license.txt`. Section 5 in full — the section that decides this — with the terms it turns on, quoted from the file:
 
+> "License" shall mean the terms and conditions for use, reproduction, and distribution as defined by this document.
+> "Legal Entity" shall mean the union of the acting entity and all other entities that control, are controlled by, or are under common control with that entity. For the purposes of this definition, "control" means (i) the power, direct or indirect, to cause the direction or management of such entity, whether by contract or otherwise, or (ii) ownership of fifty percent (50%) or more of the outstanding shares, or (iii) beneficial ownership of such entity.
+> "Work" shall mean the work of authorship, whether in Source or Object form, made available under the License, as indicated by a copyright notice that is included in or attached to the work.
+> "Commercial Use" shall mean any use of the Work for direct or indirect commercial advantage or monetary compensation.
+> "Qualified Non-Profit Organization" shall mean a Legal Entity that is organized and operated exclusively for religious, charitable, scientific, testing for public safety, literary, or educational purposes, and which is exempt from federal income tax under Section 501(c)(3) of the United States Internal Revenue Code of 1986, as amended, or any equivalent non-profit or charitable organization in a foreign jurisdiction.
+> "Non-Commercial or Research Purposes" shall mean purposes that do not involve any use of the Work or a Derivative Work for Commercial Use.
 > "Threshold" shall mean annual revenue of 10 million United States dollars ($10,000,000) or more.
-> (a) You must give any other recipients of the Work or Derivative Works a copy of this License; and
-> (b) You must cause any modified files to carry prominent notices stating that You changed the files; and
 > 5. Commercial Use Limitation.
 > (a) The rights granted under this License for Commercial Use are conditioned upon You or Your Legal Entity not exceeding the Threshold.
 > (b) Any Commercial Use of the Work or a Derivative Work by a Legal Entity that exceeds the Threshold is not licensed under this Agreement.
+> (c) The Threshold shall not apply to a Qualified Non-Profit Organization's use of the Work or a Derivative Work for Non-Commercial or Research Purposes.
 
-**Consequence.** langres is Apache-2.0, which carries no such restriction. Making any of these the `DEFAULT_EMBEDDING_MODEL` would silently put every langres user above $10M annual revenue outside the licence on the *default* path — a condition they never opted into. So:
+**Consequence.** langres is Apache-2.0, which carries no such restriction. The restriction is on **Commercial Use**, not on all use, and §5(c) exempts a Qualified Non-Profit Organization using the model for non-commercial or research purposes — but neither narrows the problem for a *default*, because a default is the path taken by users who never read this section. Making any of these the `DEFAULT_EMBEDDING_MODEL` would put the commercial use of every langres user whose legal entity is at or above $10M annual revenue outside the licence, silently, on the path they did not choose. So:
 
 - These models **may** be offered as an **opt-in named model with a licence note**.
 - They **must not** become `DEFAULT_EMBEDDING_MODEL`.

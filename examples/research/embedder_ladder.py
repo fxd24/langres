@@ -3267,6 +3267,30 @@ def main(argv: Sequence[str] | None = None) -> None:
     # committed document -- unreproducible anywhere else, and a different string
     # on every clone.
     report_path = Path(args.report).resolve()
+    # ...and refused when the three paths do not agree, rather than derived from
+    # --report and quietly wrong about the other two. `run_ladder.sh` builds ALL
+    # THREE from one `LADDER_ARTIFACT` prefix, so the reproduce block has no way
+    # to express a study whose rows and report live at unrelated paths: printing
+    # `--rows <report-prefix>_rows.jsonl` would cite a file this run never read,
+    # and the two `run_ladder.sh` commands beside it could not be made correct at
+    # all. A report that mis-states which file it came from is exactly the defect
+    # every other guard in this harness exists to prevent, so this is a refusal
+    # and not a footnote. (Cross-model review.)
+    stem = str(report_path).removesuffix(".md")
+    expected = {
+        "--rows": Path(f"{stem}_rows.jsonl"),
+        "--reference": Path(f"{stem}_reference_recall.json"),
+    }
+    supplied = {"--rows": Path(args.rows).resolve(), "--reference": Path(args.reference).resolve()}
+    if mismatched := [flag for flag in expected if supplied[flag] != expected[flag]]:
+        parser.error(
+            "--rows, --report and --reference must share one artifact prefix: the report "
+            "prints reproduce commands that derive all three from it, and `run_ladder.sh` "
+            "takes a single LADDER_ARTIFACT. "
+            + "; ".join(
+                f"{flag} is {supplied[flag]}, expected {expected[flag]}" for flag in mismatched
+            )
+        )
     try:
         prefix = report_path.relative_to(REPO_ROOT)
     except ValueError:

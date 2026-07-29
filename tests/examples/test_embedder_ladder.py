@@ -2159,3 +2159,66 @@ class TestGeneratedReproduceCommands:
                         offenders.append(f"{name}: {command.splitlines()[0]}")
 
         assert not offenders, "reproduce commands that would exit 2:\n" + "\n".join(offenders)
+
+
+class TestArtifactPathsMustShareOnePrefix:
+    """A report that mis-states which rows it came from is unreproducible.
+
+    ``--rows``/``--report``/``--reference`` are independent flags, but the
+    reproduce block derives all three from ``--report``'s prefix and
+    ``run_ladder.sh`` takes a single ``LADDER_ARTIFACT``. Mismatched paths did
+    not merely render an odd command: the report cited a rows file the run never
+    read, and the two ``run_ladder.sh`` commands beside it could not be made
+    correct at all -- there is no way to express divergent paths in them.
+    """
+
+    @staticmethod
+    def _argv(rows: Path, report: Path, reference: Path) -> list[str]:
+        return [
+            "--render-only",
+            "--rows",
+            str(rows),
+            "--report",
+            str(report),
+            "--reference",
+            str(reference),
+        ]
+
+    def test_the_defaults_agree(self) -> None:
+        """The relation has to hold for the shipped defaults or nothing can run."""
+        stem = str(LADDER.DEFAULT_REPORT_PATH).removesuffix(".md")
+
+        assert str(LADDER.DEFAULT_ROWS_PATH) == f"{stem}_rows.jsonl"
+        assert str(LADDER.DEFAULT_REFERENCE_PATH) == f"{stem}_reference_recall.json"
+
+    def test_a_rows_path_from_another_study_is_refused(self, tmp_path: Path) -> None:
+        report = tmp_path / "study.md"
+        argv = self._argv(
+            tmp_path / "other_rows.jsonl", report, tmp_path / "study_reference_recall.json"
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            LADDER.main(argv)
+
+        assert excinfo.value.code == 2
+        assert not report.exists(), "the refusal must precede every write"
+
+    def test_a_reference_path_from_another_study_is_refused(self, tmp_path: Path) -> None:
+        argv = self._argv(
+            tmp_path / "study_rows.jsonl", tmp_path / "study.md", tmp_path / "other_reference.json"
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            LADDER.main(argv)
+
+        assert excinfo.value.code == 2
+
+    def test_matching_paths_are_accepted(self, tmp_path: Path) -> None:
+        """The guard must not fire on the combination the driver actually passes."""
+        rows = tmp_path / "study_rows.jsonl"
+        rows.write_text("")
+        report = tmp_path / "study.md"
+
+        LADDER.main(self._argv(rows, report, tmp_path / "study_reference_recall.json"))
+
+        assert report.exists()
