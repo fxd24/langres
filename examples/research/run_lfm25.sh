@@ -88,8 +88,13 @@ esac
 # measured the rows; the first commit touching the harness would silently
 # reattribute every row to code that never ran. Not stale: false.
 # ---------------------------------------------------------------------------
-say "opening the provenance window"
-uv run python examples/research/write_provenance.py --start || exit 1
+say "opening the provenance window (studies: $STUDY)"
+case "$STUDY" in
+  both) PROVENANCE_STUDIES="a b" ;;
+  *) PROVENANCE_STUDIES="$STUDY" ;;
+esac
+# shellcheck disable=SC2086  # word splitting is the interface here
+uv run python examples/research/write_provenance.py --start --studies $PROVENANCE_STUDIES || exit 1
 
 # ---------------------------------------------------------------------------
 # Study A -- the like-for-like comparison.

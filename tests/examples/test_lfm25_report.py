@@ -92,6 +92,20 @@ def artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             candidate_recall=0.85,
             reference_model="intfloat/e5-base-v2",
         ),
+        # The narrow-but-real benchmark. Its paired interval CONTAINS zero on
+        # purpose, so it is neither a win nor a loss and cannot perturb the
+        # win/loss assertions -- it exists to give the noise floor a third shape.
+        _row("intfloat/e5-base-v2", "walmart_amazon", candidate_recall=0.88),
+        _row(
+            "LiquidAI/LFM2.5-Embedding-350M",
+            "walmart_amazon",
+            parameter_count=354_483_968,
+            candidate_recall=0.875,
+            vs_reference_delta=-0.005,
+            vs_reference_ci_low=-0.02,
+            vs_reference_ci_high=0.01,
+            reference_model="intfloat/e5-base-v2",
+        ),
     ]
     base = [
         _row("LiquidAI/LFM2.5-Embedding-350M", "abt_buy", parameter_count=354_483_968),
@@ -105,19 +119,48 @@ def artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             vs_reference_ci_high=-0.43,
             reference_model="LiquidAI/LFM2.5-Embedding-350M",
         ),
-        # The noise floor: far below the tuned models on abt_buy, level with them
-        # on the saturated benchmark.
+        # The noise floor, in all THREE shapes the verdict distinguishes. The
+        # control's PAIRED INTERVAL decides whether a benchmark separates a trained
+        # retriever from random weights; the gap only says how much room there is.
+        # Conflating the two is what produced a published wrong claim, so each
+        # branch has a fixture.
+        #
+        # 1. Separates, with room: interval excludes zero, gap 0.67.
         _row(
             "random-init-control-350M",
             "abt_buy",
             parameter_count=354_483_968,
             candidate_recall=0.20,
+            vs_reference_delta=-0.60,
+            vs_reference_ci_low=-0.70,
+            vs_reference_ci_high=-0.50,
+            reference_model="LiquidAI/LFM2.5-Embedding-350M",
         ),
+        # 2. Cannot separate: interval CONTAINS zero. The gap (0.0020) is small
+        #    too, but it is the interval that decides.
         _row(
             "random-init-control-350M",
             "fodors_zagat",
             parameter_count=354_483_968,
             candidate_recall=0.988,
+            vs_reference_delta=-0.002,
+            vs_reference_ci_low=-0.01,
+            vs_reference_ci_high=0.01,
+            reference_model="LiquidAI/LFM2.5-Embedding-350M",
+        ),
+        # 3. Separates, but narrowly -- the walmart_amazon shape, and the branch
+        #    whose absence let a point-estimate cutoff call a benchmark blind when
+        #    its own measured interval excluded zero. Gap 0.02 (< NARROW_RANGE),
+        #    interval clear of zero.
+        _row(
+            "random-init-control-350M",
+            "walmart_amazon",
+            parameter_count=354_483_968,
+            candidate_recall=0.86,
+            vs_reference_delta=-0.02,
+            vs_reference_ci_low=-0.03,
+            vs_reference_ci_high=-0.01,
+            reference_model="LiquidAI/LFM2.5-Embedding-350M",
         ),
     ]
     probe = {
@@ -287,27 +330,54 @@ class TestStudySeparation:
 class TestNoiseFloor:
     """The random-init control is a first-class result, not an incident report."""
 
-    def test_a_benchmark_the_control_matches_is_called_uninformative(self, artifacts: Path) -> None:
-        # fodors_zagat: control 0.9880 vs best tuned 0.9900 -> margin 0.0020.
-        table, uninformative, informative = REPORT._noise_floor_table(
+    def test_a_benchmark_whose_control_interval_spans_zero_cannot_separate(
+        self, artifacts: Path
+    ) -> None:
+        # fodors_zagat: control 0.9880 vs best tuned 0.9900 -> margin 0.0020, and
+        # the control's paired interval [-0.01, +0.01] CONTAINS zero.
+        table, uninformative, informative, _narrow = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 
         assert "fodors_zagat" in uninformative
         assert "fodors_zagat" not in informative
-        assert "**uninformative**" in table
+        assert "**cannot separate trained from random**" in table
 
     def test_a_benchmark_with_real_range_is_called_usable(self, artifacts: Path) -> None:
         # abt_buy: control 0.2000 vs best tuned 0.8700 -> margin 0.6700.
-        _table, uninformative, informative = REPORT._noise_floor_table(
+        _table, uninformative, informative, narrow = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 
         assert "abt_buy" in informative
         assert "abt_buy" not in uninformative
+        assert "abt_buy" not in narrow
+
+    def test_a_narrow_benchmark_still_separates_and_is_not_called_blind(
+        self, artifacts: Path
+    ) -> None:
+        """The published-wrong-claim regression, pinned.
+
+        ``walmart_amazon``'s control sits only 0.02 below the best tuned model, but
+        its paired interval [-0.03, -0.01] excludes zero. An earlier version used
+        the 0.05 gap as the test and called the benchmark unable to tell a trained
+        retriever from random weights -- a point estimate standing in for a
+        variance estimate, contradicting the measured interval in the same rows.
+        Narrow is a statement about RESOLUTION; blind is a statement about
+        SIGNIFICANCE, and only the interval can make it.
+        """
+        table, uninformative, informative, narrow = REPORT._noise_floor_table(
+            REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
+        )
+
+        assert "walmart_amazon" in narrow
+        assert "walmart_amazon" in informative
+        assert "walmart_amazon" not in uninformative
+        narrow_line = next(ln for ln in table.splitlines() if "walmart_amazon" in ln)
+        assert "separates, but narrow" in narrow_line
 
     def test_the_margin_is_computed_not_asserted(self, artifacts: Path) -> None:
-        table, _uninformative, _informative = REPORT._noise_floor_table(
+        table, *_ = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 
@@ -317,8 +387,14 @@ class TestNoiseFloor:
     def test_the_write_up_names_the_unusable_benchmarks(self, artifacts: Path) -> None:
         report = REPORT.render()
 
-        assert "cannot support an embedder claim" in report
+        assert "cannot tell a trained retriever from random weights" in report
         assert "is not evidence" in report
+
+    def test_the_write_up_separates_resolution_from_significance(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "resolution, not significance" in report
+        assert "the separation is real" in report
 
     def test_a_tie_credits_a_deterministic_model(self, artifacts: Path) -> None:
         """A tie must not hand the credit to whichever row was hashed first.
@@ -335,7 +411,7 @@ class TestNoiseFloor:
         guarantee instead: ties break on model name, and the fixture's
         ``fodors_zagat`` is a real tie at 0.99.
         """
-        table, _, _ = REPORT._noise_floor_table(
+        table, *_ = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 

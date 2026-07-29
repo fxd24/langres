@@ -1,20 +1,39 @@
 {
   "_comment": [
-    "The code that produced the committed rows, captured as git BLOB hashes.",
+    "The code that produced the committed rows, captured as git BLOB hashes of the",
+    "WORKING TREE -- what the sweep actually executes, not what is committed.",
     "Written by examples/research/write_provenance.py as part of the MEASUREMENT",
     "path -- never derived from HEAD at render time, which would name whatever is",
     "checked out now rather than what measured the rows, and would silently",
     "reattribute every row after the next harness commit. Not stale: false.",
-    "A blob hash changes only when file CONTENT changes, which is the property",
-    "being recorded. `verified_unchanged_during_run` is the check that no tracked",
-    "file was edited mid-sweep; without it no single blob describes all the rows.",
+    "`tree_digests` covers every .py under the tracked trees, because naming two",
+    "files is not the measurement's code identity: the harness executes blockers,",
+    "indexes, embedders and metrics that can change what a row means.",
+    "`verified_unchanged_during_run` is the check that none of it moved mid-sweep;",
+    "without it no single hash describes all the rows.",
+    "`driver_digest` covers the *.sh sweep drivers separately, because they decide",
+    "which cells RAN rather than what a number means. A driver edit is recorded in",
+    "`drivers_unchanged_during_run` and is NOT fatal -- drivers get repaired",
+    "mid-sweep -- but it is never silent: the *.py-only digest used to certify such",
+    "an edit as 'unchanged'.",
     "",
     "CAPTURED RETROACTIVELY: this sweep finished before write_provenance.py",
     "existed, so its --start/--finish hooks did not run. Values are derived from",
     "git at the measuring commit (see head_when_sweep_started), and the",
     "unchanged-during-run check was performed after the fact with",
-    "`git log --since=<started> --until=<finished> -- <tracked paths>`, which is",
-    "empty. Future runs capture this automatically via run_lfm25.sh."
+    "`git log --since=<started> --until=<finished> -- <tracked trees>`, which is",
+    "empty. Future runs capture this automatically via run_lfm25.sh.",
+    "The tree digests are therefore COMMIT-derived, not working-tree-derived:",
+    "they reproduce from a clean checkout of head_when_sweep_started, but they",
+    "cannot see uncommitted edits that may have been present while the sweep",
+    "ran. `dirty_at_start` is null for that reason -- unobservable after the",
+    "fact, and recording [] would assert a clean tree that nobody checked.",
+    "",
+    "The sweep DRIVERS were edited while this run was in flight (see",
+    "drivers_changed_during_run): the memory guard was rewritten after an OS",
+    "kill, a resume script was added, and the study selector landed. Those",
+    "changed which cells ran and when -- not what any number means, which is",
+    "why the *.py digests above are still stable and these are reported apart."
   ],
   "measurement_window": {
     "started": "2026-07-29T01:18:12+02:00",
@@ -26,6 +45,7 @@
     "samples": 1000,
     "resampled_unit": "gold cluster"
   },
+  "dirty_at_start": null,
   "blobs": {
     "src/langres/experiments/statistics.py": {
       "blob": "5436b938b70e837cc9c7ba81792305fad82ec672",
@@ -38,5 +58,20 @@
       "last_commit_date": "2026-07-29T01:17:51+02:00"
     }
   },
-  "verified_unchanged_during_run": true
+  "tree_digests": {
+    "src/langres": "439605d11803d5ed979d182a2ea4322ee8e5ad1f46c15290d45fec7417834f7d",
+    "examples/research": "fbb18fc14a753a0a20ff61c0b2599b6e915f6ecbf11fa51b63acc5af3addbe04"
+  },
+  "driver_digest": "e2c53907cfce8c5385f727ea83ba5d974b5b65806ff01c29a1d4886f3b1d5abc",
+  "studies_measured": [
+    "a",
+    "b"
+  ],
+  "verified_unchanged_during_run": true,
+  "drivers_unchanged_during_run": false,
+  "drivers_changed_during_run": [
+    "2a6ecb3 feat(lfm25): LFM25_STUDY selector so a partial run can finish the rest [examples/research/run_lfm25.sh]",
+    "6012078 chore(lfm25): resume script for the cell lost to the OS kill [examples/research/resume_lfm25_study_a.sh]",
+    "1491883 fix(ladder): guard on available memory, not on the swap derivative [examples/research/run_ladder.sh]"
+  ]
 }

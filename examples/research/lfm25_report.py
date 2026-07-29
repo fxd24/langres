@@ -86,18 +86,46 @@ def _provenance_section() -> list[str]:
             f"{meta['last_commit_date']} |"
         )
     stable = doc.get("verified_unchanged_during_run")
+    # The sidecar can say it was reconstructed AFTER the fact. Printing the
+    # measurement-path sentence over such a sidecar would overstate the provenance
+    # of exactly the rows it describes -- the document asserting a stronger
+    # guarantee than the artifact it reads. (Cross-model review.)
+    retrospective = any("CAPTURED RETROACTIVELY" in line for line in doc.get("_comment", []))
     lines += [
         "",
         "A **blob** hash, not a commit: it changes only when the file's *content* does, "
-        "which is the property being recorded. Written by "
-        "`examples/research/write_provenance.py` as part of the **measurement** path — "
-        "not derived from `HEAD` at render time, which would name whatever is checked "
-        "out now instead of what measured the rows.",
+        "which is the property being recorded.",
     ]
-    if stable is True:
+    if retrospective:
         lines.append(
-            "No tracked file changed while the sweep was running, so these hashes apply "
-            "to every row in both studies."
+            "**Captured retrospectively.** This sweep finished before "
+            "`examples/research/write_provenance.py` existed, so its `--start`/`--finish` "
+            "hooks did not run over these rows. The hashes are derived from git at the "
+            "commit that was `HEAD` when the sweep began, and the stability check below "
+            "was reconstructed afterwards from `git log` over the measurement window "
+            "rather than observed live. Later runs capture it on the measurement path; "
+            "this one did not, and says so."
+        )
+    else:
+        lines.append(
+            "Written by `examples/research/write_provenance.py` as part of the "
+            "**measurement** path — not derived from `HEAD` at render time, which would "
+            "name whatever is checked out now instead of what measured the rows."
+        )
+    studies = doc.get("studies_measured")
+    if stable is True:
+        scope = (
+            "every row in both studies"
+            if studies in (None, ["a", "b"])
+            else (
+                f"the rows re-measured in study {', '.join(s.upper() for s in studies)} only — "
+                "the other study's rows predate this window and their provenance is not "
+                "described here"
+            )
+        )
+        lines.append(
+            f"No tracked file changed while the sweep was running, so these hashes apply to "
+            f"{scope}."
         )
     elif stable is False:
         lines.append(
@@ -110,6 +138,45 @@ def _provenance_section() -> list[str]:
             "The mid-sweep stability of these files was **not recorded**, so it is not "
             "claimed here."
         )
+
+    digests = doc.get("tree_digests")
+    if digests:
+        lines += [
+            "",
+            "Naming two files is not the measurement's code identity — the harness also "
+            "executes the blockers, indexes, embedders and metrics that decide what a row "
+            "*means*. So whole trees are digested, over every `.py` they contain:",
+            "",
+            "| tree | digest (`.py` contents) |",
+            "|---|---|",
+        ]
+        lines += [f"| `{tree}/**` | `{d[:16]}` |" for tree, d in digests.items()]
+
+    drivers_ok = doc.get("drivers_unchanged_during_run")
+    if drivers_ok is not None:
+        lines.append("")
+        if drivers_ok:
+            lines.append(
+                "The shell **drivers** are digested separately (`driver_digest`), because they "
+                "decide which cells *ran* rather than what a number means. They did not change "
+                "while the sweep was in flight."
+            )
+        else:
+            changed = doc.get("drivers_changed_during_run", [])
+            lines += [
+                "The shell **drivers** are digested separately (`driver_digest`), because they "
+                "decide which cells *ran* rather than what a number means — and unlike the "
+                "measurement code, **they did change while this sweep was in flight**:",
+                "",
+                *[f"- `{c}`" for c in changed],
+                "",
+                "The rows stand: no `.py` moved, so every number still means what the table says "
+                "it means. What this disclosure costs is the claim that re-running the *committed* "
+                "driver reproduces this exact schedule of cells — it does not, because part of "
+                "that schedule was a recovery from an OS kill. It is reported rather than "
+                "swallowed because the `.py`-only digest this study started with certified these "
+                "same edits as “unchanged”.",
+            ]
     return lines
 
 
@@ -304,26 +371,45 @@ def _unpaired_arms(
 
 CONTROL = "random-init-control-350M"
 
+#: Below this, the tuned-vs-random gap is small enough that a reported margin can
+#: be a large fraction of the benchmark's whole range. It is a **resolution**
+#: label, not a significance test — significance comes from the control's paired
+#: interval, which is a measured quantity. Keeping the two apart is the point: an
+#: earlier version used this threshold AS a significance test and contradicted
+#: its own intervals.
+NARROW_RANGE = 0.05
+
 
 def _noise_floor_table(
     tuned: list[dict[str, Any]], base: list[dict[str, Any]]
-) -> tuple[str, list[str], list[str]]:
-    """Every benchmark's tuned-model spread against the random-init noise floor.
+) -> tuple[str, list[str], list[str], list[str]]:
+    """Every benchmark's tuned-model spread against the random-init control.
 
-    The control is the same 350M architecture with seeded random weights. Its
-    recall is what a benchmark hands a model that knows nothing, so the gap
-    between it and the best tuned model is the benchmark's entire usable
-    dynamic range. Where that gap is ~0, the benchmark cannot separate a trained
-    retriever from a random feature map and carries no evidence about any
-    embedder.
+    The control is the same 350M architecture with seeded random weights, so the
+    gap between it and the best tuned model is the benchmark's whole dynamic
+    range. **Two different questions are kept separate here**, because collapsing
+    them produced a wrong claim:
 
-    Returns ``(table, uninformative, informative)``.
+    1. *Can this benchmark tell a trained retriever from random weights at all?*
+       Answered by the control's **paired interval** — measured uncertainty.
+    2. *How much room is there between them?* Answered by the gap, which is a
+       point estimate and says nothing about variance.
+
+    A benchmark can separate the two and still have very little room
+    (``walmart_amazon``: the control is significantly below the tuned model, and
+    the whole range is 0.018). Only a benchmark failing (1) carries no evidence.
+
+    Returns ``(table, uninformative, informative, narrow)``.
     """
     benchmarks = sorted({row["benchmark"] for row in tuned} | {row["benchmark"] for row in base})
-    table = "| benchmark | random-init control | best tuned model | margin over noise |\n"
-    table += "|---|---|---|---|\n"
+    table = (
+        "| benchmark | random-init control | best tuned model | range | "
+        "control's paired CI | verdict |\n"
+    )
+    table += "|---|---|---|---|---|---|\n"
     uninformative: list[str] = []
     informative: list[str] = []
+    narrow: list[str] = []
     for benchmark in benchmarks:
         control = _best_arm(base, CONTROL, benchmark)
         # sorted(), not the raw set: iteration order over a set of strings varies
@@ -339,22 +425,39 @@ def _noise_floor_table(
             if (cell := _best_arm(tuned, model, benchmark))
         ]
         if control is None or not tuned_cells:
-            table += f"| `{benchmark}` | — | — | — |\n"
+            table += f"| `{benchmark}` | — | — | — | — | — |\n"
             continue
         floor = control["candidate_recall"]
         best = max(tuned_cells, key=lambda c: (c["candidate_recall"], c["model"]))
         margin = best["candidate_recall"] - floor
-        # 0.05 is a judgement call, stated rather than hidden: a benchmark whose
-        # entire tuned-vs-random range is under five recall points cannot support
-        # a claim about a model, because the measurement's own noise floor is
-        # inside the effect it would have to detect.
-        verdict = "**uninformative**" if margin < 0.05 else "usable"
-        (uninformative if margin < 0.05 else informative).append(benchmark)
+        # The verdict comes from the control's own PAIRED INTERVAL, not from the
+        # size of the gap. An earlier version used a bare `margin < 0.05`
+        # point-estimate cutoff and called `walmart_amazon` unable to tell a
+        # trained retriever from random weights -- while this study's own
+        # intervals for the control there are [-0.0275, -0.0072] and
+        # [-0.0295, -0.0099], BOTH excluding zero. The gap between one seeded
+        # control and the best tuned score is not a variance estimate, and using
+        # it as one contradicted the measured uncertainty sitting in the same
+        # rows. (Cross-model review.) A small gap makes a benchmark
+        # low-resolution, not blind.
+        low = control.get("vs_reference_ci_low")
+        high = control.get("vs_reference_ci_high")
+        separates = low is not None and high is not None and (low > 0 or high < 0)
+        if not separates:
+            verdict = "**cannot separate trained from random**"
+            uninformative.append(benchmark)
+        elif margin < NARROW_RANGE:
+            verdict = f"separates, but narrow (<{NARROW_RANGE:.2f})"
+            narrow.append(benchmark)
+            informative.append(benchmark)
+        else:
+            verdict = "separates, wide"
+            informative.append(benchmark)
         table += (
             f"| `{benchmark}` | {_fmt(floor)} | {_fmt(best['candidate_recall'])} "
-            f"(`{best['model']}`) | **{margin:+.4f}** {verdict} |\n"
+            f"(`{best['model']}`) | **{margin:+.4f}** | {_ci(low, high)} | {verdict} |\n"
         )
-    return table, uninformative, informative
+    return table, uninformative, informative, narrow
 
 
 #: The control is the 350M architecture. Only the 350M encoder is therefore a
@@ -432,16 +535,16 @@ def _noise_band_warning(tuned: list[dict[str, Any]], base: list[dict[str, Any]])
         if margin <= 0:
             lines.append(
                 f"- On `{benchmark}`, the best tuned model does not beat random weights "
-                f"at all (margin {margin:+.4f}), so **no margin measured there clears "
-                f"noise** — any ranking read off it is uninterpretable."
+                f"at all (range {margin:+.4f}) — any ranking read off it is "
+                f"uninterpretable."
             )
         else:
             if benchmark == "walmart_amazon":
                 walmart_band = margin
             lines.append(
-                f"- On `{benchmark}`, **any margin below ~{margin:.4f} is inside the "
-                f"noise band** — that is the entire distance between the best tuned "
-                f"model and a network with random weights."
+                f"- On `{benchmark}`, the **entire** distance between the best tuned "
+                f"model and a network with random weights is **{margin:.4f}**. A margin "
+                f"is best read as a fraction of that, not in isolation."
             )
     if not lines:
         return []
@@ -455,10 +558,13 @@ def _noise_band_warning(tuned: list[dict[str, Any]], base: list[dict[str, Any]])
         "",
         *_prior_walmart_row(walmart_band),
         "",
-        "That is not a claim this study can refute — different models, and the margin may "
-        "well be real. But it is not separable from noise on the evidence available, and "
-        "should not be cited as a model ranking. The earlier document is left as it "
-        "stands; this is a recalibration note, not a rewrite.",
+        "This study does not refute those margins and does not call them noise — different "
+        "models, measured intervals that exclude zero, and nothing here contradicts them. "
+        "The recalibration is about **resolution**: quote a `walmart_amazon` margin with "
+        "the trained-vs-random range beside it, because a margin that is a large fraction "
+        "of everything the benchmark can measure is a fragile basis for ranking even when "
+        "it is real. The earlier document is left as it stands; this is a recalibration "
+        "note, not a rewrite.",
     ]
 
 
@@ -488,23 +594,28 @@ def _prior_walmart_row(noise_band: float | None = None) -> list[str]:
         return []
     band = noise_band if noise_band is not None else 0.0
     below = [m for m in wins if float(m.group(2)) < band]
-    spilling = [m for m in wins if float(m.group(4)) > band]
     return [
         "",
-        "Concretely, every `walmart_amazon` margin that study reports as a win, with its interval:",
+        "Concretely, every `walmart_amazon` margin that study reports as a win, with its "
+        f"interval, set against the {band:.4f} total trained-vs-random range measured here:",
         "",
         *[
             f"- `{m.group(1)}`: **{m.group(2)}** [{m.group(3)}, {m.group(4)}]"
-            + ("  ← point estimate inside the noise band" if float(m.group(2)) < band else "")
+            + (
+                f"  ← {float(m.group(2)) / band:.0%} of the benchmark's entire range"
+                if band > 0
+                else ""
+            )
             for m in sorted(wins, key=lambda m: m.group(1))
         ],
         "",
-        f"**{len(below)} of {len(wins)}** have a *point estimate* below the "
-        f"{band:.4f} noise band. Stated precisely, because the weaker claim is the true "
-        f"one: {len(spilling)} of those intervals do extend past the band at their upper "
-        f"end, so this is not proof that any particular margin is noise — it is that the "
-        f"benchmark cannot distinguish these models from an untrained network with the "
-        f"resolution it has.",
+        f"**{len(below)} of {len(wins)}** are smaller than the whole range. Those "
+        f"intervals exclude zero, so they are **real effects and this study does not call "
+        f"them noise** — `walmart_amazon` does separate trained models from random "
+        f"weights. The narrower point is about resolution: on a benchmark whose entire "
+        f"range is {band:.4f}, a margin of that order is a large share of everything "
+        f"there is to measure, so it is a fragile basis for ranking and should be quoted "
+        f"with the range beside it rather than on its own.",
     ]
 
 
@@ -571,7 +682,7 @@ def render() -> str:
     expected_by_chance = 0.05 * n_tests
 
     base_interval_table, base_degenerate = _interval_table(base, BASE_BASELINE)
-    noise_table, uninformative, informative = _noise_floor_table(tuned, base)
+    noise_table, uninformative, informative, narrow = _noise_floor_table(tuned, base)
 
     parts = [
         "# LiquidAI LFM2.5 encoders on ER candidate blocking",
@@ -764,17 +875,39 @@ def render() -> str:
         noise_table,
         "",
         (
-            f"**Benchmarks that cannot support an embedder claim: "
-            f"{', '.join(f'`{b}`' for b in uninformative) if uninformative else 'none'}.** "
-            f"On these the whole tuned-vs-random range is under five recall points, so the "
-            f"measurement's own noise floor sits inside any effect it would have to detect. "
-            f"A model ranking read off them is not evidence."
+            f"**Benchmarks that cannot tell a trained retriever from random weights: "
+            f"{', '.join(f'`{b}`' for b in uninformative) if uninformative else '**none**'}.** "
+            f"The control's paired interval there does not exclude zero, so a model ranking "
+            f"read off {'it' if len(uninformative) == 1 else 'them'} is not evidence about any "
+            f"embedder."
         ),
         "",
         (
-            f"Benchmarks with usable range: "
-            f"{', '.join(f'`{b}`' for b in informative) if informative else '**none**'}."
+            f"**Benchmarks that do separate the two, but narrowly "
+            f"(&lt;{NARROW_RANGE:.2f} of range): "
+            f"{', '.join(f'`{b}`' for b in narrow) if narrow else 'none'}.** "
+            f"This is a statement about **resolution, not significance**. The control *is* "
+            f"significantly below the tuned models here — the separation is real. But the "
+            f"whole trained-vs-random range is small, so a reported margin can be a large "
+            f"fraction of it, and a ranking built from differences of that size is fragile "
+            f"rather than meaningless."
         ),
+        "",
+        (
+            f"Benchmarks that separate the two with room to spare: "
+            f"{', '.join(f'`{b}`' for b in informative if b not in narrow) or '**none**'}."
+        ),
+        "",
+        "**A correction, stated plainly because it was published the other way round for "
+        "one revision of this document.** An earlier version called a benchmark "
+        "*uninformative* whenever the tuned-vs-random gap was under five recall points, and "
+        "on that basis said `walmart_amazon` could not distinguish a trained retriever from "
+        "noise. That was wrong, and this study's own rows say so: the control's paired "
+        "intervals on `walmart_amazon` are `[-0.0275, -0.0072]` and `[-0.0295, -0.0099]`, "
+        "both excluding zero. The gap between one seeded control and the best tuned score is "
+        "a point estimate, not a variance estimate, and it cannot be used as a significance "
+        "test — least of all against measured intervals sitting in the same file. Only "
+        "`fodors_zagat` genuinely fails to separate.",
         "",
         "**The control also outscores the real base encoders.** All three wear the same "
         "untrained mean-pooling head, so pooling is held fixed throughout; whether "

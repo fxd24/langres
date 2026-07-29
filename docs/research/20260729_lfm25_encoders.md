@@ -187,18 +187,22 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 
 **A named finding, not a footnote.** `random-init-control-350M` is the LFM2.5 350M architecture with **seeded random weights and no training whatsoever**, run through the identical pipeline. A random transformer is a random feature map: near-duplicate strings still land near each other, so it retrieves real candidates. Its recall is therefore what a benchmark hands a model that knows *nothing*, and the gap above it is the benchmark's entire usable dynamic range.
 
-| benchmark | random-init control | best tuned model | margin over noise |
-|---|---|---|---|
-| `abt_buy` | 0.9109 | 0.9741 (`LiquidAI/LFM2.5-Embedding-350M`) | **+0.0632** usable |
-| `amazon_google` | 0.7058 | 0.8338 (`intfloat/e5-base-v2`) | **+0.1281** usable |
-| `fodors_zagat` | 1.0000 | 1.0000 (`intfloat/e5-base-v2`) | **+0.0000** **uninformative** |
-| `walmart_amazon` | 0.8626 | 0.8810 (`intfloat/e5-base-v2`) | **+0.0183** **uninformative** |
-| `wdc_computers` | 0.5788 | 0.7363 (`intfloat/e5-base-v2`) | **+0.1575** usable |
+| benchmark | random-init control | best tuned model | range | control's paired CI | verdict |
+|---|---|---|---|---|---|
+| `abt_buy` | 0.9109 | 0.9741 (`LiquidAI/LFM2.5-Embedding-350M`) | **+0.0632** | [-0.0469, -0.0128] | separates, wide |
+| `amazon_google` | 0.7058 | 0.8338 (`intfloat/e5-base-v2`) | **+0.1281** | [-0.1445, -0.1047] | separates, wide |
+| `fodors_zagat` | 1.0000 | 1.0000 (`intfloat/e5-base-v2`) | **+0.0000** | [+0.0000, +0.0000] | **cannot separate trained from random** |
+| `walmart_amazon` | 0.8626 | 0.8810 (`intfloat/e5-base-v2`) | **+0.0183** | [-0.0275, -0.0072] | separates, but narrow (<0.05) |
+| `wdc_computers` | 0.5788 | 0.7363 (`intfloat/e5-base-v2`) | **+0.1575** | [-0.1488, -0.0978] | separates, wide |
 
 
-**Benchmarks that cannot support an embedder claim: `fodors_zagat`, `walmart_amazon`.** On these the whole tuned-vs-random range is under five recall points, so the measurement's own noise floor sits inside any effect it would have to detect. A model ranking read off them is not evidence.
+**Benchmarks that cannot tell a trained retriever from random weights: `fodors_zagat`.** The control's paired interval there does not exclude zero, so a model ranking read off it is not evidence about any embedder.
 
-Benchmarks with usable range: `abt_buy`, `amazon_google`, `wdc_computers`.
+**Benchmarks that do separate the two, but narrowly (&lt;0.05 of range): `walmart_amazon`.** This is a statement about **resolution, not significance**. The control *is* significantly below the tuned models here — the separation is real. But the whole trained-vs-random range is small, so a reported margin can be a large fraction of it, and a ranking built from differences of that size is fragile rather than meaningless.
+
+Benchmarks that separate the two with room to spare: `abt_buy`, `amazon_google`, `wdc_computers`.
+
+**A correction, stated plainly because it was published the other way round for one revision of this document.** An earlier version called a benchmark *uninformative* whenever the tuned-vs-random gap was under five recall points, and on that basis said `walmart_amazon` could not distinguish a trained retriever from noise. That was wrong, and this study's own rows say so: the control's paired intervals on `walmart_amazon` are `[-0.0275, -0.0072]` and `[-0.0295, -0.0099]`, both excluding zero. The gap between one seeded control and the best tuned score is a point estimate, not a variance estimate, and it cannot be used as a significance test — least of all against measured intervals sitting in the same file. Only `fodors_zagat` genuinely fails to separate.
 
 **The control also outscores the real base encoders.** All three wear the same untrained mean-pooling head, so pooling is held fixed throughout; whether *pretraining* is the only remaining difference depends on the backbone, and is stated per row:
 
@@ -214,20 +218,20 @@ This reframes `fodors_zagat` specifically. It was already labelled *saturated* �
 
 **Recalibrating the earlier portfolio study.** `docs/research/20260727_embedder_ladder.md` reports per-benchmark margins that predate any noise-floor control, so it has no way to say which of them clear noise. Read against this control:
 
-- On `fodors_zagat`, the best tuned model does not beat random weights at all (margin +0.0000), so **no margin measured there clears noise** — any ranking read off it is uninterpretable.
-- On `walmart_amazon`, **any margin below ~0.0183 is inside the noise band** — that is the entire distance between the best tuned model and a network with random weights.
+- On `fodors_zagat`, the best tuned model does not beat random weights at all (range +0.0000) — any ranking read off it is uninterpretable.
+- On `walmart_amazon`, the **entire** distance between the best tuned model and a network with random weights is **0.0183**. A margin is best read as a fraction of that, not in isolation.
 
 
-Concretely, every `walmart_amazon` margin that study reports as a win, with its interval:
+Concretely, every `walmart_amazon` margin that study reports as a win, with its interval, set against the 0.0183 total trained-vs-random range measured here:
 
-- `BAAI/bge-base-en-v1.5`: **+0.0098** [+0.0020, +0.0187]  ← point estimate inside the noise band
-- `BAAI/bge-small-en-v1.5`: **+0.0118** [+0.0033, +0.0213]  ← point estimate inside the noise band
-- `google/embeddinggemma-300m`: **+0.0092** [+0.0004, +0.0189]  ← point estimate inside the noise band
-- `intfloat/e5-base-v2`: **+0.0159** [+0.0078, +0.0246]  ← point estimate inside the noise band
+- `BAAI/bge-base-en-v1.5`: **+0.0098** [+0.0020, +0.0187]  ← 54% of the benchmark's entire range
+- `BAAI/bge-small-en-v1.5`: **+0.0118** [+0.0033, +0.0213]  ← 64% of the benchmark's entire range
+- `google/embeddinggemma-300m`: **+0.0092** [+0.0004, +0.0189]  ← 50% of the benchmark's entire range
+- `intfloat/e5-base-v2`: **+0.0159** [+0.0078, +0.0246]  ← 87% of the benchmark's entire range
 
-**4 of 4** have a *point estimate* below the 0.0183 noise band. Stated precisely, because the weaker claim is the true one: 4 of those intervals do extend past the band at their upper end, so this is not proof that any particular margin is noise — it is that the benchmark cannot distinguish these models from an untrained network with the resolution it has.
+**4 of 4** are smaller than the whole range. Those intervals exclude zero, so they are **real effects and this study does not call them noise** — `walmart_amazon` does separate trained models from random weights. The narrower point is about resolution: on a benchmark whose entire range is 0.0183, a margin of that order is a large share of everything there is to measure, so it is a fragile basis for ranking and should be quoted with the range beside it rather than on its own.
 
-That is not a claim this study can refute — different models, and the margin may well be real. But it is not separable from noise on the evidence available, and should not be cited as a model ranking. The earlier document is left as it stands; this is a recalibration note, not a rewrite.
+This study does not refute those margins and does not call them noise — different models, measured intervals that exclude zero, and nothing here contradicts them. The recalibration is about **resolution**: quote a `walmart_amazon` margin with the trained-vs-random range beside it, because a margin that is a large fraction of everything the benchmark can measure is a fragile basis for ranking even when it is real. The earlier document is left as it stands; this is a recalibration note, not a rewrite.
 
 The control also exists because this harness *shipped* the bug it now guards against: a substitution that silently left random weights running scored 0.9911 recall and 0.9971 AUC on `fodors_zagat`, and nothing in the row looked wrong. A permanent noise-floor arm is how that stays visible instead of being rediscovered.
 
@@ -262,8 +266,24 @@ The paired intervals were computed by `langres.experiments.statistics.paired_ent
 | `src/langres/experiments/statistics.py` | `5436b938b70e` | 9192ebf 2026-07-28T16:47:58+02:00 |
 | `examples/research/embedder_ladder.py` | `26ee49f473e7` | c23d95e 2026-07-29T01:17:51+02:00 |
 
-A **blob** hash, not a commit: it changes only when the file's *content* does, which is the property being recorded. Written by `examples/research/write_provenance.py` as part of the **measurement** path — not derived from `HEAD` at render time, which would name whatever is checked out now instead of what measured the rows.
+A **blob** hash, not a commit: it changes only when the file's *content* does, which is the property being recorded.
+**Captured retrospectively.** This sweep finished before `examples/research/write_provenance.py` existed, so its `--start`/`--finish` hooks did not run over these rows. The hashes are derived from git at the commit that was `HEAD` when the sweep began, and the stability check below was reconstructed afterwards from `git log` over the measurement window rather than observed live. Later runs capture it on the measurement path; this one did not, and says so.
 No tracked file changed while the sweep was running, so these hashes apply to every row in both studies.
+
+Naming two files is not the measurement's code identity — the harness also executes the blockers, indexes, embedders and metrics that decide what a row *means*. So whole trees are digested, over every `.py` they contain:
+
+| tree | digest (`.py` contents) |
+|---|---|
+| `src/langres/**` | `439605d11803d5ed` |
+| `examples/research/**` | `fbb18fc14a753a0a` |
+
+The shell **drivers** are digested separately (`driver_digest`), because they decide which cells *ran* rather than what a number means — and unlike the measurement code, **they did change while this sweep was in flight**:
+
+- `2a6ecb3 feat(lfm25): LFM25_STUDY selector so a partial run can finish the rest [examples/research/run_lfm25.sh]`
+- `6012078 chore(lfm25): resume script for the cell lost to the OS kill [examples/research/resume_lfm25_study_a.sh]`
+- `1491883 fix(ladder): guard on available memory, not on the swap derivative [examples/research/run_ladder.sh]`
+
+The rows stand: no `.py` moved, so every number still means what the table says it means. What this disclosure costs is the claim that re-running the *committed* driver reproduces this exact schedule of cells — it does not, because part of that schedule was a recovery from an OS kill. It is reported rather than swallowed because the `.py`-only digest this study started with certified these same edits as “unchanged”.
 
 ## Reproduce
 

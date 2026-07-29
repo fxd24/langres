@@ -24,6 +24,7 @@ mid-sweep, because then no single blob describes all the rows.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import subprocess
@@ -36,11 +37,32 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "research" / "20260729_lfm25_provenance.json"
 
-#: The files whose content decides what the numbers MEAN.
+#: The files whose content decides what the numbers MEAN, named individually
+#: because they are what a reader diffs.
 TRACKED = (
     "src/langres/experiments/statistics.py",
     "examples/research/embedder_ladder.py",
 )
+
+#: Naming two files is not the measurement's code identity. ``embedder_ladder.py``
+#: executes ``langres.core.embeddings``, ``core.indexes.vector_index``,
+#: ``core.blockers.vector``, ``metrics.metrics`` and the dataset registry, any of
+#: which changes what a row means. So the whole importable package is digested
+#: too: without it, a mid-sweep change to a blocker would still certify the run
+#: "unchanged". (Cross-model review.)
+TRACKED_TREES = ("src/langres", "examples/research")
+
+#: The shell drivers are hashed SEPARATELY from the Python, because they fail
+#: differently. A change to `.py` changes what a number MEANS -- no single hash
+#: then describes the rows, so `--finish` refuses. A change to a driver changes
+#: which cells RAN (model list, benchmark granularity, the memory guard), which
+#: is provenance-relevant but not row-invalidating; drivers legitimately get
+#: repaired mid-sweep, and this study's own drivers were, three times, after an
+#: OS kill. Collapsing both into one boolean would either abort those repairs or
+#: -- as the *.py-only digest did -- certify them as "unchanged". Recorded and
+#: surfaced, not silently swallowed and not fatal.
+DRIVER_TREE = "examples/research"
+DRIVER_SUFFIX = ".sh"
 
 
 def _git(*args: str) -> str:
@@ -49,16 +71,71 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+def _worktree_blob(path: str) -> str:
+    """Hash the file **as it exists on disk**, not as committed.
+
+    ``run_lfm25.sh`` executes the working tree. Recording ``HEAD:<path>`` meant an
+    uncommitted edit was invisible: both snapshots read the same committed blob
+    and ``--finish`` certified the run unchanged while the rows came from code
+    that was never committed. ``git hash-object`` gives the blob id the working
+    file *would* have, so an uncommitted edit changes it. (Cross-model review.)
+    """
+    return _git("hash-object", str(REPO_ROOT / path))
+
+
+def _tree_digest() -> dict[str, str]:
+    """One digest per tracked tree, over the working-tree contents of its .py files."""
+    digests: dict[str, str] = {}
+    for tree in TRACKED_TREES:
+        root = REPO_ROOT / tree
+        parts = [
+            f"{p.relative_to(REPO_ROOT)}:{_worktree_blob(str(p.relative_to(REPO_ROOT)))}"
+            for p in sorted(root.rglob("*.py"))
+        ]
+        digests[tree] = hashlib.sha256("\n".join(parts).encode()).hexdigest()
+    return digests
+
+
+def _driver_digest() -> str:
+    """Digest of the shell drivers that decide which cells the sweep runs."""
+    root = REPO_ROOT / DRIVER_TREE
+    parts = [
+        f"{p.relative_to(REPO_ROOT)}:{_worktree_blob(str(p.relative_to(REPO_ROOT)))}"
+        for p in sorted(root.rglob(f"*{DRIVER_SUFFIX}"))
+    ]
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
 def _blobs() -> dict[str, dict[str, str]]:
-    """Current blob hash and last-touching commit for each tracked file."""
+    """Working-tree blob hash and last-touching commit for each tracked file."""
     out: dict[str, dict[str, str]] = {}
     for path in TRACKED:
         out[path] = {
-            "blob": _git("rev-parse", f"HEAD:{path}"),
+            "blob": _worktree_blob(path),
             "last_commit": _git("log", "-1", "--format=%h", "--", path),
             "last_commit_date": _git("log", "-1", "--format=%cI", "--", path),
         }
     return out
+
+
+def _dirty(paths: tuple[str, ...]) -> list[str]:
+    """Files with uncommitted modifications or untracked content under ``paths``.
+
+    Deliberately NOT routed through ``_git``, which ``.strip()``s: porcelain emits
+    a two-column status field, so a modified-but-unstaged file starts with a SPACE
+    (``" M path"``). Stripping ate it, and the fixed-width ``line[3:]`` slice then
+    cut one character into the path -- the first record came out as
+    ``xamples/research/...``. A provenance record that silently mangles the name of
+    the file it is warning about is worse than not having one.
+    """
+    out = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--", *paths],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [line[3:] for line in out.splitlines() if line.strip()]
 
 
 def _bootstrap_samples() -> int:
@@ -71,18 +148,41 @@ def _bootstrap_samples() -> int:
 
 
 COMMENT = [
-    "The code that produced the committed rows, captured as git BLOB hashes.",
+    "The code that produced the committed rows, captured as git BLOB hashes of the",
+    "WORKING TREE -- what the sweep actually executes, not what is committed.",
     "Written by examples/research/write_provenance.py as part of the MEASUREMENT",
     "path -- never derived from HEAD at render time, which would name whatever is",
     "checked out now rather than what measured the rows, and would silently",
     "reattribute every row after the next harness commit. Not stale: false.",
-    "A blob hash changes only when file CONTENT changes, which is the property",
-    "being recorded. `verified_unchanged_during_run` is the check that no tracked",
-    "file was edited mid-sweep; without it no single blob describes all the rows.",
+    "`tree_digests` covers every .py under the tracked trees, because naming two",
+    "files is not the measurement's code identity: the harness executes blockers,",
+    "indexes, embedders and metrics that can change what a row means.",
+    "`verified_unchanged_during_run` is the check that none of it moved mid-sweep;",
+    "without it no single hash describes all the rows.",
+    "`driver_digest` covers the *.sh sweep drivers separately, because they decide",
+    "which cells RAN rather than what a number means. A driver edit is recorded in",
+    "`drivers_unchanged_during_run` and is NOT fatal -- drivers get repaired",
+    "mid-sweep -- but it is never silent: the *.py-only digest used to certify such",
+    "an edit as 'unchanged'.",
 ]
 
 
+def _snapshot() -> dict[str, Any]:
+    return {
+        "blobs": _blobs(),
+        "tree_digests": _tree_digest(),
+        "driver_digest": _driver_digest(),
+    }
+
+
 def start(output: Path) -> None:
+    # A dirty tree is not fatal -- research often measures uncommitted code -- but
+    # it must be recorded, because the blob hashes then name content that exists
+    # nowhere in history and cannot be recovered by anyone reading this file.
+    dirty = _dirty(TRACKED_TREES)
+    if dirty:
+        logger.warning("measuring a DIRTY tree; %d modified path(s) recorded", len(dirty))
+    snapshot = _snapshot()
     doc: dict[str, Any] = {
         "_comment": COMMENT,
         "measurement_window": {
@@ -95,7 +195,8 @@ def start(output: Path) -> None:
             "samples": _bootstrap_samples(),
             "resampled_unit": "gold cluster",
         },
-        "blobs": _blobs(),
+        "dirty_at_start": dirty,
+        **snapshot,
         "verified_unchanged_during_run": None,
     }
     output.write_text(json.dumps(doc, indent=2) + "\n")
@@ -106,22 +207,35 @@ def finish(output: Path) -> None:
     if not output.exists():
         raise SystemExit(f"{output} missing -- run --start before the sweep")
     doc = json.loads(output.read_text())
-    before = doc["blobs"]
-    after = _blobs()
-    unchanged = all(before[p]["blob"] == after[p]["blob"] for p in before)
+    after = _snapshot()
+    changed = [p for p, meta in doc["blobs"].items() if meta["blob"] != after["blobs"][p]["blob"]]
+    changed += [
+        f"{tree}/**"
+        for tree, d in doc.get("tree_digests", {}).items()
+        if d != after["tree_digests"].get(tree)
+    ]
     doc["measurement_window"]["finished"] = (
         datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     )
-    doc["verified_unchanged_during_run"] = unchanged
-    if not unchanged:
-        changed = [p for p in before if before[p]["blob"] != after[p]["blob"]]
+    doc["verified_unchanged_during_run"] = not changed
+    if changed:
         doc["changed_during_run"] = changed
-        logger.error("tracked files changed mid-sweep: %s", changed)
+        logger.error("measurement code changed mid-sweep: %s", changed)
+    # Non-fatal, but never silent: which cells ran can differ from what the
+    # committed driver would run today.
+    doc["drivers_unchanged_during_run"] = doc.get("driver_digest") == after["driver_digest"]
+    if not doc["drivers_unchanged_during_run"]:
+        logger.warning(
+            "the sweep DRIVERS (%s/*%s) changed mid-run; rows stand, but the committed "
+            "driver is not the one that scheduled every cell",
+            DRIVER_TREE,
+            DRIVER_SUFFIX,
+        )
     output.write_text(json.dumps(doc, indent=2) + "\n")
-    if not unchanged:
+    if changed:
         raise SystemExit(
-            "A tracked file changed while the sweep was running, so no single blob "
-            "describes all the rows. Re-measure on a stable tree."
+            f"Measurement code changed while the sweep was running ({', '.join(changed)}), "
+            "so no single hash describes all the rows. Re-measure on a stable tree."
         )
     logger.info("provenance closed at %s", output)
 
@@ -133,8 +247,24 @@ def main() -> None:
     group.add_argument("--start", action="store_true", help="open the window before measuring")
     group.add_argument("--finish", action="store_true", help="close it and verify stability")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--studies",
+        nargs="*",
+        default=["a", "b"],
+        help=(
+            "Which studies this window actually re-measured. A partial run "
+            "(LFM25_STUDY=a|b) leaves the other study's rows untouched, and its "
+            "provenance must not be overwritten with a claim that covers them."
+        ),
+    )
     args = parser.parse_args()
-    (start if args.start else finish)(args.output)
+    if args.start:
+        start(args.output)
+        doc = json.loads(args.output.read_text())
+        doc["studies_measured"] = list(args.studies)
+        args.output.write_text(json.dumps(doc, indent=2) + "\n")
+    else:
+        finish(args.output)
 
 
 if __name__ == "__main__":
