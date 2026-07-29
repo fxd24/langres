@@ -59,6 +59,7 @@ import argparse
 import json
 import logging
 import random
+import shlex
 import sys
 import time
 from collections.abc import Sequence
@@ -2459,7 +2460,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # coverage denominator count CHARACTERS ("7 of the 336 models in the ladder")
     # and made the licence table iterate them, emptying it. Renamed so the two
     # cannot collide.
-    ladder_arg = " ".join(spec.name for spec in LADDER)
+    ladder_arg = " ".join(shlex.quote(spec.name) for spec in LADDER)
     # LADDER_ALL_MODELS is the artifact's COVERAGE DENOMINATOR and run_ladder.sh
     # refuses (exit 2) if a custom LADDER_ARTIFACT arrives without it -- so a
     # command that omitted it did not merely mis-report coverage, it failed
@@ -2487,9 +2488,15 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "  bash examples/research/run_ladder.sh\n"
         "\n# render this file from the existing rows, measuring nothing\n"
         "uv run python examples/research/embedder_ladder.py --render-only \\\n"
-        f"  --rows {ARTIFACT_PREFIX}_rows.jsonl \\\n"
-        f"  --report {ARTIFACT_PREFIX}.md \\\n"
-        f"  --reference {ARTIFACT_PREFIX}_reference_recall.json \\\n"
+        # shlex-quoted, unlike the env-var lines above which carry their own
+        # quotes. A prefix containing a space -- which the CLI accepts and the
+        # shared-prefix check permits -- otherwise split into several arguments,
+        # so the one command whose whole job is "render this exact file" was the
+        # one that could not. Quoting is a no-op for every path in the committed
+        # studies, so this changes no artifact. (Cross-model review.)
+        f"  --rows {shlex.quote(f'{ARTIFACT_PREFIX}_rows.jsonl')} \\\n"
+        f"  --report {shlex.quote(f'{ARTIFACT_PREFIX}.md')} \\\n"
+        f"  --reference {shlex.quote(f'{ARTIFACT_PREFIX}_reference_recall.json')} \\\n"
         f'  --reference-model "{REFERENCE_MODEL}" \\\n'
         f"  --ladder-models {ladder_arg}\n"
         "```\n"

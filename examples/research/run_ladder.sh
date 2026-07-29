@@ -185,8 +185,16 @@ push_results() {
   # artifacts produced by code the open window does not describe are not
   # published. A no-op when no provenance sidecar exists, which is how the
   # standing portfolio ladder runs. (Cross-model review.)
-  if ! uv run python examples/research/write_provenance.py --verify 2>&1; then
-    log "NOT pushing: measurement code changed mid-sweep (see above)."
+  #
+  # ...but only for a run that never opened one. LADDER_PROVENANCE_REQUIRED is
+  # how the LFM driver says it did, so a sidecar that DISAPPEARS mid-sweep stops
+  # publication instead of reading as "not participating". The two states were
+  # the same empty test, and the second one published every later model against
+  # nothing. (Cross-model review.)
+  local required_arg=()
+  [ "${LADDER_PROVENANCE_REQUIRED:-0}" = "1" ] && required_arg=(--required)
+  if ! uv run python examples/research/write_provenance.py --verify "${required_arg[@]}" 2>&1; then
+    log "NOT pushing: provenance verification failed (see above)."
     log "  Rows are COMMITTED and safe. Re-measure on a stable tree before publishing."
     return 0
   fi
@@ -290,13 +298,36 @@ fi
 # uncommitted rows got no refusal at all -- the guard sitting one caller upstream
 # of the thing it guards. It belongs where the write is.
 #
-# Deliberately no `-e` existence test: git already tells a never-created path
-# (silence) from an uncommitted DELETION (" D"/"D "), and testing for existence
-# skipped exactly the second one.
+# Deliberately no `-e` existence test as the FIRST question: git already tells a
+# never-created path (silence) from an uncommitted DELETION (" D"/"D "), and
+# testing for existence skipped exactly the second one.
+#
+# But git's silence is not one answer, it is three: "tracked and clean", "ignored"
+# and "outside the repository". Only the first is safe. LADDER_ARTIFACT takes any
+# prefix -- `tmp/my_study` is a supported and obvious thing to try -- and for an
+# ignored or external path `git status` prints nothing at all, so an existing
+# artifact read as CLEAN and the harness rewrote it before the later `git add`
+# could fail. That is the guard handing a free pass to precisely the artifacts
+# git cannot protect, which is the same hole `_uncommitted()` in
+# write_provenance.py was fixed for. Same three-way distinction here.
+# (Cross-model review.)
 # ---------------------------------------------------------------------------
+artifact_is_dirty() {
+  local artifact="$1" status
+  if ! status=$(git status --porcelain --untracked-files=all -- "$artifact" 2>/dev/null); then
+    # git refused to describe it -- outside the repository. Unknowable is not clean.
+    [ -e "$artifact" ]
+    return
+  fi
+  [ -n "$status" ] && return 0
+  # Silent AND untracked AND present == ignored by git: its contents exist in no
+  # commit, so nothing can be recovered after this run overwrites them.
+  [ -e "$artifact" ] && [ -z "$(git ls-files -- "$artifact")" ]
+}
+
 DIRTY_ARTIFACTS=""
 for artifact in "$ROWS" "$REPORT" "$REFERENCE"; do
-  if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
+  if artifact_is_dirty "$artifact"; then
     DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
   fi
 done

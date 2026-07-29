@@ -186,6 +186,30 @@ class TestStartDoesNotDestroyUncommittedProvenance:
         """The guard must not refuse every ordinary run."""
         assert PROV._uncommitted(Path(PROV.REPO_ROOT) / "pyproject.toml") == []
 
+    def test_a_pending_deletion_of_a_tracked_sidecar_is_pending(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``exists()`` is false for a staged deletion too — the same blind spot.
+
+        Returning "nothing to lose" let ``--start`` recreate and commit the file
+        over a deletion the operator had staged, without ``--force``. It is the
+        existence test the shell artifact guards had already dropped for exactly
+        this case, still living in the Python one.
+        """
+        tracked = Path(PROV.REPO_ROOT) / "docs" / "research" / "20260729_lfm25_provenance.json"
+        monkeypatch.setattr(PROV, "_dirty", lambda _paths: [" D docs/research/x.json"])
+        monkeypatch.setattr(Path, "exists", lambda _self: False)
+
+        assert PROV._uncommitted(tracked) == [" D docs/research/x.json"]
+
+    def test_a_path_that_was_never_created_is_still_free(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Asking git first must not make a first run refuse itself."""
+        monkeypatch.setattr(PROV, "_dirty", lambda _paths: [])
+
+        assert PROV._uncommitted(Path(PROV.REPO_ROOT) / "docs" / "research" / "never.json") == []
+
 
 class TestDirtyScopeCoversEveryTrackedFile:
     """The dirty check ran over directories, so a root-level file escaped it.
@@ -316,3 +340,83 @@ class TestADeletedInputIsRecordedNotFatal:
 
         with pytest.raises(RuntimeError, match="git hash-object failed"):
             PROV._worktree_blob("pyproject.toml")
+
+
+class TestAVanishedSidecarFailsVerification:
+    """ "No sidecar" meant two different things through one empty test.
+
+    The standing portfolio ladder runs this driver with no provenance at all and
+    must not be blocked. But an LFM run that OPENED a window and then lost the
+    sidecar hit the same branch: ``--verify`` passed, ``run_ladder.sh`` committed
+    and pushed every later model's rows against no start snapshot, and
+    ``--finish`` could neither close nor reconstruct the window.
+    """
+
+    def test_the_standalone_ladder_keeps_its_no_op(self, tmp_path: Path) -> None:
+        PROV.verify(tmp_path / "absent.json")  # must NOT raise
+
+    def test_a_run_that_opened_a_window_refuses_a_missing_sidecar(self, tmp_path: Path) -> None:
+        with pytest.raises(SystemExit, match="is GONE"):
+            PROV.verify(tmp_path / "absent.json", required=True)
+
+    def test_a_present_unchanged_sidecar_still_passes_when_required(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path)
+
+        PROV.verify(path, required=True)  # must NOT raise
+
+    def test_a_changed_tracked_file_is_still_caught(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, blobs={"pyproject.toml": {"blob": "0" * 40}})
+
+        with pytest.raises(SystemExit, match="changed mid-sweep"):
+            PROV.verify(path, required=True)
+
+    def test_a_key_absent_from_the_finish_snapshot_does_not_crash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``after["blobs"][p]`` assumed both snapshots share a key set.
+
+        ``finish()`` was fixed for this last round and ``verify()`` was not —
+        the same line, twice, one of them patched. A KeyError here aborts while
+        BUILDING the verdict, which is the defect the sentinel exists to remove.
+        """
+        monkeypatch.setattr(PROV, "TRACKED", ())
+        path = _sidecar(tmp_path, blobs={"gone/from/tracked.py": {"blob": "0" * 40}})
+
+        with pytest.raises(SystemExit, match="changed mid-sweep"):
+            PROV.verify(path)
+
+    def test_the_driver_asks_for_it_and_the_flag_exists(self) -> None:
+        """A flag the driver never passes is a guard that never runs."""
+        driver = (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_lfm25.sh").read_text()
+        ladder = (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert "export LADDER_PROVENANCE_REQUIRED=1" in driver
+        assert 'LADDER_PROVENANCE_REQUIRED:-0}" = "1" ] && required_arg=(--required)' in ladder
+
+
+class TestThePreflightCoversWhatTheRendererReads:
+    """``LFM25_STUDY=a`` still renders and COMMITS a write-up built from both studies.
+
+    The preflight checked only the studies being re-measured, so an unselected
+    study holding uncommitted rows or a hand edit had its bytes published as
+    numbers in a document whose own header says every figure is read from the
+    committed artifacts. Executable proof in ``tmp/probe_round19.sh``; this pins
+    the driver so the loop cannot narrow again.
+    """
+
+    @staticmethod
+    def _driver() -> str:
+        return (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_lfm25.sh").read_text()
+
+    def test_the_dirty_check_iterates_both_studies_unconditionally(self) -> None:
+        driver = self._driver()
+
+        assert "for study in a b; do" in driver
+        assert "for study in $PROVENANCE_STUDIES; do" not in driver
+
+    def test_provenance_still_records_only_what_was_measured(self) -> None:
+        """The two lists are different questions: what is read vs what is re-measured."""
+        driver = self._driver()
+
+        assert "PROVENANCE_STUDIES" in driver
+        assert "--studies $PROVENANCE_STUDIES" in driver or "$PROVENANCE_STUDIES" in driver

@@ -74,6 +74,15 @@ export LADDER_BENCHMARK_GRANULAR=1
 # the artifacts it actually writes. Set once here rather than on each invocation.
 [ "${LFM25_FORCE:-0}" = "1" ] && export LADDER_FORCE=1
 
+# This run OPENS a provenance window, so run_ladder.sh's per-publication
+# --verify must treat a MISSING sidecar as a failure rather than as "this ladder
+# has no provenance". Without it the two states were indistinguishable: deleting
+# the open sidecar mid-sweep passed silently, and every later model's rows were
+# committed and pushed with no start snapshot to verify against and no way for
+# --finish to close the window. The standing portfolio ladder never sets this and
+# keeps its no-op. (Cross-model review.)
+export LADDER_PROVENANCE_REQUIRED=1
+
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
 PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
@@ -194,7 +203,14 @@ study_artifacts() {
   esac
 }
 DIRTY_ARTIFACTS=""
-for study in $PROVENANCE_STUDIES; do
+# BOTH studies, always -- not just the ones this run re-measures. `LFM25_STUDY=a`
+# still ends by rendering lfm25_report.py, which reads BOTH rows files, and then
+# COMMITS the combined write-up. So an unselected study holding uncommitted
+# remeasurement rows or a hand edit had its bytes published as numbers in a
+# report whose own header says every figure is read from the committed
+# artifacts -- unreproducible from the commit it ships in. The preflight covers
+# what the renderer consumes, not what the sweep rewrites. (Cross-model review.)
+for study in a b; do
   prefix="$(study_artifacts "$study")"
   for artifact in "${prefix}_rows.jsonl" "${prefix}.md" "${prefix}_reference_recall.json"; do
     # No `-e` guard: git already distinguishes a never-created path (silence)

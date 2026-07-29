@@ -2222,3 +2222,31 @@ class TestArtifactPathsMustShareOnePrefix:
         LADDER.main(self._argv(rows, report, tmp_path / "study_reference_recall.json"))
 
         assert report.exists()
+
+
+class TestTheArtifactGuardDoesNotTrustGitSilence:
+    """``git status`` says nothing for three different reasons; one is safe.
+
+    ``LADDER_ARTIFACT`` takes any prefix, and ``tmp/my_study`` is an obvious
+    thing to try. For an ignored or external path ``git status --porcelain``
+    prints nothing at all, so an existing artifact read as CLEAN and the harness
+    rewrote it -- destroying the only copy, since an ignored file's contents are
+    in no commit. Executable proof lives in ``tmp/probe_round19.sh``; this pins
+    the guard so it cannot quietly go back to trusting silence.
+    """
+
+    @staticmethod
+    def _driver() -> str:
+        return (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+
+    def test_untracked_existing_artifacts_are_treated_as_dirty(self) -> None:
+        driver = self._driver()
+
+        assert 'git ls-files -- "$artifact"' in driver
+        assert "artifact_is_dirty()" in driver
+
+    def test_a_path_git_refuses_to_describe_is_not_called_clean(self) -> None:
+        """Outside the repository, ``git status`` exits non-zero rather than empty."""
+        assert 'if ! status=$(git status --porcelain --untracked-files=all -- "$artifact"' in (
+            self._driver()
+        )

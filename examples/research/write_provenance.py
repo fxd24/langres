@@ -286,12 +286,22 @@ def _uncommitted(path: Path) -> list[str]:
     ESTABLISHED is treated as pending. Non-existent is the one safe case.
     (Cross-model review.)
     """
-    if not path.exists():
-        return []
     try:
         rel = str(path.resolve().relative_to(REPO_ROOT))
     except ValueError:
-        return [f"{path} (outside this repository — git cannot tell whether it is saved)"]
+        # Outside the repository: existence is all there is to go on, and a file
+        # git cannot describe cannot be established as saved.
+        return (
+            [f"{path} (outside this repository — git cannot tell whether it is saved)"]
+            if path.exists()
+            else []
+        )
+    # NOT guarded by `path.exists()`. A pending DELETION of a tracked sidecar also
+    # fails that test, and returning "nothing to lose" let `--start` recreate and
+    # commit the file over a deletion the operator had staged — without asking for
+    # `--force`. It is the same existence-test blind spot the artifact guards had
+    # dropped one round earlier, still living here in Python. Git is asked first;
+    # a path that was never created is silent either way. (Cross-model review.)
     pending = _dirty((rel,))
     if pending:
         return pending
@@ -299,7 +309,11 @@ def _uncommitted(path: Path) -> list[str]:
         ["git", "ls-files", "--", rel], cwd=REPO_ROOT, capture_output=True, text=True, check=True
     ).stdout.strip()
     if not tracked:
-        return [f"{rel} (ignored by git — its contents exist in no commit)"]
+        # Untracked AND unmodified means either "ignored" or "never created". Only
+        # the first has contents to lose.
+        return (
+            [f"{rel} (ignored by git — its contents exist in no commit)"] if path.exists() else []
+        )
     return []
 
 
@@ -465,7 +479,7 @@ def finish(output: Path, partial: bool = False) -> None:
     logger.info("provenance closed at %s", output)
 
 
-def verify(output: Path) -> None:
+def verify(output: Path, required: bool = False) -> None:
     """Has the measurement code moved since ``--start``? Exit non-zero if so.
 
     Called from the driver before each model's results are PUBLISHED, because
@@ -474,18 +488,40 @@ def verify(output: Path) -> None:
     have its rows already committed and pushed by the time ``--finish`` rejects
     the run — the refusal arriving after publication it was meant to prevent.
 
-    Silent success when there is no sidecar or the window is already closed: the
+    Silent success when there is no sidecar and ``required`` is false: the
     standing portfolio ladder runs this driver with no provenance at all, and
     must not be blocked by a file it never creates.
+
+    ``required`` is how a run that DOES have provenance says so. Absence was
+    treated as "not participating" with no way to tell it from "the open sidecar
+    was deleted mid-sweep" — and in the second case every later model's rows were
+    committed and pushed beside a start snapshot that no longer existed, with
+    ``--finish`` unable to close or reconstruct the window. A missing file is a
+    failed verification exactly when the caller expected one. The flag is set by
+    the LFM driver, which opens the window; the ladder run that does not open one
+    never passes it. (Cross-model review.)
     """
     if not output.exists():
+        if required:
+            raise SystemExit(
+                f"Provenance sidecar {output} is GONE, but this run opened one. Rows "
+                "measured after it disappeared have no start snapshot to be verified "
+                "against and --finish cannot close the window. Not publishing."
+            )
         return
     doc = json.loads(output.read_text())
     if doc.get("measurement_window", {}).get("finished") is not None:
         return
     after = _snapshot()
+    # Defaulted, like `finish()`. This line had the same KeyError -- an abort
+    # while BUILDING the verdict -- and only one of the two copies was fixed last
+    # round. A guard that crashes on the state it exists to describe is not a
+    # guard. (Cross-model review.)
+    after_blobs = after["blobs"]
     changed = [
-        p for p, meta in doc.get("blobs", {}).items() if meta["blob"] != after["blobs"][p]["blob"]
+        path
+        for path, meta in doc.get("blobs", {}).items()
+        if meta["blob"] != after_blobs.get(path, {}).get("blob", "absent")
     ]
     changed += [
         f"{tree}/**"
@@ -532,6 +568,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--required",
+        action="store_true",
+        help=(
+            "with --verify: this run OPENED a provenance window, so a missing "
+            "sidecar is a failed verification rather than a non-participating "
+            "ladder run. Without it, deleting the open sidecar mid-sweep passed "
+            "silently and every later model was published against nothing."
+        ),
+    )
+    parser.add_argument(
         "--studies",
         nargs="*",
         default=["a", "b"],
@@ -548,7 +594,7 @@ def main() -> None:
         doc["studies_measured"] = list(args.studies)
         args.output.write_text(json.dumps(doc, indent=2) + "\n")
     elif args.verify:
-        verify(args.output)
+        verify(args.output, required=args.required)
     else:
         finish(args.output, partial=args.partial)
 

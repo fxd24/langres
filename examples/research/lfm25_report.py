@@ -842,6 +842,28 @@ def _control_reference(base: list[dict[str, Any]]) -> str | None:
     return references.pop() if len(references) == 1 else None
 
 
+def _control_direction(base: list[dict[str, Any]], benchmark: str) -> str | None:
+    """``"below"`` / ``"above"`` — which side of its paired baseline the control's CI sits.
+
+    ``separates`` is ``low > 0 or high < 0``: the interval excludes zero in
+    *either* direction. The narrow-benchmark prose then said the control is
+    "significantly below" — true of every cell measured here, but not implied by
+    the predicate that put it in that bucket. A control significantly ABOVE its
+    paired baseline, with the cross-study best still a little higher, satisfies
+    both ``separates`` and ``0 < margin < NARROW_RANGE`` and would have been
+    described backwards. (Cross-model review.)
+    """
+    cell = _best_arm(base, CONTROL, benchmark)
+    if cell is None:
+        return None
+    low, high = cell.get("vs_reference_ci_low"), cell.get("vs_reference_ci_high")
+    if low is None or high is None:
+        return None
+    if high < 0:
+        return "below"
+    return "above" if low > 0 else None
+
+
 def _noise_floor_table(
     tuned: list[dict[str, Any]], base: list[dict[str, Any]]
 ) -> tuple[str, list[str], list[str], list[str], list[str]]:
@@ -1234,8 +1256,13 @@ def _noise_band_warning(tuned: list[dict[str, Any]], base: list[dict[str, Any]])
         "This study does not refute those margins and does not call them noise — different "
         "models, measured intervals that exclude zero, and nothing here contradicts them. "
         "The recalibration is about **resolution**: quote a `walmart_amazon` margin with "
-        "the trained-vs-random range beside it, because a margin that is a large fraction "
-        "of everything the benchmark can measure is a fragile basis for ranking even when "
+        # NOT "everything the benchmark can measure". The preamble above retracts
+        # exactly that reading -- one seeded control and one tested ceiling are
+        # not the benchmark's dynamic range, and neither endpoint is a bound --
+        # so this sentence was reintroducing the retracted interpretation two
+        # paragraphs later, in the same generated document. (Cross-model review.)
+        "the observed trained-vs-random gap beside it, because a margin that is a large "
+        "fraction of that one measured distance is a fragile basis for ranking even when "
         "it is real. The earlier document is left as it stands; this is a recalibration "
         "note, not a rewrite.",
     ]
@@ -1306,6 +1333,16 @@ def _licence_clauses() -> list[str]:
 
     The definitions are selected by whether §5's own text uses the defined term,
     so they cannot drift out of step with it — no second hand-kept list.
+
+    **Aliases and inflections are part of the term, not noise.** A first cut
+    matched ``^"([^"]+)" shall mean`` and tested the captured term as a literal
+    substring, which promised "the terms §5 turns on" while delivering neither
+    of the two §5(a)/(b) actually leans on: ``"You" (or "Your") shall mean`` has
+    a parenthetical alias between the closing quote and *shall mean*, and
+    ``"Derivative Works"`` is defined in the plural while §5 says *a Derivative
+    Work*. Every quoted term before *shall mean* now counts as a name for that
+    definition, and a plural definition matches its singular use.
+    (Cross-model review.)
     """
     lines = [line.strip() for line in LICENSE.read_text().splitlines() if line.strip()]
     start = next(i for i, line in enumerate(lines) if re.match(r"^5\. Commercial Use", line))
@@ -1316,10 +1353,22 @@ def _licence_clauses() -> list[str]:
     defined = [
         line
         for line in lines[:start]
-        if (match := re.match(r'^"([^"]+)" shall mean', line))
-        and any(match.group(1) in clause for clause in section)
+        if any(_term_used(term, section) for term in _defined_terms(line))
     ]
     return defined + section
+
+
+def _defined_terms(line: str) -> list[str]:
+    """Every name a definition line introduces — ``"You" (or "Your")`` gives both."""
+    if not line.startswith('"') or " shall mean" not in line:
+        return []
+    return re.findall(r'"([^"]+)"', line.split(" shall mean", 1)[0])
+
+
+def _term_used(term: str, section: list[str]) -> bool:
+    """Whether the section uses the term, counting a plural definition's singular use."""
+    forms = {term, term.removesuffix("s")} if term.endswith("s") else {term}
+    return any(re.search(rf"\b{re.escape(form)}\b", clause) for form in forms for clause in section)
 
 
 def _load_probe_section(probe: dict[str, Any]) -> str:
@@ -1629,21 +1678,42 @@ def render() -> str:
         (
             f"**Benchmarks that do separate the two, but narrowly "
             f"(&lt;{NARROW_RANGE:.2f} of range): "
-            f"{', '.join(f'`{b}`' for b in narrow) if narrow else 'none'}.** "
-            f"This is a statement about **resolution, not significance**. The control *is* "
-            # NOT "below the tuned models". The interval this verdict reads is
-            # paired with study B's baseline and nothing else; the best tuned
+            # Each one annotated with the direction its OWN interval measured.
+            # NOT "below the tuned models": the interval this verdict reads is
+            # paired with study B's baseline and nothing else, and the best tuned
             # model in the row can be a study-A model with no paired control
             # interval at all -- as it is on `walmart_amazon`, where the gap runs
             # to `intfloat/e5-base-v2` and the interval to
-            # `LiquidAI/LFM2.5-Embedding-350M`. Naming "the tuned models" claimed
-            # a comparison that was never computed. (Cross-model review.)
+            # `LiquidAI/LFM2.5-Embedding-350M`.
+            #
+            # And NOT "below" as a constant: the branch is reached whenever the
+            # interval excludes zero in EITHER direction, so a rerun where the
+            # control sits significantly ABOVE its paired baseline while the
+            # cross-study best stays a little higher still lands here -- and the
+            # sentence would then assert the exact opposite of the rows. Both
+            # halves of this claim are now read off the data. (Cross-model
+            # review.)
             + (
-                f"significantly below `{reference}` — the model its paired interval is "
-                f"computed against, and the only one this column can speak for. "
+                # No inner `**`: this whole line is already inside a bold span,
+                # and a nested one breaks it in every renderer.
+                ", ".join(
+                    f"`{b}` (control {_control_direction(base, b) or 'not separated from'} "
+                    f"the paired baseline)"
+                    for b in narrow
+                )
+                if narrow
+                else "none"
+            )
+            + ".** "
+            "This is a statement about **resolution, not significance**. Each of those "
+            + (
+                f"intervals clears zero against `{reference}` — the model it is computed "
+                f"against, and the only one this column can speak for — in the direction "
+                f"marked. "
                 if reference
-                else "significantly below the paired baseline its interval is computed "
-                "against — the only model this column can speak for. "
+                else "intervals clears zero against the paired baseline it is computed "
+                "against — the only model this column can speak for — in the direction "
+                "marked. "
             )
             + "That separation is real. But the "
             "whole trained-vs-random range is small, so a reported margin can be a large "

@@ -1040,13 +1040,126 @@ class TestSignificanceIsPairedWithOneBaseline:
         report = REPORT.render()
 
         assert "significantly below the tuned models" not in report
-        assert f"significantly below `{REPORT.BASE_BASELINE}`" in report
+        assert f"clears zero against `{REPORT.BASE_BASELINE}`" in report
 
     def test_rows_whose_best_model_is_unpaired_are_marked(self, artifacts: Path) -> None:
         report = REPORT.render()
 
         assert "no paired interval was computed between the control" in report
         assert "Nothing in this table is a significance test against the named best model" in report
+
+
+class TestTheIntervalDirectionIsRead:
+    """``separates`` accepts exclusion of zero in EITHER direction.
+
+    So "the control is significantly below" was a constant beside a predicate
+    that does not imply it. A control significantly *above* its paired baseline,
+    with the cross-study best still slightly higher, satisfies both
+    ``separates`` and ``0 < margin < NARROW_RANGE`` and would have been described
+    backwards.
+    """
+
+    def test_a_below_interval_reads_below(self, artifacts: Path) -> None:
+        base = REPORT._read_rows(REPORT.BASE_ROWS)
+
+        assert REPORT._control_direction(base, "walmart_amazon") == "below"
+
+    def test_an_above_interval_reads_above(self) -> None:
+        base = [
+            _row(
+                REPORT.CONTROL,
+                "bm",
+                candidate_recall=0.90,
+                vs_reference_ci_low=0.02,
+                vs_reference_ci_high=0.08,
+                reference_model=REPORT.BASE_BASELINE,
+            )
+        ]
+
+        assert REPORT._control_direction(base, "bm") == "above"
+
+    def test_an_interval_containing_zero_has_no_direction(self) -> None:
+        base = [
+            _row(
+                REPORT.CONTROL,
+                "bm",
+                candidate_recall=0.90,
+                vs_reference_ci_low=-0.02,
+                vs_reference_ci_high=0.08,
+                reference_model=REPORT.BASE_BASELINE,
+            )
+        ]
+
+        assert REPORT._control_direction(base, "bm") is None
+
+    def test_the_narrow_line_states_the_measured_direction(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "`walmart_amazon` (control below the paired baseline)" in report
+
+    def test_the_annotation_does_not_nest_bold(self, artifacts: Path) -> None:
+        """The line is already inside a bold span; a nested one breaks it."""
+        report = REPORT.render()
+
+        assert "(control **below**" not in report
+
+
+class TestLicenceDefinitionsCoverAliasesAndInflections:
+    """The extractor promised "the terms §5 turns on" and delivered neither of two.
+
+    ``"You" (or "Your") shall mean`` carries a parenthetical alias between the
+    closing quote and *shall mean*, so an anchored ``^"([^"]+)" shall mean``
+    never matched it. ``"Derivative Works"`` is defined in the plural while §5
+    says *a Derivative Work*, so a literal substring test missed it. Both are
+    used by §5(a)/(b) directly.
+    """
+
+    def test_the_you_definition_with_its_alias_is_included(self) -> None:
+        clauses = REPORT._licence_clauses()
+
+        assert any('"You" (or "Your") shall mean' in clause for clause in clauses)
+
+    def test_the_plural_definition_of_a_singular_use_is_included(self) -> None:
+        clauses = REPORT._licence_clauses()
+
+        assert any('"Derivative Works" shall mean' in clause for clause in clauses)
+
+    def test_every_defined_name_on_a_line_counts(self) -> None:
+        assert REPORT._defined_terms('"You" (or "Your") shall mean an individual') == [
+            "You",
+            "Your",
+        ]
+        assert REPORT._defined_terms('"Source" form shall mean the preferred form') == ["Source"]
+        assert REPORT._defined_terms("(a) Any Commercial Use of the Work") == []
+
+    def test_a_plural_definition_matches_its_singular_use(self) -> None:
+        assert REPORT._term_used("Derivative Works", ["a Derivative Work by a Legal Entity"])
+        assert not REPORT._term_used("Contribution", ["a Derivative Work by a Legal Entity"])
+
+    def test_a_term_the_section_never_uses_is_left_out(self) -> None:
+        """Completeness is derived from §5's text, not from quoting the whole file."""
+        clauses = REPORT._licence_clauses()
+
+        assert not any('"Contributor" shall mean' in clause for clause in clauses)
+
+
+class TestTheRetractedRangeReadingStaysRetracted:
+    """The preamble retracts "the benchmark's entire usable dynamic range".
+
+    A later paragraph in the same generated document said a margin was "a large
+    fraction of everything the benchmark can measure" — the retracted reading,
+    reintroduced two paragraphs after its own retraction.
+    """
+
+    def test_the_report_does_not_reintroduce_it(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "everything the benchmark can measure" not in report
+
+    def test_the_recalibration_is_scoped_to_the_observed_gap(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "fraction of that one measured distance" in report
 
 
 class TestPartialWindowCaveat:
