@@ -92,12 +92,28 @@ abort_with_provenance() {
   uv run python examples/research/write_provenance.py --finish || \
     say "provenance --finish reported a problem; recording it and continuing to commit"
   if [ -f "$PROVENANCE_JSON" ]; then
-    git add "$PROVENANCE_JSON" || say "WARNING: could not stage provenance"
+    # A WARNING here is not enough. Partial rows are already committed and may be
+    # pushed, so this snapshot is the only description of what produced them --
+    # and it lives in a gitignored-adjacent working file that dies with the
+    # worktree. Warning and exiting with the child's status makes the failure
+    # look like the sweep's, and a caller checking only the exit code cannot tell
+    # "the sweep aborted" from "the sweep aborted AND its provenance was lost".
+    # Exit 10 says the second thing loudly. (Cross-model review.)
+    if ! git add "$PROVENANCE_JSON"; then
+      say "FATAL: could not stage the partial-run provenance. It is the ONLY record of"
+      say "  what produced the rows already committed. Save it before teardown:"
+      say "    cp $PROVENANCE_JSON <somewhere outside this worktree>"
+      exit 10
+    fi
     if ! git diff --cached --quiet -- "$PROVENANCE_JSON"; then
-      git commit -q --only "$PROVENANCE_JSON" \
+      if ! git commit -q --only "$PROVENANCE_JSON" \
         -m "results(lfm25): provenance for a partial sweep (exit $code)" \
-        -m "The sweep stopped early; rows already committed by run_ladder.sh are described by this window." \
-        || say "WARNING: provenance commit failed -- it is staged but NOT durable"
+        -m "The sweep stopped early; rows already committed by run_ladder.sh are described by this window."; then
+        say "FATAL: the partial-run provenance is staged but NOT committed, and it is the"
+        say "  ONLY record of what produced the rows already committed. Save it before"
+        say "  teardown:  cp $PROVENANCE_JSON <somewhere outside this worktree>"
+        exit 10
+      fi
     fi
   fi
   exit "$code"

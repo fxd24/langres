@@ -209,6 +209,57 @@ def _is_osi(spec: ModelSpec) -> bool:
     return spec.license in OSI_APPROVED_LICENSES
 
 
+def _reference_role() -> str:
+    """How to describe the reference model, checked against the REAL default.
+
+    Two sentences asserted the reference "was ``DEFAULT_EMBEDDING_MODEL`` when
+    these rows were measured". That is true for the portfolio ladder and FALSE for
+    any study naming its own baseline — study B's reference is `lfm1.0`-licensed,
+    and the same report says four sections later that the actual default is
+    ``intfloat/e5-base-v2``. A standalone reader of that artifact was told a
+    non-OSI checkpoint had once shipped as the default. Read from the source of
+    truth instead of asserted. (Cross-model review.)
+    """
+    from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
+
+    if REFERENCE_MODEL == DEFAULT_EMBEDDING_MODEL:
+        return "this ladder's reference model, and langres's current `DEFAULT_EMBEDDING_MODEL`"
+    return (
+        f"this study's chosen baseline — **not** the shipped default, which is "
+        f"`{DEFAULT_EMBEDDING_MODEL}`"
+    )
+
+
+def _opt_in_snippet(spec: ModelSpec) -> str:
+    """The loader a reader should actually use for ``spec``.
+
+    The generic renderer published ``SentenceTransformerEmbedder(name)`` for every
+    restricted checkpoint. For the base masked-LM encoders that line is the *bug
+    this study documents*: they ship no pooling config and their weights live
+    under ``AutoModelForMaskedLM``, so the ordinary path silently random-initialises
+    the backbone and returns plausible-looking numbers from an untrained network.
+    Publishing it as the opt-in instruction hands the reader the failure mode the
+    report spends a section warning about. (Cross-model review.)
+    """
+    if spec.backbone_auto_class is None:
+        return (
+            "  # opt in explicitly, having read the licence\n"
+            f'  SentenceTransformerEmbedder("{spec.name}")\n'
+        )
+    return (
+        "  # opt in explicitly, having read the licence.\n"
+        "  # NOT SentenceTransformerEmbedder(...) on its own: this checkpoint ships no\n"
+        f"  # pooling config and its weights live under {spec.backbone_auto_class}, so the\n"
+        "  # ordinary path silently RANDOM-INITIALISES the backbone and still returns\n"
+        "  # plausible numbers. Load the backbone through the class that owns the weights\n"
+        "  # and attach pooling yourself -- and note that pooling head is untrained.\n"
+        f"  # See this report's load-probe section for what that costs.\n"
+        f"  transformers.{spec.backbone_auto_class}.from_pretrained(\n"
+        f'      "{spec.checkpoint or spec.name}", trust_remote_code={spec.trust_remote_code}\n'
+        f"  )\n"
+    )
+
+
 #: Listed in roughly ascending expected size so a truncated sweep still covers
 #: the cheap tiers completely. Ordering is a *scheduling* hint only — every
 #: published number comes from the measured ``parameter_count``.
@@ -2286,6 +2337,19 @@ def _render_recommendation(
     else:
         for name in restricted:
             spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
+            # A synthetic control is not a checkpoint anyone can opt into: it has
+            # no trained weights, and a "use it like this" snippet for it is
+            # meaningless. It appeared here only because the section is keyed on
+            # the LICENCE of the checkpoint it borrows its architecture from.
+            if spec.random_init:
+                out.append(
+                    f"\n- **`{name}` is not a usable checkpoint.** It is this study's noise "
+                    f"floor — `{spec.checkpoint}`'s architecture with seeded RANDOM weights "
+                    "and no training. It is listed here only because it inherits that "
+                    "checkpoint's licence bucket; there is no opt-in snippet because there "
+                    "is nothing to opt into.\n"
+                )
+                continue
             # Licence decides the MECHANISM; measurement decides whether anything
             # is recommended. Fusing them emitted "Recommended as a documented
             # opt-in" off the licence bucket alone. (Cross-model review.)
@@ -2303,8 +2367,7 @@ def _render_recommendation(
                 "prohibited-use policy that survives redistribution, which Apache-2.0 "
                 "does not impose.\n"
                 f"\n  ```python\n"
-                f"  # opt in explicitly, having read the licence\n"
-                f'  SentenceTransformerEmbedder("{name}")\n'
+                f"{_opt_in_snippet(spec)}"
                 f"  ```\n"
             )
 
@@ -2520,8 +2583,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         out.append("\n## Headline: there is no single winner — the answer is per benchmark\n")
         out.append(
             f"\nThe widest disagreement measured here is `{model}` against "
-            f"`{REFERENCE_MODEL}` (this ladder's reference model, and langres's "
-            f"default when these rows were measured) at k={headline_k}: "
+            f"`{REFERENCE_MODEL}` ({_reference_role()}) at k={headline_k}: "
             f"**{high:+.4f}** per-record recall on `{high_row.benchmark}` "
             f"{_ci(high_row.vs_reference_ci_low, high_row.vs_reference_ci_high)} and "
             f"**{low:+.4f}** on `{low_row.benchmark}` "
@@ -2931,8 +2993,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
     out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
     out.append(
-        f"\nEvery model against `{REFERENCE_MODEL}` — this ladder's reference model, "
-        "which was `DEFAULT_EMBEDDING_MODEL` when these rows were measured — on the "
+        f"\nEvery model against `{REFERENCE_MODEL}` — {_reference_role()} — on the "
         "same records, paired per record and "
         "resampled by gold cluster. **Δ is the mean per-record recall difference**, "
         "not the difference of the two aggregate recalls above: the bootstrap "

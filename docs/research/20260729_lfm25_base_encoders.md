@@ -37,7 +37,7 @@ Requires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS (`run_ladder.
 
 ## Headline: there is no single winner — the answer is per benchmark
 
-The widest disagreement measured here is `LiquidAI/LFM2.5-Encoder-350M` against `LiquidAI/LFM2.5-Embedding-350M` (this ladder's reference model, and langres's default when these rows were measured) at k=20: **-0.0536** per-record recall on `fodors_zagat` [-0.0982, -0.0179] and **-0.6235** on `abt_buy` [-0.6534, -0.5965] — the same model, spread across benchmarks.
+The widest disagreement measured here is `LiquidAI/LFM2.5-Encoder-350M` against `LiquidAI/LFM2.5-Embedding-350M` (this study's chosen baseline — **not** the shipped default, which is `intfloat/e5-base-v2`) at k=20: **-0.0536** per-record recall on `fodors_zagat` [-0.0982, -0.0179] and **-0.6235** on `abt_buy` [-0.6534, -0.5965] — the same model, spread across benchmarks.
 
 Averaging those into one number would report a middling win or loss and hide both. **This document deliberately publishes no cross-benchmark mean.** Pick the model against the data you actually have; the per-benchmark tables below are the unit of decision.
 
@@ -222,7 +222,7 @@ This harness still prefixes the corpus text itself, because it must reproduce ro
 
 ## Is it better than what ships today? (k=20, no instruction)
 
-Every model against `LiquidAI/LFM2.5-Embedding-350M` — this ladder's reference model, which was `DEFAULT_EMBEDDING_MODEL` when these rows were measured — on the same records, paired per record and resampled by gold cluster. **Δ is the mean per-record recall difference**, not the difference of the two aggregate recalls above: the bootstrap resamples per-record units, so the point estimate has to be the same statistic the interval is built from. `clusters` is the number of independent units resampled — the honest denominator, and much smaller than the record count.
+Every model against `LiquidAI/LFM2.5-Embedding-350M` — this study's chosen baseline — **not** the shipped default, which is `intfloat/e5-base-v2` — on the same records, paired per record and resampled by gold cluster. **Δ is the mean per-record recall difference**, not the difference of the two aggregate recalls above: the bootstrap resamples per-record units, so the point estimate has to be the same statistic the interval is built from. `clusters` is the number of independent units resampled — the honest denominator, and much smaller than the record count.
 
 **This sweep does not change the default.** A CI spanning 0 is not evidence of a better default; it is evidence the measurement cannot tell them apart on that benchmark.
 
@@ -265,23 +265,34 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
 - **`LiquidAI/LFM2.5-Encoder-350M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
 
   ```python
-  # opt in explicitly, having read the licence
-  SentenceTransformerEmbedder("LiquidAI/LFM2.5-Encoder-350M")
+  # opt in explicitly, having read the licence.
+  # NOT SentenceTransformerEmbedder(...) on its own: this checkpoint ships no
+  # pooling config and its weights live under AutoModelForMaskedLM, so the
+  # ordinary path silently RANDOM-INITIALISES the backbone and still returns
+  # plausible numbers. Load the backbone through the class that owns the weights
+  # and attach pooling yourself -- and note that pooling head is untrained.
+  # See this report's load-probe section for what that costs.
+  transformers.AutoModelForMaskedLM.from_pretrained(
+      "LiquidAI/LFM2.5-Encoder-350M", trust_remote_code=True
+  )
   ```
 
 - **`LiquidAI/LFM2.5-Encoder-230M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
 
   ```python
-  # opt in explicitly, having read the licence
-  SentenceTransformerEmbedder("LiquidAI/LFM2.5-Encoder-230M")
+  # opt in explicitly, having read the licence.
+  # NOT SentenceTransformerEmbedder(...) on its own: this checkpoint ships no
+  # pooling config and its weights live under AutoModelForMaskedLM, so the
+  # ordinary path silently RANDOM-INITIALISES the backbone and still returns
+  # plausible numbers. Load the backbone through the class that owns the weights
+  # and attach pooling yourself -- and note that pooling head is untrained.
+  # See this report's load-probe section for what that costs.
+  transformers.AutoModelForMaskedLM.from_pretrained(
+      "LiquidAI/LFM2.5-Encoder-230M", trust_remote_code=True
+  )
   ```
 
-- **`random-init-control-350M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
-
-  ```python
-  # opt in explicitly, having read the licence
-  SentenceTransformerEmbedder("random-init-control-350M")
-  ```
+- **`random-init-control-350M` is not a usable checkpoint.** It is this study's noise floor — `LiquidAI/LFM2.5-Encoder-350M`'s architecture with seeded RANDOM weights and no training. It is listed here only because it inherits that checkpoint's licence bucket; there is no opt-in snippet because there is nothing to opt into.
 
 ## The recall/cost frontier (every k)
 

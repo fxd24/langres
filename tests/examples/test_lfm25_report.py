@@ -607,3 +607,56 @@ class TestLoadVerification:
 
         assert "**148**" in report
         assert "**no**" in report  # not deterministic across two loads
+
+
+class TestInvertedControl:
+    """A control that BEATS every tuned model is not a 'narrow' benchmark."""
+
+    def test_a_negative_margin_is_not_filed_as_narrow(self) -> None:
+        """`margin <= 0` also satisfies `margin < NARROW_RANGE`.
+
+        So an inverted benchmark landed in the narrow bucket, whose prose states
+        that the control *is* significantly below the tuned models — the exact
+        opposite of the rows. Constructed here because the committed sweep has
+        no inverted benchmark, which is why the branch was never exercised.
+        """
+        tuned = [_row("intfloat/e5-base-v2", "inverted_bm", candidate_recall=0.85)]
+        base = [
+            _row(
+                REPORT.CONTROL,
+                "inverted_bm",
+                candidate_recall=0.90,
+                vs_reference_delta=0.05,
+                vs_reference_ci_low=0.02,
+                vs_reference_ci_high=0.08,
+            )
+        ]
+
+        table, uninformative, informative, narrow = REPORT._noise_floor_table(tuned, base)
+
+        assert "inverted_bm" in uninformative
+        assert "inverted_bm" not in narrow
+        assert "inverted_bm" not in informative
+        line = next(ln for ln in table.splitlines() if "inverted_bm" in ln)
+        assert "control BEATS every tuned model" in line
+
+
+class TestDirtyTreeDisclosure:
+    """A sweep measured on a modified tree cannot be reproduced from a commit."""
+
+    def test_dirty_paths_are_surfaced_not_swallowed(
+        self, artifacts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sidecar = json.loads(REPORT.PROVENANCE.read_text())
+        sidecar["_comment"] = ["live capture"]  # not the retrospective branch
+        sidecar["verified_unchanged_during_run"] = True
+        sidecar["dirty_at_start"] = ["src/langres/core/blockers/vector.py"]
+        path = tmp_path / "prov.json"
+        path.write_text(json.dumps(sidecar))
+        monkeypatch.setattr(REPORT, "PROVENANCE", path)
+
+        section = "\n".join(REPORT._provenance_section())
+
+        assert "Measured on a MODIFIED tree" in section
+        assert "exists in no commit" in section
+        assert "`src/langres/core/blockers/vector.py`" in section

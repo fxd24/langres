@@ -37,7 +37,7 @@ Requires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS (`run_ladder.
 
 ## Headline: there is no single winner — the answer is per benchmark
 
-The widest disagreement measured here is `google/embeddinggemma-300m` against `all-MiniLM-L6-v2` (this ladder's reference model, and langres's default when these rows were measured) at k=20: **+0.2079** per-record recall on `wdc_computers` [+0.1787, +0.2365] and **-0.0294** on `amazon_google` [-0.0425, -0.0163] — the same model, better on one benchmark and **worse** on the other, with both intervals clear of zero.
+The widest disagreement measured here is `google/embeddinggemma-300m` against `all-MiniLM-L6-v2` (this study's chosen baseline — **not** the shipped default, which is `intfloat/e5-base-v2`) at k=20: **+0.2079** per-record recall on `wdc_computers` [+0.1787, +0.2365] and **-0.0294** on `amazon_google` [-0.0425, -0.0163] — the same model, better on one benchmark and **worse** on the other, with both intervals clear of zero.
 
 Averaging those into one number would report a middling win or loss and hide both. **This document deliberately publishes no cross-benchmark mean.** Pick the model against the data you actually have; the per-benchmark tables below are the unit of decision.
 
@@ -256,7 +256,7 @@ This harness still prefixes the corpus text itself, because it must reproduce ro
 
 ## Is it better than what ships today? (k=20, no instruction)
 
-Every model against `all-MiniLM-L6-v2` — this ladder's reference model, which was `DEFAULT_EMBEDDING_MODEL` when these rows were measured — on the same records, paired per record and resampled by gold cluster. **Δ is the mean per-record recall difference**, not the difference of the two aggregate recalls above: the bootstrap resamples per-record units, so the point estimate has to be the same statistic the interval is built from. `clusters` is the number of independent units resampled — the honest denominator, and much smaller than the record count.
+Every model against `all-MiniLM-L6-v2` — this study's chosen baseline — **not** the shipped default, which is `intfloat/e5-base-v2` — on the same records, paired per record and resampled by gold cluster. **Δ is the mean per-record recall difference**, not the difference of the two aggregate recalls above: the bootstrap resamples per-record units, so the point estimate has to be the same statistic the interval is built from. `clusters` is the number of independent units resampled — the honest denominator, and much smaller than the record count.
 
 **This sweep does not change the default.** A CI spanning 0 is not evidence of a better default; it is evidence the measurement cannot tell them apart on that benchmark.
 

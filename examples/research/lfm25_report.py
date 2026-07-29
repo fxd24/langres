@@ -143,6 +143,22 @@ def _provenance_section() -> list[str]:
                 f"hashes apply to {scope}. This is an endpoint comparison: it catches a "
                 f"change that persists, not one reverted before the sweep ended."
             )
+            # A sweep started on a modified tree is supported -- research often
+            # measures uncommitted code -- but then the blob above exists nowhere
+            # in history, while the table beside it prints a last-touching commit
+            # that did NOT produce it. Saying the hashes "apply" without saying
+            # that is the report claiming reconstructibility it does not have.
+            dirty = doc.get("dirty_at_start") or []
+            if dirty:
+                lines.append(
+                    f"**Measured on a MODIFIED tree.** {len(dirty)} path(s) carried "
+                    "uncommitted changes when the sweep began "
+                    f"({', '.join(f'`{p}`' for p in dirty[:6])}"
+                    f"{', …' if len(dirty) > 6 else ''}). The blob hashes above therefore "
+                    "name content that exists in no commit, and the *last commit touching "
+                    "it* column is **not** the code that ran. These rows cannot be "
+                    "reproduced from the named checkout alone."
+                )
     elif stable is False:
         lines.append(
             "**A tracked file changed mid-sweep** "
@@ -570,6 +586,15 @@ def _noise_floor_table(
         separates = low is not None and high is not None and (low > 0 or high < 0)
         if not separates:
             verdict = "**cannot separate trained from random**"
+            uninformative.append(benchmark)
+        elif margin <= 0:
+            # The control OUTSCORES every tuned model. `margin <= 0` also satisfies
+            # `margin < NARROW_RANGE`, so this fell into the narrow branch and the
+            # prose there — "the control *is* significantly below the tuned models"
+            # — asserted the exact opposite of the rows. An inverted benchmark is
+            # not a narrow one; it is a result that invalidates any ranking read
+            # off it, and it gets said rather than bucketed. (Cross-model review.)
+            verdict = "**control BEATS every tuned model — inverted, unusable for ranking**"
             uninformative.append(benchmark)
         elif margin < NARROW_RANGE:
             verdict = f"separates, but narrow (<{NARROW_RANGE:.2f})"
