@@ -10,6 +10,7 @@ and none of them would have shown up as a crash.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -2114,3 +2115,47 @@ class TestLfm25Specs:
         """Adding them to MODELS would enlarge the 2026-07-27 ladder's denominator."""
         assert not {spec.name for spec in LADDER.EXTRA_SPECS} & {s.name for s in LADDER.MODELS}
         assert "LiquidAI/LFM2.5-Embedding-350M" in LADDER.MODELS_BY_NAME
+
+
+class TestGeneratedReproduceCommands:
+    """A published command that cannot run is worse than no command.
+
+    ``run_ladder.sh`` refuses (exit 2) when a custom ``LADDER_ARTIFACT`` arrives
+    without ``LADDER_ALL_MODELS`` -- the coverage denominator. That guard and the
+    generated "How to reproduce" block were added in the same PR and the second
+    was never re-checked against the first, so every committed reproduce command
+    exited 2 before measuring anything. Verified against the real committed
+    reports, because that is where a reader copies from.
+    """
+
+    REPORTS = (
+        "docs/research/20260727_embedder_ladder.md",
+        "docs/research/20260729_lfm25_tuned.md",
+        "docs/research/20260729_lfm25_base_encoders.md",
+    )
+
+    @staticmethod
+    def _driver_requires_all_models() -> bool:
+        """Read the requirement off the driver, so this test cannot drift from it."""
+        driver = (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+        return "LADDER_ARTIFACT is set but LADDER_ALL_MODELS is not" in driver
+
+    def test_every_command_setting_a_custom_artifact_also_sets_the_denominator(self) -> None:
+        assert self._driver_requires_all_models(), (
+            "the driver no longer enforces this; update or delete this test rather "
+            "than letting it pass vacuously"
+        )
+
+        offenders: list[str] = []
+        for name in self.REPORTS:
+            path = ROOT / name
+            if not path.exists():  # pragma: no cover - artifact not generated yet
+                continue
+            for block in re.findall(r"```bash\n(.*?)```", path.read_text(), re.S):
+                for command in block.split("\n\n"):
+                    if "LADDER_ARTIFACT=" not in command:
+                        continue
+                    if "LADDER_ALL_MODELS=" not in command:
+                        offenders.append(f"{name}: {command.splitlines()[0]}")
+
+        assert not offenders, "reproduce commands that would exit 2:\n" + "\n".join(offenders)

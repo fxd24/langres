@@ -2384,18 +2384,29 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # and made the licence table iterate them, emptying it. Renamed so the two
     # cannot collide.
     ladder_arg = " ".join(spec.name for spec in LADDER)
+    # LADDER_ALL_MODELS is the artifact's COVERAGE DENOMINATOR and run_ladder.sh
+    # refuses (exit 2) if a custom LADDER_ARTIFACT arrives without it -- so a
+    # command that omitted it did not merely mis-report coverage, it failed
+    # before measuring anything. It stays the full ladder in BOTH commands; only
+    # LADDER_MODELS narrows, which is exactly the distinction the guard exists to
+    # enforce. (Cross-model review: the guard and these commands were added in the
+    # same PR and the second was not re-checked against the first.)
     env = (
         f'LADDER_ARTIFACT="{ARTIFACT_PREFIX}" \\\n'
         f'  LADDER_REFERENCE_MODEL="{REFERENCE_MODEL}" \\\n'
+        f'  LADDER_ALL_MODELS="{ladder_arg}" \\\n'
         f'  LADDER_MODELS="{ladder_arg}" \\\n'
     )
     out.append(
         "\n```bash\n"
         "# every model in this study, committing and pushing after each one\n"
         f"{env}  bash examples/research/run_ladder.sh\n"
-        "\n# or one model / a subset (space-separated) -- same artifact + baseline\n"
+        "\n# or one model / a subset (space-separated) -- same artifact + baseline.\n"
+        "# LADDER_ALL_MODELS stays the FULL ladder: it is what the report is\n"
+        "# accountable for, so a subset run still reports the others as missing.\n"
         f'LADDER_ARTIFACT="{ARTIFACT_PREFIX}" \\\n'
         f'  LADDER_REFERENCE_MODEL="{REFERENCE_MODEL}" \\\n'
+        f'  LADDER_ALL_MODELS="{ladder_arg}" \\\n'
         f'  LADDER_MODELS="{REFERENCE_MODEL}" \\\n'
         "  bash examples/research/run_ladder.sh\n"
         "\n# render this file from the existing rows, measuring nothing\n"
