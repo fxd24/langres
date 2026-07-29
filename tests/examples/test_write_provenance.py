@@ -806,16 +806,23 @@ class TestTheResumePublishesWhatItCloses:
     def test_it_pushes_after_closing_the_window(self) -> None:
         resume = self._resume()
 
-        assert "git push -q origin HEAD" in resume
+        assert "publish_branch" in resume
         assert resume.index('commit_only "results(lfm25): close') < resume.index("publish\n")
 
     def test_it_refuses_to_push_onto_the_default_branch(self) -> None:
-        """`git push origin HEAD` follows whatever is checked out."""
-        resume = self._resume()
+        """`git push origin HEAD` follows whatever is checked out.
 
-        assert "symbolic-ref" in resume
-        assert "default=${default:-main}" in resume
-        assert "NOT pushing: on" in resume
+        The rule moved into publish_lib.sh in round 26, so this asserts the resume
+        USES it rather than re-deriving the branch itself — a second copy here is
+        exactly what the shared file exists to prevent.
+        """
+        resume = self._resume()
+        lib = (Path(PROV.REPO_ROOT) / "examples" / "research" / "publish_lib.sh").read_text()
+
+        assert "publish_lib.sh" in resume
+        assert "symbolic-ref" not in resume
+        assert "default=${default:-main}" in lib
+        assert "NOT pushing: on" in lib
 
 
 class TestTheResumeOrdersItsIrreversibleStepsLast:
@@ -959,7 +966,9 @@ class TestTheRendererRefusesUncommittedInputs:
         report = self._report()
         stranded = tmp_path / "base_rows.jsonl"
         stranded.write_text("{}\n")
-        monkeypatch.setattr(report, "BASE_ROWS", stranded)
+        # RENDER_INPUTS is the list the guard reads; patching a single constant
+        # stopped reaching it once the inputs were declared in one place.
+        monkeypatch.setattr(report, "RENDER_INPUTS", (stranded,))
         monkeypatch.delenv(report.FORCE_ENV, raising=False)
 
         with pytest.raises(SystemExit, match="REFUSING to render"):
@@ -971,7 +980,7 @@ class TestTheRendererRefusesUncommittedInputs:
         report = self._report()
         stranded = tmp_path / "probe.json"
         stranded.write_text("{}")
-        monkeypatch.setattr(report, "LOAD_PROBE", stranded)
+        monkeypatch.setattr(report, "RENDER_INPUTS", (stranded,))
         monkeypatch.delenv(report.FORCE_ENV, raising=False)
 
         with pytest.raises(SystemExit, match="REFUSING to render"):
@@ -981,8 +990,7 @@ class TestTheRendererRefusesUncommittedInputs:
         """The control, on committed tracked files rather than the live artifacts."""
         report = self._report()
         licence = Path(PROV.REPO_ROOT) / "LICENSE"
-        for field in ("TUNED_ROWS", "BASE_ROWS", "LOAD_PROBE"):
-            monkeypatch.setattr(report, field, licence)
+        monkeypatch.setattr(report, "RENDER_INPUTS", (licence,))
         monkeypatch.delenv(report.FORCE_ENV, raising=False)
 
         report._refuse_uncommitted_inputs()
@@ -1027,3 +1035,78 @@ class TestTheResumeOwnsPublication:
 
         assert resume.index("LADDER_PREFLIGHT_ONLY=1") < measuring
         assert measuring < resume.index("code=$?")
+
+
+class TestEveryReadInputIsGuarded:
+    """The uncommitted-input guard was written against the files I had in mind.
+
+    It checked the two row files and the load probe, and silently skipped the
+    licence text and the prior ladder report -- both of which are QUOTED into the
+    output, so a render could publish bytes absent from the commit carrying it.
+    """
+
+    @staticmethod
+    def _report() -> ModuleType:
+        name = "example_lfm25_report_inputs_gate"
+        path = ROOT / "examples" / "research" / "lfm25_report.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_licence_and_prior_ladder_are_declared(self) -> None:
+        report = self._report()
+        declared = {Path(x).name for x in report.RENDER_INPUTS}
+
+        assert "20260729_lfm25_license.txt" in declared
+        assert "20260727_embedder_ladder.md" in declared
+
+    def test_the_outputs_are_not_treated_as_inputs(self) -> None:
+        """Guarding the file it is about to write would refuse every re-render."""
+        report = self._report()
+        declared = {Path(x).name for x in report.RENDER_INPUTS}
+
+        assert Path(report.OUTPUT).name not in declared
+        assert Path(report.PROVENANCE).name not in declared
+
+
+class TestOnePublicationRule:
+    """Four copies of "push, but never onto the default branch" existed at once.
+
+    They had drifted in what they printed and, twice in this series, in whether
+    they ran at all -- which is how rows reached origin while the provenance
+    window describing them stayed on the local branch.
+    """
+
+    RESEARCH = Path(__file__).parents[2] / "examples" / "research"
+    DRIVERS = ("run_ladder.sh", "run_lfm25.sh", "resume_lfm25_study_a.sh")
+
+    def test_the_rule_lives_in_one_file(self) -> None:
+        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+
+        assert "symbolic-ref" in lib
+        assert "publish_branch()" in lib
+
+    def test_no_driver_keeps_its_own_copy(self) -> None:
+        for name in self.DRIVERS:
+            source = (self.RESEARCH / name).read_text()
+            assert "symbolic-ref" not in source, name
+            assert "publish_lib.sh" in source, name
+
+    def test_the_abort_path_publishes_its_closing_window(self) -> None:
+        """Rows are pushed per model; the window closing them must follow."""
+        driver = (self.RESEARCH / "run_lfm25.sh").read_text()
+        block = driver[
+            driver.index("commit_provenance() {") : driver.index("abort_with_provenance")
+        ]
+
+        assert "publish_branch" in block
+
+    def test_publication_failure_is_never_fatal(self) -> None:
+        """Durability is the commit; publication is not worth aborting a sweep for."""
+        lib = (self.RESEARCH / "publish_lib.sh").read_text()
+
+        assert "exit " not in lib
+        assert "return 1" in lib

@@ -75,6 +75,12 @@ set -u -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 
+# Shared publication rule. Sourced by BASH_SOURCE so it resolves beside this
+# script, not against the repo root a caller happens to be in.
+# shellcheck source=examples/research/publish_lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/publish_lib.sh"
+
+
 # One artifact set per (model list, reference model). Overridable together so a
 # study with a different baseline gets its own rows/report/sidecar: the sidecar
 # is keyed by the reference model and the recorded deltas are labelled with it,
@@ -216,20 +222,11 @@ push_results() {
     log "not pushing: the caller owns publication for this run."
     return 0
   fi
-  branch=$(git rev-parse --abbrev-ref HEAD)
-  default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
-  default=${default#origin/}
-  default=${default:-main}
-  if [ "$branch" = "$default" ] || [ "$branch" = "HEAD" ]; then
-    log "NOT pushing: on '$branch'. Results are COMMITTED locally; publish via a PR:"
-    log "    git switch -c results/$(basename "$ARTIFACT") && git push -u origin HEAD"
-    return 0
-  fi
-  if git push -q origin HEAD 2>/dev/null; then
-    log "pushed"
-  else
-    log "push failed (will retry next model)"
-  fi
+  # The branch rule lives in publish_lib.sh, shared with the other two drivers.
+  # Three copies is what let rows reach origin while the provenance window
+  # describing them stayed local. Failure is not fatal here: the rows are already
+  # committed, and this loop retries on the next model. (Cross-model review.)
+  publish_branch "ladder" || true
 }
 
 # `${VAR:+...}` tests only that the variable is NON-EMPTY, so

@@ -39,6 +39,12 @@
 # has already shipped once.
 set -u
 
+# Shared publication rule (publish_lib.sh), the same one run_ladder.sh and
+# run_lfm25.sh use. Four copies of "push, but never onto the default branch" had
+# drifted in what they printed and in whether they ran at all.
+# shellcheck source=examples/research/publish_lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/publish_lib.sh"
+
 export OMP_NUM_THREADS=1
 export KMP_DUPLICATE_LIB_OK=TRUE
 
@@ -183,19 +189,7 @@ commit_only "results(lfm25): close the study-A resume's window" \
 # someone noticed and pushed by hand. Same branch guard as run_ladder.sh's
 # push_results: never onto the default branch, where `git push origin HEAD` would
 # publish generated results straight past the PR-only rule. (Cross-model review.)
-publish() {
-  local branch default
-  branch=$(git rev-parse --abbrev-ref HEAD)
-  default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
-  default=${default#origin/}
-  default=${default:-main}
-  if [ "$branch" = "$default" ] || [ "$branch" = "HEAD" ]; then
-    say "NOT pushing: on '$branch'. The closed window and write-up are COMMITTED; publish via a PR."
-    return 0
-  fi
-  git push -q origin HEAD 2>/dev/null && say "pushed" || \
-    say "WARNING: push failed. The remote still shows the new row under an OPEN window; push manually."
-}
+publish() { publish_branch "resume"; }
 
 # Publish only a run that fully succeeded. run_ladder.sh already withholds its own
 # push when --verify fails; pushing unconditionally here re-published exactly what

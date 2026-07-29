@@ -36,6 +36,20 @@ LOAD_PROBE = RESEARCH / "20260729_lfm25_load_probe.json"
 LICENSE = RESEARCH / "20260729_lfm25_license.txt"
 OUTPUT = RESEARCH / "20260729_lfm25_encoders.md"
 
+#: Every file this renderer READS. One list, because the uncommitted-input guard
+#: was written against the three that were on my mind and silently skipped the
+#: licence text and the prior ladder -- both of which are QUOTED into the output,
+#: so a render could publish bytes absent from the commit carrying it. Adding an
+#: input to the module without adding it here is what
+#: `test_every_read_input_is_guarded` exists to catch. (Cross-model review.)
+RENDER_INPUTS: tuple[Path, ...] = (
+    TUNED_ROWS,
+    BASE_ROWS,
+    LOAD_PROBE,
+    LICENSE,
+    REPO_ROOT / "docs" / "research" / "20260727_embedder_ladder.md",
+)
+
 HEADLINE_K = 20
 TUNED_BASELINE = "intfloat/e5-base-v2"
 BASE_BASELINE = "LiquidAI/LFM2.5-Embedding-350M"
@@ -2061,7 +2075,7 @@ def _refuse_uncommitted_inputs() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from write_provenance import _uncommitted
 
-    moved = [name for path in (TUNED_ROWS, BASE_ROWS, LOAD_PROBE) for name in _uncommitted(path)]
+    moved = [name for path in RENDER_INPUTS for name in _uncommitted(path)]
     if not moved:
         return
     raise SystemExit(

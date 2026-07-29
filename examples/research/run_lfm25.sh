@@ -53,6 +53,11 @@ set -u -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 
+# Shared publication rule, resolved beside this script rather than against the
+# repo root a caller happens to be in.
+# shellcheck source=examples/research/publish_lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/publish_lib.sh"
+
 # Not optional, and not inherited: `.env` is gitignored and absent from a fresh
 # worktree. torch, faiss and scikit-learn each bundle their own libomp, and with
 # two runtimes loaded a sweep DEADLOCKS in __kmp_join_barrier at 0% CPU with no
@@ -129,6 +134,13 @@ commit_provenance() {
       fi
     fi
   fi
+  # PUBLISH the closing window, do not just commit it. run_ladder.sh has already
+  # pushed each model's rows by this point, so exiting here left origin holding
+  # those rows beside the OPEN window committed at startup, while the only copy of
+  # the closing evidence sat on the local branch. Rows published, the record of
+  # what produced them withheld -- the exact asymmetry this abort path exists to
+  # prevent. (Cross-model review.)
+  publish_branch "lfm25-abort" || true
   exit "$code"
 }
 
@@ -450,20 +462,9 @@ if ! git diff --cached --quiet -- "$REPORT_MD" "$PROVENANCE_JSON"; then
     say "FATAL: commit failed. The write-up is staged but NOT durable; stopping."
     exit 1
   fi
-  # Never onto the default branch: `git push origin HEAD` follows whatever is
-  # checked out, so running this from `main` would publish generated results
-  # straight there, past the PR-only guardrail. The commit above already made
-  # them durable; only the publish is withheld. (Cross-model review.)
-  BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  DEFAULT=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
-  DEFAULT=${DEFAULT#origin/}
-  if [ "$BRANCH" = "${DEFAULT:-main}" ] || [ "$BRANCH" = "HEAD" ]; then
-    say "NOT pushing: on '$BRANCH'. The write-up is COMMITTED; publish via a PR:"
-    say "    git switch -c results/lfm25 && git push -u origin HEAD"
-  elif git push -q origin HEAD 2>/dev/null; then
-    say "pushed"
-  else
-    say "push failed"
-  fi
+  # Shared rule (publish_lib.sh). This was the FOURTH copy of the same
+  # default-branch check; they had already drifted apart in what they printed and,
+  # worse, in whether they existed at all. (Cross-model review.)
+  publish_branch "lfm25" || true
 fi
 say "complete"
