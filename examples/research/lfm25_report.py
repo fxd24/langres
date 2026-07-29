@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -233,8 +235,22 @@ def _provenance_section() -> list[str]:
                 "",
                 *[f"- `{c}`" for c in changed],
                 "",
-                "The rows stand: no `.py` moved, so every number still means what the table says "
-                "it means. What this disclosure costs is the claim that re-running the *committed* "
+                # A reconstructed `git log` check is not proof that no source moved:
+                # the same section says two paragraphs earlier that an uncommitted
+                # edit kept through the sweep would be invisible to it, and that the
+                # digest covered selected suffixes only. Asserting "every number
+                # still means what the table says" off that evidence contradicts the
+                # caveat directly above it. Live windows DO observe the working
+                # tree, so they keep the stronger sentence. (Cross-model review.)
+                (
+                    "No tracked COMMIT touched the measurement files either, which is the most "
+                    "these reconstructed hashes can say — it is not the same as “no `.py` "
+                    "moved”, for the reason given above. "
+                    if retrospective
+                    else "The rows stand: no `.py` moved, so every number still means what the "
+                    "table says it means. "
+                )
+                + "What this disclosure costs is the claim that re-running the *committed* "
                 "driver reproduces this exact schedule of cells — it does not, because part of "
                 "that schedule was a recovery from an OS kill. It is reported rather than "
                 "swallowed because the `.py`-only digest this study started with certified these "
@@ -1979,8 +1995,47 @@ def render() -> str:
     return "\n".join(parts)
 
 
+#: Discard the tracked write-up deliberately, matching `run_lfm25.sh`.
+FORCE_ENV = "LFM25_FORCE"
+
+
+def _refuse_to_overwrite_uncommitted() -> None:
+    """Stop before destroying uncommitted edits to the generated write-up.
+
+    Third site of one defect. ``run_lfm25.sh`` refuses to start over a dirty
+    write-up, but ``run_ladder.sh`` guards only the per-study artifacts, and both
+    this module's documented standalone invocation and the study-A resume — which
+    now calls it — reach this writer with no protection at all. Guarding the
+    CALLER protects the callers you remembered; guarding the WRITER protects the
+    file. (Cross-model review.)
+
+    Reuses ``write_provenance._uncommitted`` rather than reimplementing it: it
+    already treats a path git cannot describe as pending, and a second copy of a
+    safety check is a second thing to drift.
+    """
+    if os.environ.get(FORCE_ENV) == "1":
+        logger.warning("%s=1: overwriting %s without checking", FORCE_ENV, OUTPUT)
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from write_provenance import _uncommitted
+
+    lost = _uncommitted(OUTPUT)
+    if not lost:
+        return
+    raise SystemExit(
+        f"REFUSING to overwrite {OUTPUT}: it holds uncommitted changes ({', '.join(lost)}).\n"
+        "  If those are a HAND EDIT, keep them: commit, or copy the file outside this\n"
+        "  worktree, then re-render.\n"
+        "  If they are simply the PREVIOUS RENDER's own output — re-rendering twice\n"
+        "  before committing is the ordinary way to check this file is stable — that is\n"
+        "  what the force flag is for. This guard cannot tell the two apart, so it asks:\n"
+        f"    {FORCE_ENV}=1 uv run python examples/research/lfm25_report.py"
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _refuse_to_overwrite_uncommitted()
     OUTPUT.write_text(render())
     logger.info("wrote %s", OUTPUT)
 

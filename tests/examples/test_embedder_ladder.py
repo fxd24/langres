@@ -2404,6 +2404,29 @@ class TestTheProseNamesOnlyModelsItMeasured:
         for absent in ("all-MiniLM-L6-v2", "all-mpnet-base-v2", "BAAI/bge-base-en-v1.5"):
             assert absent not in caveat, absent
 
+    def test_it_makes_no_claim_about_how_a_checkpoint_was_TRAINED(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`documented_arm` records what THIS HARNESS configured, nothing more.
+
+        Read as "was not trained with a query-side instruction" it was false for
+        `intfloat/e5-base-v2` (native `query:`/`passage:`) and for the
+        Qwen3-Embedding rows -- which the paragraph above simultaneously
+        described as HAVING a documented instruction, two paragraphs apart in one
+        generated document. Deriving a claim beats typing it only when the field
+        means what the sentence says.
+        """
+        portfolio = self._specs("intfloat/e5-base-v2", "google/embeddinggemma-300m")
+        monkeypatch.setattr(LADDER, "LADDER", portfolio)
+
+        caveat = _caveat(LADDER.render_report(self._rows(portfolio)))
+
+        assert "intfloat/e5-base-v2" in caveat
+        assert "were not trained with one" not in caveat
+        assert "never asked for one" not in caveat
+        # And it says outright that absence here is not absence of training.
+        assert "not about how a" in caveat
+
     def test_the_worked_examples_are_dropped_when_their_model_is_absent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

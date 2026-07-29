@@ -693,11 +693,16 @@ class TestTheProbeGuardsItsOwnOutput:
 
         probe._refuse_to_overwrite_uncommitted()
 
-    def test_the_committed_probe_does_not_block_an_ordinary_run(
+    def test_a_clean_tracked_output_does_not_block_an_ordinary_run(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The control. A guard that refuses everything is not a guard."""
+        """The control. A guard that refuses everything is not a guard.
+
+        Same reason as the write-up's control for using a committed unrelated
+        file: the real probe is legitimately dirty mid-refresh.
+        """
         probe = self._probe()
+        monkeypatch.setattr(probe, "OUTPUT_PATH", Path(PROV.REPO_ROOT) / "LICENSE")
         monkeypatch.delenv(probe.FORCE_ENV, raising=False)
 
         probe._refuse_to_overwrite_uncommitted()
@@ -714,3 +719,100 @@ class TestTheProbeGuardsItsOwnOutput:
         source = (ROOT / "examples" / "research" / "lfm25_load_probe.py").read_text()
 
         assert "from write_provenance import _uncommitted" in source
+
+
+class TestTheCombinedWriteUpGuardsItsOwnWriter:
+    """Third site of one defect, and the resume is what made it reachable.
+
+    `run_lfm25.sh` refuses to start over a dirty write-up, but `run_ladder.sh`
+    guards only the per-study artifacts -- and both the documented standalone
+    render and the study-A resume (which round 22 taught to call it) reach this
+    writer with no protection. Guarding the CALLER protects the callers you
+    remembered; guarding the WRITER protects the file.
+    """
+
+    @staticmethod
+    def _report() -> ModuleType:
+        name = "example_lfm25_report_guard"
+        path = ROOT / "examples" / "research" / "lfm25_report.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_it_refuses_over_uncommitted_edits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = self._report()
+        stranded = tmp_path / "encoders.md"
+        stranded.write_text("a hand edit no commit holds")
+        monkeypatch.setattr(report, "OUTPUT", stranded)
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+
+        with pytest.raises(SystemExit, match="REFUSING to overwrite"):
+            report._refuse_to_overwrite_uncommitted()
+
+    def test_the_force_flag_is_the_documented_escape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = self._report()
+        stranded = tmp_path / "encoders.md"
+        stranded.write_text("x")
+        monkeypatch.setattr(report, "OUTPUT", stranded)
+        monkeypatch.setenv(report.FORCE_ENV, "1")
+
+        report._refuse_to_overwrite_uncommitted()
+
+    def test_a_clean_tracked_output_renders_normally(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The control: a guard that refuses every ordinary render is not a guard.
+
+        Pointed at a committed, unmodified tracked file rather than at the real
+        write-up, because the real one is legitimately dirty whenever someone is
+        mid-render -- which would make this control fail for a reason that has
+        nothing to do with the guard being correct.
+        """
+        report = self._report()
+        monkeypatch.setattr(report, "OUTPUT", Path(PROV.REPO_ROOT) / "LICENSE")
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+
+        report._refuse_to_overwrite_uncommitted()
+
+    def test_all_three_writers_share_one_force_flag(self) -> None:
+        """Three different escape hatches would be three things to remember."""
+        report = self._report()
+        probe_source = (ROOT / "examples" / "research" / "lfm25_load_probe.py").read_text()
+
+        assert report.FORCE_ENV == "LFM25_FORCE"
+        assert 'FORCE_ENV = "LFM25_FORCE"' in probe_source
+        assert "LFM25_FORCE" in (ROOT / "examples" / "research" / "run_lfm25.sh").read_text()
+
+
+class TestTheResumePublishesWhatItCloses:
+    """`run_ladder.sh` pushes the re-measured ROW from inside the resume.
+
+    Without a matching push at the end, a successful resume left the remote
+    holding that row beside an OPEN provenance window and a stale combined
+    write-up -- the published state contradicting itself -- until someone noticed.
+    """
+
+    @staticmethod
+    def _resume() -> str:
+        return (
+            Path(PROV.REPO_ROOT) / "examples" / "research" / "resume_lfm25_study_a.sh"
+        ).read_text()
+
+    def test_it_pushes_after_closing_the_window(self) -> None:
+        resume = self._resume()
+
+        assert "git push -q origin HEAD" in resume
+        assert resume.index('commit_only "results(lfm25): close') < resume.index("publish\n")
+
+    def test_it_refuses_to_push_onto_the_default_branch(self) -> None:
+        """`git push origin HEAD` follows whatever is checked out."""
+        resume = self._resume()
+
+        assert "symbolic-ref" in resume
+        assert "default=${default:-main}" in resume
+        assert "NOT pushing: on" in resume

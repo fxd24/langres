@@ -107,8 +107,10 @@ def _refuse_to_overwrite_uncommitted() -> None:
         f"({', '.join(lost)}).\n"
         "  A probe run costs ~2 minutes; the measurements already in that file may "
         "not be reproducible.\n"
-        "  Commit them, or copy the file outside this worktree, then re-run. To "
-        f"discard them deliberately:\n"
+        "  If those are measurements or a hand edit, keep them: commit, or copy the file\n"
+        "  outside this worktree, then re-run. If they are just the previous probe's own\n"
+        "  output, that is what the force flag is for — this guard cannot tell the two\n"
+        "  apart, so it asks:\n"
         f"    {FORCE_ENV}=1 uv run python examples/research/lfm25_load_probe.py"
     )
 

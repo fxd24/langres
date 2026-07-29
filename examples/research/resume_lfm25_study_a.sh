@@ -126,4 +126,25 @@ commit_only "results(lfm25): close the study-A resume's window and re-render" \
   exit 1
 }
 
+# run_ladder.sh already pushed the re-measured ROW. Without this, a successful
+# resume left the remote holding that row beside an OPEN provenance window and a
+# stale combined write-up -- the published state contradicting itself -- until
+# someone noticed and pushed by hand. Same branch guard as run_ladder.sh's
+# push_results: never onto the default branch, where `git push origin HEAD` would
+# publish generated results straight past the PR-only rule. (Cross-model review.)
+publish() {
+  local branch default
+  branch=$(git rev-parse --abbrev-ref HEAD)
+  default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  default=${default#origin/}
+  default=${default:-main}
+  if [ "$branch" = "$default" ] || [ "$branch" = "HEAD" ]; then
+    say "NOT pushing: on '$branch'. The closed window and write-up are COMMITTED; publish via a PR."
+    return 0
+  fi
+  git push -q origin HEAD 2>/dev/null && say "pushed" || \
+    say "WARNING: push failed. The remote still shows the new row under an OPEN window; push manually."
+}
+publish
+
 exit $code

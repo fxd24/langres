@@ -134,17 +134,25 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 
 > ### Do not read this table as 'instructions do not help retrieval'
 >
-> **A negative result here is mostly a statement about the models in it.**
-> `LiquidAI/LFM2.5-Encoder-350M`, `LiquidAI/LFM2.5-Encoder-230M` ship no documented query-side
-> instruction, so they were not trained with one. Prepending one to a
-> model that never saw one in training does not give it an instruction to
-> follow — it moves the query vector away from the document vectors it is
-> supposed to match. Measuring that it hurts is a real, useful, and
-> actionable finding: **do not switch these models on by default with a
-> prompt.** It is not evidence about instruction-following embedders.
+> **A negative result here is mostly a statement about what was measured.**
+> For `LiquidAI/LFM2.5-Encoder-350M`, `LiquidAI/LFM2.5-Encoder-230M` this sweep ran only the
+> GENERIC instruction — none of them has a `documented` arm here, so its
+> own recipe, if it has one, was never tested. Prefixing a query with an
+> instruction a model was not aligned to moves the query vector away from
+> the document vectors it is supposed to match, which is a real and
+> actionable finding: **do not switch a generic prompt on by default.**
+> It is not evidence about instruction-following embedders.
 >
-> The hypothesis this axis exists to test is about the models trained for
-> it. In this table that is `LiquidAI/LFM2.5-Embedding-350M`, which carries a
+> **This list is about what this sweep configured, not about how a
+> checkpoint was trained.** A model can have been trained with its own
+> query/document scheme and still register no prompt in its
+> sentence-transformers config, in which case it appears above. So a poor
+> `instruct` result for any of them is evidence about a *transplanted
+> generic* instruction — never evidence that the checkpoint cannot follow
+> its own.
+>
+> The models whose OWN recipe this sweep did run are
+> `LiquidAI/LFM2.5-Embedding-350M`, which carries a
 > `documented` arm read from its own configuration — the generic
 > `instruct` arm is **not** that recipe (see `own prompt names`), so read
 > the two separately.

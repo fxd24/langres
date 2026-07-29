@@ -361,8 +361,16 @@ if uv run python examples/research/lfm25_load_probe.py; then
   # Committed the moment it exists, not bundled into the final commit: an abort
   # between here and the render would otherwise leave the refreshed probe as
   # uncommitted output, which dies with the worktree.
+  # Both failure paths go through abort_with_provenance, not a bare `exit 1`.
+  # By this point BOTH studies' rows are committed and pushed, and the window is
+  # still open. Exiting directly left that durable, published branch with no
+  # finish timestamp and no stability verdict for the rows already on it -- the
+  # window describing them simply never closed. A staging or commit failure here
+  # (hook, permissions, full disk) is exactly the kind of thing that happens
+  # after the expensive part is done. (Cross-model review.)
   git add "$LOAD_PROBE_JSON" || {
     say "FATAL: could not stage the refreshed load probe"
+    abort_with_provenance 1
     exit 1
   }
   if ! git diff --cached --quiet -- "$LOAD_PROBE_JSON"; then
@@ -371,6 +379,7 @@ if uv run python examples/research/lfm25_load_probe.py; then
       -m "Captured inside this sweep's measurement window, so the write-up's loading claims describe the same environment as its rows." ||
       {
         say "FATAL: the refreshed load probe is staged but NOT committed; stopping."
+        abort_with_provenance 1
         exit 1
       }
   fi

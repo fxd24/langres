@@ -2956,51 +2956,64 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "result for that arm is a statement about a transplanted instruction, not "
             "about the model's instruction-following.\n"
         )
-    # Both lists are DERIVED from the ladder being rendered, not typed. Hard-coded,
-    # this paragraph explained the base-encoder study using `all-MiniLM-*`,
-    # `all-mpnet-base-v2` and BGE — none of which have a row in it — while omitting
-    # every model that does. `documented_arm` is precisely the "ships a query-side
-    # instruction" flag, so the partition is a property of the specs rather than a
-    # second list to keep in sync. The random-init control is excluded: it has no
-    # training of any kind, so "was not trained with an instruction" says nothing
-    # about it. (Cross-model review.)
+    # Derived from the ladder being rendered — but derived about the SWEEP, not
+    # about the checkpoints' training history.
+    #
+    # The first version of this partition read `documented_arm is None` as "was
+    # not trained with a query-side instruction". That field records only whether
+    # THIS HARNESS configured a checkpoint-owned arm, so the claim was false for
+    # `intfloat/e5-base-v2` (native `query:`/`passage:`) and for both
+    # `Qwen/Qwen3-Embedding-*` rows — which the paragraph above simultaneously
+    # described as HAVING a documented instruction, two paragraphs apart in one
+    # generated document. Deriving a claim is only safer than typing it when the
+    # field means what the sentence says; here nothing in this harness records
+    # training history, and `registered_prompts` does not either (e5 registers
+    # none). So the claim is dropped rather than re-derived, and what is said is
+    # what the sweep can actually observe. (Cross-model review.)
     trainable = [spec for spec in LADDER if not spec.random_init]
-    uninstructed = [spec.name for spec in trainable if spec.documented_arm is None]
-    instructed = [spec.name for spec in trainable if spec.documented_arm is not None]
+    generic_only = [spec.name for spec in trainable if spec.documented_arm is None]
+    own_recipe = [spec.name for spec in trainable if spec.documented_arm is not None]
     names = lambda group: ", ".join(f"`{n}`" for n in group)  # noqa: E731
     out.append(
         "\n> ### Do not read this table as 'instructions do not help retrieval'\n"
         ">\n"
-        "> **A negative result here is mostly a statement about the models in it.**\n"
+        "> **A negative result here is mostly a statement about what was measured.**\n"
     )
-    if uninstructed:
+    if generic_only:
         out.append(
-            f"> {names(uninstructed)} ship no documented query-side\n"
-            "> instruction, so they were not trained with one. Prepending one to a\n"
-            "> model that never saw one in training does not give it an instruction to\n"
-            "> follow — it moves the query vector away from the document vectors it is\n"
-            "> supposed to match. Measuring that it hurts is a real, useful, and\n"
-            "> actionable finding: **do not switch these models on by default with a\n"
-            "> prompt.** It is not evidence about instruction-following embedders.\n"
+            f"> For {names(generic_only)} this sweep ran only the\n"
+            "> GENERIC instruction — none of them has a `documented` arm here, so its\n"
+            "> own recipe, if it has one, was never tested. Prefixing a query with an\n"
+            "> instruction a model was not aligned to moves the query vector away from\n"
+            "> the document vectors it is supposed to match, which is a real and\n"
+            "> actionable finding: **do not switch a generic prompt on by default.**\n"
+            "> It is not evidence about instruction-following embedders.\n"
+            ">\n"
+            "> **This list is about what this sweep configured, not about how a\n"
+            "> checkpoint was trained.** A model can have been trained with its own\n"
+            "> query/document scheme and still register no prompt in its\n"
+            "> sentence-transformers config, in which case it appears above. So a poor\n"
+            "> `instruct` result for any of them is evidence about a *transplanted\n"
+            "> generic* instruction — never evidence that the checkpoint cannot follow\n"
+            "> its own.\n"
             ">\n"
         )
-    if instructed:
+    if own_recipe:
         out.append(
-            "> The hypothesis this axis exists to test is about the models trained for\n"
-            f"> it. In this table that is {names(instructed)}, "
-            f"{'which carry' if len(instructed) > 1 else 'which carries'} a\n"
-            f"> `documented` arm read from {'their' if len(instructed) > 1 else 'its'} own "
+            "> The models whose OWN recipe this sweep did run are\n"
+            f"> {names(own_recipe)}, "
+            f"{'which carry' if len(own_recipe) > 1 else 'which carries'} a\n"
+            f"> `documented` arm read from {'their' if len(own_recipe) > 1 else 'its'} own "
             "configuration — the generic\n"
             "> `instruct` arm is **not** that recipe (see `own prompt names`), so read\n"
             "> the two separately.\n"
         )
     else:
         out.append(
-            "> The hypothesis this axis exists to test is about models TRAINED for a\n"
-            "> query-side instruction, and **this table contains none** — no model here\n"
+            "> **No model here had its own recipe measured** — nothing in this table\n"
             "> carries a `documented` arm. For this study the instruction-following\n"
-            "> question is therefore **open, not answered**; the `instruct` column\n"
-            "> measures a generic prefix on models that never asked for one.\n"
+            "> question is therefore **open, not answered**; the `instruct` column is a\n"
+            "> generic prefix throughout.\n"
         )
     out.append(
         ">\n"
