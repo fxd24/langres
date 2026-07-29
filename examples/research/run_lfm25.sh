@@ -108,6 +108,7 @@ if [ "$STUDY" = "a" ] || [ "$STUDY" = "both" ]; then
   LADDER_ARTIFACT="docs/research/20260729_lfm25_tuned" \
   LADDER_REFERENCE_MODEL="intfloat/e5-base-v2" \
   LADDER_MODELS="intfloat/e5-base-v2 all-MiniLM-L6-v2 BAAI/bge-base-en-v1.5 LiquidAI/LFM2.5-Embedding-350M" \
+  LADDER_ALL_MODELS="intfloat/e5-base-v2 all-MiniLM-L6-v2 BAAI/bge-base-en-v1.5 LiquidAI/LFM2.5-Embedding-350M" \
     bash examples/research/run_ladder.sh "${1:-}"
   code=$?
   if [ $code -ne 0 ]; then
@@ -124,6 +125,7 @@ if [ "$STUDY" = "b" ] || [ "$STUDY" = "both" ]; then
   LADDER_ARTIFACT="docs/research/20260729_lfm25_base_encoders" \
   LADDER_REFERENCE_MODEL="LiquidAI/LFM2.5-Embedding-350M" \
   LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M random-init-control-350M" \
+  LADDER_ALL_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M random-init-control-350M" \
     bash examples/research/run_ladder.sh "$([ "$STUDY" = "b" ] && echo "${1:-}")"
   code=$?
   if [ $code -ne 0 ]; then

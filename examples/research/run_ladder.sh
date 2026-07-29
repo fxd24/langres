@@ -33,7 +33,16 @@
 #   bash examples/research/run_ladder.sh [PID_TO_WAIT_FOR]
 #
 # Environment:
-#   LADDER_MODELS                 space-separated subset to sweep
+#   LADDER_MODELS                 space-separated subset to sweep (the WORK list)
+#   LADDER_ALL_MODELS             space-separated set the ARTIFACT is accountable
+#                                 for -- the report's coverage denominator, i.e.
+#                                 the models whose absence counts as "did not
+#                                 run". NOT the same as LADDER_MODELS: a
+#                                 single-model resume measures one model while
+#                                 remaining accountable for the whole study.
+#                                 Defaults to the portfolio ladder below;
+#                                 REQUIRED when LADDER_ARTIFACT names a different
+#                                 study, which is enforced rather than assumed.
 #   LADDER_ARTIFACT               path PREFIX for this study's three tracked
 #                                 artifacts (default:
 #                                 docs/research/20260727_embedder_ladder), which
@@ -120,6 +129,36 @@ MODELS=(
   "Qwen/Qwen3-Embedding-4B"
   "Qwen/Qwen3-Embedding-8B"
 )
+
+# What this ARTIFACT is accountable for -- the denominator of "what did not run",
+# which is NOT the same as what this invocation measures. Captured before
+# LADDER_MODELS narrows the work list, because the two were the same array and
+# the subset was passed as `--ladder-models`: a single-model resume (which is a
+# documented recovery path, and this study used one) shrank the coverage
+# denominator to that model, so every model still missing rows vanished from the
+# missing-grid check and the report could call a one-model ladder complete.
+# embedder_ladder.py's own --ladder-models help warns about exactly this.
+# Override only to declare a DIFFERENT study's full set. (Cross-model review.)
+if [ -n "${LADDER_ALL_MODELS:-}" ]; then
+  # shellcheck disable=SC2206  # word splitting is the interface here
+  LADDER_ACCOUNTABLE=(${LADDER_ALL_MODELS})
+elif [ -n "${LADDER_ARTIFACT:-}" ]; then
+  # A separate artifact means a separate study, whose accountable set is NOT the
+  # portfolio ladder defined above. Defaulting silently would put 14 portfolio
+  # models in a four-model study's missing-grid. Refused up front, in the same
+  # shape as the LADDER_REFERENCE_MODEL guard below and for the same reason:
+  # cheaper here than after the sweep has spent the compute.
+  echo "LADDER_ARTIFACT is set but LADDER_ALL_MODELS is not."
+  echo "  --ladder-models is the report's coverage DENOMINATOR -- every model the"
+  echo "  artifact is accountable for -- not the work list. A study with its own"
+  echo "  artifact must name its own full set, or the missing-grid is measured"
+  echo "  against the portfolio ladder this script defines."
+  echo "  Re-run with e.g. LADDER_ALL_MODELS=\"\$LADDER_MODELS\""
+  exit 2
+else
+  LADDER_ACCOUNTABLE=("${MODELS[@]}")
+fi
+
 if [ -n "${LADDER_MODELS:-}" ]; then
   # shellcheck disable=SC2206  # word splitting is the interface here
   MODELS=(${LADDER_MODELS})
@@ -348,7 +387,7 @@ for model in "${MODELS[@]}"; do
       --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
       --benchmarks $1 \
       --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
-      --ladder-models "${MODELS[@]}" \
+      --ladder-models "${LADDER_ACCOUNTABLE[@]}" \
       ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
       ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
       >> "$LOG_DIR/$safe.log" 2>&1
@@ -361,6 +400,9 @@ for model in "${MODELS[@]}"; do
   # sweep into lost, uncommitted measurements. Reproduced, not theorised. (2) It
   # must reset per model, or one model's failures would be attributed to the next.
   FAILED_BENCHMARKS=""
+  # Set by any path that mutates the rows file. Exactly one re-render is driven
+  # off it, so a stale report can never be committed beside edited rows.
+  ROWS_EDITED=0
   if [ "${LADDER_BENCHMARK_GRANULAR:-}" = "1" ]; then
     # One BENCHMARK per process, not just one model. The model reload costs ~10s
     # per cell; against a multi-hour sweep that is trivial insurance against the
@@ -409,6 +451,13 @@ for model in "${MODELS[@]}"; do
   if [ -n "${FAILED_BENCHMARKS// /}" ] && { [ $code -eq 9 ] || [ $code -eq 3 ]; }; then
     log "$model: recording cell failures that preceded the stop:$FAILED_BENCHMARKS"
     record_process_failure "$model" "$code" "$FAILED_BENCHMARKS"
+    # This EDITED the rows file, so the report beside it is now stale and both
+    # terminal branches below must go through the ordinary render+commit path
+    # instead of exiting past it. Before this flag, exit 3 returned without
+    # staging anything -- the one failure record it had just written died with
+    # the worktree -- and exit 9 committed the edited rows under a report
+    # rendered before the edit. (Cross-model review.)
+    ROWS_EDITED=1
   fi
 
   if [ $code -eq 9 ]; then
@@ -418,9 +467,14 @@ for model in "${MODELS[@]}"; do
   # A cache-integrity refusal is NOT a model failure, and must not be recorded as
   # one: record_process_failure deletes every existing row for the model and the
   # commit below ships the deletion. Nothing is wrong with those rows -- the cache
-  # is what is suspect -- so stop the sweep and leave the tracked artifacts
-  # untouched. The harness reserves this code for exactly that
-  # (embedder_ladder.py::EXIT_CACHE_INTEGRITY). (Cross-model review.)
+  # is what is suspect -- so this branch records nothing of its own. The harness
+  # reserves this code for exactly that (embedder_ladder.py::EXIT_CACHE_INTEGRITY).
+  #
+  # It does NOT exit here. Earlier granular cells may have died for unrelated
+  # reasons and been flushed above, and exiting before the commit block threw that
+  # record away -- the refusal branch's own "leave the artifacts untouched"
+  # promise had already been broken by the flush that runs before it. The exit
+  # moved next to the code-9 exit, after the commit. (Cross-model review.)
   if [ $code -eq 3 ]; then
     log "$model: cache-integrity refusal (exit 3). NOT recording a failure row --"
     log "  the recorded rows are fine; the embedding cache is not. See $LOG_DIR/$safe.log."
@@ -434,19 +488,24 @@ for model in "${MODELS[@]}"; do
     log "  -- if you know the cache matches the loaded checkpoint. (The driver takes"
     log "  no such flag: its only positional argument is a wait PID, so"
     log "  --trust-existing-cache would be read as one.)"
-    exit 3
   fi
 
-  if [ $code -ne 0 ] && [ $code -ne 9 ]; then
+  if [ $code -ne 0 ] && [ $code -ne 9 ] && [ $code -ne 3 ]; then
     log "$model exited $code -- recording a failure row for:${FAILED_BENCHMARKS:- $BENCHMARKS}"
     record_process_failure "$model" "$code" "${FAILED_BENCHMARKS:-$BENCHMARKS}"
-    # Re-render so the failure is visible in the report too. The paths and the
-    # ladder set must match the measuring call above: rendering the DEFAULT
-    # artifact here would rewrite the 2026-07-27 ladder's report from a different
-    # study's rows.
+    ROWS_EDITED=1
+  fi
+
+  # ONE re-render, driven by "were the rows edited", not by which code path
+  # edited them. Previously only the ordinary failure path rendered, so the
+  # terminal paths committed edited rows under a report generated before the
+  # edit. The paths and the ladder set must match the measuring call above:
+  # rendering the DEFAULT artifact here would rewrite the 2026-07-27 ladder's
+  # report from a different study's rows.
+  if [ $ROWS_EDITED -eq 1 ]; then
     uv run python examples/research/embedder_ladder.py --render-only \
       --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
-      --ladder-models "${MODELS[@]}" \
+      --ladder-models "${LADDER_ACCOUNTABLE[@]}" \
       ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
       >> "$LOG_DIR/$safe.log" 2>&1
   fi
@@ -494,12 +553,16 @@ for model in "${MODELS[@]}"; do
     git push -q origin HEAD 2>/dev/null && log "pushed" || log "push failed (will retry next model)"
   fi
 
-  # Committed first, THEN stop: the whole point of aborting on memory pressure is
-  # to keep what was measured, and exiting before the commit above would throw
-  # away exactly the rows the abort was protecting.
+  # Committed first, THEN stop: the whole point of aborting on memory pressure or
+  # a cache refusal is to keep what was measured, and exiting before the commit
+  # above would throw away exactly the rows the abort was protecting.
   if [ $code -eq 9 ]; then
     log "stopping: memory pressure. Re-run this driver to resume from the committed rows."
     exit 9
+  fi
+  if [ $code -eq 3 ]; then
+    log "stopping: cache-integrity refusal (recovery command logged above)."
+    exit 3
   fi
 done
 
