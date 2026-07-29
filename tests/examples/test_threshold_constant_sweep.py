@@ -21,6 +21,7 @@ No model loads here, so none of it is `slow`.
 from __future__ import annotations
 
 import argparse
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -493,3 +494,38 @@ class TestWorkerRelaunchCanRecoverItsOwnPartial:
         )
         argv = _worker_command("abt_buy", args, Path("out.json"))
         assert argv[argv.index("--embedder") + 1] == "intfloat/e5-base-v2"
+
+
+class TestSourceFingerprintDistinguishesDirtyStates:
+    """A dirty *bit* is not an identity.
+
+    The first version appended ``+dirty``, so two different uncommitted matcher
+    edits at one commit rendered the same string (the harness file itself being
+    unchanged) and the resume guard pooled them -- the exact corruption the field
+    exists to prevent. It now hashes the diff CONTENT.
+    """
+
+    def test_two_different_dirty_diffs_do_not_collide(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[str] = []
+
+        def fake_run(argv: list[str], **_kwargs: Any) -> Any:
+            if argv[1] == "rev-parse":
+                return subprocess.CompletedProcess(argv, 0, stdout="abc1234\n", stderr="")
+            return subprocess.CompletedProcess(argv, 0, stdout=seen.pop(0), stderr="")
+
+        monkeypatch.setattr("examples.research.threshold_constant_sweep.subprocess.run", fake_run)
+        seen.append("--- a/matcher.py\n+++ b/matcher.py\n-x = 1\n+x = 2\n")
+        first = _source_fingerprint()
+        seen.append("--- a/matcher.py\n+++ b/matcher.py\n-x = 1\n+x = 3\n")
+        second = _source_fingerprint()
+        assert first != second, "two distinct uncommitted edits must not share an identity"
+
+    def test_a_clean_tree_has_no_dirty_suffix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_run(argv: list[str], **_kwargs: Any) -> Any:
+            out = "abc1234\n" if argv[1] == "rev-parse" else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+        monkeypatch.setattr("examples.research.threshold_constant_sweep.subprocess.run", fake_run)
+        assert _source_fingerprint().endswith("/abc1234")

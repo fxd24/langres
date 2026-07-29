@@ -427,31 +427,37 @@ def _source_fingerprint() -> str:
 
     Two components, because either alone has a blind spot: the harness file's own
     hash (catches edits to this script, including uncommitted ones, which a git
-    SHA would miss) and the repo commit (catches changes to `langres` itself,
-    which the harness hash would miss). A dirty worktree is reported as such, so
-    "unknown" never silently reads as "matching".
+    SHA would miss) and the repo state (catches changes to `langres` itself,
+    which the harness hash would miss).
+
+    The repo half hashes the **content** of the uncommitted diff, not a
+    ``+dirty`` boolean. An earlier version used the flag, and review pointed out
+    it defeats the purpose: two *different* uncommitted matcher edits at one
+    commit both render ``<HEAD>+dirty`` with an unchanged harness hash, so the
+    guard would call them the same revision and pool exactly the incomparable
+    cells it exists to separate.
+
+    **What it cannot see, stated rather than implied:** untracked files (a
+    brand-new loader module) and, outside a git checkout, anything but this
+    file -- ``nogit`` compares equal to ``nogit``. It is a tripwire for the
+    common case, not a proof of identity.
 
     Returns:
         A short opaque string. Never parsed -- only compared for equality.
     """
+    root = Path(__file__).resolve().parent
     harness = hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()[:12]
+
+    def _git(*argv: str) -> str:
+        return subprocess.run(
+            ["git", *argv], cwd=root, capture_output=True, text=True, check=True
+        ).stdout
+
     try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=Path(__file__).resolve().parent,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        head = completed.stdout.strip()
-        dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no"],
-            cwd=Path(__file__).resolve().parent,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        repo = f"{head}{'+dirty' if dirty else ''}"
+        head = _git("rev-parse", "--short", "HEAD").strip()
+        diff = _git("diff", "HEAD")
+        dirty = f"+{hashlib.sha256(diff.encode()).hexdigest()[:8]}" if diff.strip() else ""
+        repo = f"{head}{dirty}"
     except (OSError, subprocess.CalledProcessError):  # pragma: no cover - no git
         repo = "nogit"
     return f"{harness}/{repo}"
@@ -859,9 +865,16 @@ def _select_constant(curves: dict[str, np.ndarray]) -> float:
     """The constant maximizing the MEDIAN across benchmarks of the seed-mean F1.
 
     Median, not mean: one benchmark with a wide F1 range would otherwise choose
-    the constant for all the others. This is the only place anything is
-    aggregated across benchmarks, and it is a selection rule, not a reported
-    performance number.
+    the constant for all the others.
+
+    This is a **selection** rule, never a reported performance number. It is not,
+    however, the *only* cross-benchmark aggregation in this file -- an earlier
+    version of this docstring claimed that and review caught it surviving here
+    after the same claim had been corrected in the write-up. :func:`to_verdict_markdown`
+    and :func:`to_transfer_markdown` also take a median over per-benchmark means,
+    as the quantity their pre-registered rules test. The invariant that actually
+    holds is: aggregation appears only in statistics that **decide**, never in one
+    that **reports**.
     """
     stacked = np.median(np.asarray(list(curves.values())), axis=0)
     return GRID[int(np.argmax(stacked))]
@@ -1304,7 +1317,9 @@ def _worker_command(name: str, args: argparse.Namespace, out: Path) -> list[str]
     ]
 
 
-def run_benchmark_isolated(name: str, args: argparse.Namespace, scratch: Path) -> list[CellResult]:
+def run_benchmark_isolated(
+    name: str, args: argparse.Namespace, scratch: Path, fingerprint: str
+) -> list[CellResult]:
     """Measure one benchmark in a SUBPROCESS and return its cells.
 
     Process isolation is a memory bound, not tidiness. torch's MPS caching
@@ -1331,17 +1346,48 @@ def run_benchmark_isolated(name: str, args: argparse.Namespace, scratch: Path) -
         The worker's cells.
 
     Raises:
-        RuntimeError: If the worker exits non-zero or writes no artifact. The
+        RuntimeError: If the worker exits non-zero, writes no artifact, or writes
+            one whose ``source_fingerprint`` differs from ``fingerprint``. The
             caller downgrades this to a per-benchmark failure; a *killed* worker
             (OOM, SIGKILL) lands here rather than taking the sweep with it.
     """
     worker_out = scratch.with_name(f"{scratch.name}.{name}.json")
-    worker_out.unlink(missing_ok=True)
+
+    # A finished worker artifact already sitting here means the previous run
+    # completed this benchmark and then died before the parent committed its
+    # cells -- the window the caller's deferred unlink deliberately leaves open.
+    # ADOPT it. The earlier code unlinked unconditionally right here, which threw
+    # away the very hour of compute the deferred unlink was protecting (review
+    # caught that the two halves of that fix contradicted each other).
+    if worker_out.exists():
+        adopted = read_report(worker_out)
+        if adopted.source_fingerprint == fingerprint:
+            print(f"[adopt] {name}: reusing the completed worker artifact", flush=True)
+            return adopted.cells
+        print(
+            f"[stale] {name}: worker artifact is from source "
+            f"{adopted.source_fingerprint!r}, not {fingerprint!r} -- re-measuring",
+            flush=True,
+        )
+        worker_out.unlink()
+
     completed = subprocess.run(_worker_command(name, args, worker_out), check=False)
     if completed.returncode != 0 or not worker_out.exists():
         raise RuntimeError(
             f"worker for {name} exited {completed.returncode} "
             f"(artifact {'written' if worker_out.exists() else 'missing'})"
+        )
+    # Read the report WHOLE, not just `.cells`. Every benchmark relaunches the
+    # current on-disk script, so a commit or edit part-way through a multi-hour
+    # sweep makes later workers run different code -- and the parent would stamp
+    # all of it with the fingerprint it captured at startup, silently pooling
+    # revisions under one label.
+    report = read_report(worker_out)
+    if report.source_fingerprint != fingerprint:
+        raise RuntimeError(
+            f"worker for {name} ran source {report.source_fingerprint!r}, but the "
+            f"parent is {fingerprint!r} -- the script or repo changed mid-sweep. "
+            "Refusing to pool cells from two revisions into one artifact."
         )
     # Deliberately NOT unlinked here. Between this read and the parent's
     # checkpoint() there is a window in which the worker's artifact would be the
@@ -1350,7 +1396,7 @@ def run_benchmark_isolated(name: str, args: argparse.Namespace, scratch: Path) -
     # (or a checkpoint() that raises OSError) in that window loses the benchmark
     # outright. The caller unlinks once the cells are committed; this is the same
     # "commit before it can disappear" rule the repo learned by losing a paid run.
-    return read_report(worker_out).cells
+    return report.cells
 
 
 def main() -> None:
@@ -1571,7 +1617,7 @@ def main() -> None:
                 # A partially-done benchmark is re-measured whole: the worker owns
                 # a benchmark, not a cell, so resume granularity IS the benchmark.
                 cells = [c for c in cells if c.benchmark != name]
-                cells.extend(run_benchmark_isolated(name, args, scratch))
+                cells.extend(run_benchmark_isolated(name, args, scratch, fingerprint))
                 checkpoint()
                 # Only NOW is the worker's artifact redundant: its cells are in
                 # the parent checkpoint on disk. Unlinking it any earlier opens a

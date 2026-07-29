@@ -91,9 +91,12 @@ medians of those derived cuts were a documented prior, not a finding.
   recommendation with an undisclosed victim.
 - **Not measured, and unchanged**: `prob_llm` / `prob_group_llm` (a paid
   completion per score — a portfolio grid sweep is a real invoice) and
-  `calibrated_prob` / `prob_fs` / `prob_rf` (*fitted* matchers a label-free user
-  cannot run at all, so "best out-of-the-box constant" is not the same question).
-  Their entries record the status quo, not a finding.
+  `calibrated_prob` / `prob_fs` / `prob_rf`, whose scores come out of a
+  **per-dataset fit** — the scale is re-estimated for your data, so "the best
+  shared out-of-the-box constant" is not the same question. (`prob_rf` also needs
+  labels; `prob_fs` does **not** — `FellegiSunterMatcher.fit_unlabeled` runs an
+  unsupervised u-estimate plus EM.) Their entries record the status quo, not a
+  finding.
 
 ### Three `threshold` parameters that silently did nothing now say so
 

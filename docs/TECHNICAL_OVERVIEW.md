@@ -241,9 +241,12 @@ untouched, including one that happens to equal the default.
 
 Only `heuristic` and `sim_cos` are measured
 (`docs/research/20260728_threshold_constant.md`); the LLM families cost paid
-calls per score and `prob_fs` / `prob_rf` come from fitted matchers a label-free
-user cannot run at all, so their entries record the status quo rather than a
-finding.
+calls per score, and `prob_fs` / `prob_rf` come from matchers fitted **per
+dataset**, so their score scale is re-estimated for your data and a shared
+constant is not the same question. (Note `prob_fs` is *not* labels-only:
+`FellegiSunterMatcher.fit_unlabeled` performs an unsupervised random-pair
+u-estimate plus EM. Only `prob_rf` requires labels.) Their entries record the
+status quo rather than a finding.
 
 **Measured does not mean changed, and that distinction is the point.** Of the two
 swept families only `sim_cos` got a new constant (`0.90` — `0.5` accepts nearly
