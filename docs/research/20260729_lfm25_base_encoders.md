@@ -20,6 +20,16 @@ uv run python examples/research/embedder_ladder.py --render-only
 
 Requires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS (`run_ladder.sh` defaults both when unset): torch, faiss and scikit-learn each bundle a `libomp.dylib`, and with two runtimes loaded the sweep deadlocks at 0% CPU rather than failing.
 
+## Headline: there is no single winner — the answer is per benchmark
+
+The widest disagreement measured here is `LiquidAI/LFM2.5-Encoder-350M` against `LiquidAI/LFM2.5-Embedding-350M` (this ladder's reference model, and langres's default when these rows were measured) at k=20: **-0.0536** per-record recall on `fodors_zagat` [-0.0982, -0.0179] and **-0.6235** on `abt_buy` [-0.6534, -0.5965] — the same model, spread across benchmarks.
+
+Averaging those into one number would report a middling win or loss and hide both. **This document deliberately publishes no cross-benchmark mean.** Pick the model against the data you actually have; the per-benchmark tables below are the unit of decision.
+
+**Both of those numbers come from the `none` arm — neither the query side nor the document side carries a prompt.** `render_report` filters `prompt_arm == 'none'` for this comparison and the section heading below says `no instruction`. That is langres's **default** configuration: a `VectorBlocker` with no `query_prompt` over an embedder with no `prompt_name`. The headline is therefore a statement about the two models as they ship, not about a half-driven one.
+
+> **Correction — supersedes the merged #239 PR body.** That body said: *'Every number below, including the **-0.0536** on `fodors_zagat`, was measured with only the query side driven.'* **That is false**, by the arm filter cited above. The genuinely half-driven arm is `instruct`, and on `fodors_zagat` it moves `LiquidAI/LFM2.5-Encoder-350M` by **-0.0982** [-0.1696, -0.0268] — a different number, from a different table. The correction runs in the direction that makes the headline **stronger**, not weaker: it was measured in the configuration langres actually ships.
+
 ## How to read this (please read before quoting a number)
 - **Parameter counts are measured**, not looked up: each is `sum(p.numel() for p in model.parameters())` from the model that produced that row's vectors. There is no size table and no small/base/large label.
 - **The metric is candidate recall and separability AUC, not F1.** Blocking sets a ceiling; a pair never emitted cannot be recovered downstream.
@@ -39,6 +49,7 @@ Requires `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1` on macOS (`run_ladder.
 | model | parameters | dtype | dim | own prompt names |
 |---|---:|---|---:|---|
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | default (fp32) | 1024 | document, negative_0, negative_1, negative_2, negative_3, negative_4, negative_5, negative_6, positive, query |
+| `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | default (fp32) | 1024 | — |
 
 ## Candidate recall at k=20, no instruction
 
@@ -51,6 +62,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.9416 | 0.9562 | 0.9964 | 11,165 | 11858 | 0.4 | 0 |
+| `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.3218 | 0.3268 | 0.8413 | 4,789 | 14880 | 56.2 | 2,173 |
 
 ### amazon_google
 
@@ -59,6 +71,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.7928 | 0.9443 | 0.9977 | 20,773 | 26202 | 0.7 | 0 |
+| `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.5619 | 0.6692 | 0.9222 | 20,411 | 36327 | 42.4 | 4,589 |
 
 ### fodors_zagat
 
@@ -67,6 +80,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 1.0000 | 1.0000 | 0.9999 | 4,874 | 4874 | 0.2 | 0 |
+| `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.9464 | 0.9464 | 0.9871 | 3,658 | 3865 | 10.8 | 864 |
 
 ### walmart_amazon
 
@@ -75,6 +89,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.8791 | 0.9948 | 0.9999 | 50,276 | 57189 | 3.8 | 0 |
+| `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.7253 | 0.8207 | 0.9806 | 49,732 | 68570 | 339.1 | 24,628 |
 
 ### wdc_computers
 
@@ -83,6 +98,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | model | parameters | recall | recall/ceil | sep. AUC | candidates | cands/recall | index build (s) | enc |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `LiquidAI/LFM2.5-Embedding-350M` | 354.5M | 0.6913 | 0.7680 | 0.9782 | 32,193 | 46571 | 0.5 | 0 |
+| `LiquidAI/LFM2.5-Encoder-350M` | 354.5M | 0.3933 | 0.4370 | 0.8621 | 33,103 | 84159 | 77.8 | 4,647 |
 
 ## Does an instruction prompt help? (k=20)
 
@@ -129,6 +145,11 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 | `LiquidAI/LFM2.5-Embedding-350M` | walmart_amazon | instruct | 0.8791 | 0.8773 | -0.0018 | -0.0022 | [-0.0066, +0.0022] (spans 0) | 0.9999 | 0.9998 | -0.0000 |
 | `LiquidAI/LFM2.5-Embedding-350M` | wdc_computers | documented | 0.6913 | 0.7084 | +0.0171 | +0.0163 | [-0.0014, +0.0341] (spans 0) | 0.9782 | 0.9791 | +0.0010 |
 | `LiquidAI/LFM2.5-Embedding-350M` | wdc_computers | instruct | 0.6913 | 0.6958 | +0.0045 | +0.0091 | [-0.0087, +0.0271] (spans 0) | 0.9782 | 0.9816 | +0.0034 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | instruct | 0.3218 | 0.5201 | +0.1983 | +0.1985 | [+0.1703, +0.2257] | 0.8413 | 0.8871 | +0.0458 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | instruct | 0.5619 | 0.3619 | -0.2000 | -0.2217 | [-0.2521, -0.1908] | 0.9222 | 0.8232 | -0.0990 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | instruct | 0.9464 | 0.8482 | -0.0982 | -0.0982 | [-0.1696, -0.0268] | 0.9871 | 0.9649 | -0.0222 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | instruct | 0.7253 | 0.6429 | -0.0824 | -0.0868 | [-0.1126, -0.0605] | 0.9806 | 0.9654 | -0.0152 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | instruct | 0.3933 | 0.4014 | +0.0081 | +0.0068 | [-0.0127, +0.0254] (spans 0) | 0.8621 | 0.8501 | -0.0120 |
 
 ### The asymmetric recipe, and how to drive it (corrected)
 
@@ -172,10 +193,15 @@ A model with no interval is shown with `—` rather than dropped: a measured mod
 
 | model | benchmark | Δ per-record recall | 95% CI | clusters |
 |---|---|---:|---|---:|
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | -0.6235 | [-0.6534, -0.5965] | 1,012 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | -0.2518 | [-0.2778, -0.2243] | 995 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | -0.0536 | [-0.0982, -0.0179] | 112 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | -0.1593 | [-0.1824, -0.1352] | 846 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | -0.3192 | [-0.3522, -0.2892] | 877 |
 
 ## Recommendation (k=20, no instruction)
 
-**1 of the 4 models in the ladder have a row at metric revision 1.** Everything below is a statement about those and only those; the rest are named under 'What did not run'. A recommendation drawn from a partial field is still a recommendation, but it is not a survey — do not read the absence of a model here as evidence against it.
+**2 of the 4 models in the ladder have a row at metric revision 1.** Everything below is a statement about those and only those; the rest are named under 'What did not run'. A recommendation drawn from a partial field is still a recommendation, but it is not a survey — do not read the absence of a model here as evidence against it.
 
 **This document does not change `DEFAULT_EMBEDDING_MODEL`.** It states what was measured and what the licences are; the default is a human decision.
 
@@ -187,7 +213,12 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
 
 ### Use-restricted checkpoints — documented opt-in, never a silent default
 
-No measured model declares a licence that was read and found non-OSI, so this section has no entries at this metric revision.
+- **`LiquidAI/LFM2.5-Encoder-350M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
+
+  ```python
+  # opt in explicitly, having read the licence
+  SentenceTransformerEmbedder("LiquidAI/LFM2.5-Encoder-350M")
+  ```
 
 ## The recall/cost frontier (every k)
 
@@ -255,16 +286,55 @@ Recall is bought with `k`. This is the table that makes an operating-point compa
 | `LiquidAI/LFM2.5-Embedding-350M` | wdc_computers | none | 10 | 0.5743 | 16,349 | 28470 |
 | `LiquidAI/LFM2.5-Embedding-350M` | wdc_computers | none | 20 | 0.6913 | 32,193 | 46571 |
 | `LiquidAI/LFM2.5-Embedding-350M` | wdc_computers | none | 50 | 0.7930 | 80,277 | 101235 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | instruct | 5 | 0.3036 | 1,978 | 6514 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | instruct | 10 | 0.4090 | 4,359 | 10658 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | instruct | 20 | 0.5201 | 9,745 | 18736 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | instruct | 50 | 0.6877 | 28,008 | 40725 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | none | 5 | 0.1408 | 782 | 5554 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | none | 10 | 0.2184 | 1,930 | 8837 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | none | 20 | 0.3218 | 4,789 | 14880 |
+| `LiquidAI/LFM2.5-Encoder-350M` | abt_buy | none | 50 | 0.4847 | 15,313 | 31594 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | instruct | 5 | 0.2432 | 6,214 | 25555 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | instruct | 10 | 0.3007 | 12,714 | 42279 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | instruct | 20 | 0.3619 | 26,014 | 71888 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | instruct | 50 | 0.4309 | 67,545 | 156740 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | none | 5 | 0.4338 | 4,369 | 10071 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | none | 10 | 0.5065 | 9,448 | 18654 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | none | 20 | 0.5619 | 20,411 | 36327 |
+| `LiquidAI/LFM2.5-Encoder-350M` | amazon_google | none | 50 | 0.6338 | 55,750 | 87960 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | instruct | 5 | 0.6696 | 1,128 | 1684 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | instruct | 10 | 0.7589 | 2,305 | 3037 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | instruct | 20 | 0.8482 | 4,966 | 5855 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | instruct | 50 | 0.9196 | 13,231 | 14387 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | none | 5 | 0.8929 | 712 | 797 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | none | 10 | 0.9018 | 1,611 | 1786 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | none | 20 | 0.9464 | 3,658 | 3865 |
+| `LiquidAI/LFM2.5-Encoder-350M` | fodors_zagat | none | 50 | 0.9643 | 10,311 | 10693 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | instruct | 5 | 0.4863 | 14,808 | 30453 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | instruct | 10 | 0.5604 | 31,797 | 56736 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | instruct | 20 | 0.6429 | 68,784 | 106997 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | instruct | 50 | 0.7170 | 187,678 | 261742 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | none | 5 | 0.5824 | 10,100 | 17342 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | none | 10 | 0.6703 | 22,672 | 33822 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | none | 20 | 0.7253 | 49,732 | 68570 |
+| `LiquidAI/LFM2.5-Encoder-350M` | walmart_amazon | none | 50 | 0.7866 | 136,218 | 173167 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | instruct | 5 | 0.2340 | 9,043 | 38641 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | instruct | 10 | 0.3024 | 17,704 | 58539 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | instruct | 20 | 0.4014 | 35,034 | 87271 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | instruct | 50 | 0.5113 | 87,010 | 170190 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 5 | 0.2196 | 8,544 | 38903 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 10 | 0.2988 | 16,637 | 55674 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 20 | 0.3933 | 33,103 | 84159 |
+| `LiquidAI/LFM2.5-Encoder-350M` | wdc_computers | none | 50 | 0.5221 | 82,827 | 158657 |
 
 ## What did not run (and why)
 
 Derived from the recorded rows, not written by hand — a hand-kept list of gaps is exactly the thing that goes stale and turns a partial sweep into a table that reads as complete.
 
-**3 of the 4 models in the ladder have no usable row at metric revision 1.** The `state` column says why for each — this table cannot speak about any of them.
+**2 of the 4 models in the ladder have no usable row at metric revision 1.** The `state` column says why for each — this table cannot speak about any of them.
 
 | model | state |
 |---|---|
-| `LiquidAI/LFM2.5-Encoder-350M` | not run |
 | `LiquidAI/LFM2.5-Encoder-230M` | not run |
 | `random-init-control-350M` | not run |
 
