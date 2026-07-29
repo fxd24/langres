@@ -33,16 +33,17 @@ def _load() -> ModuleType:
 PROV = _load()
 
 
-def _sidecar(tmp_path: Path, **overrides: object) -> Path:
+def _sidecar(tmp_path: Path, finished: str | None = None, **overrides: object) -> Path:
     doc: dict[str, object] = {
         "blobs": {},
         "tree_digests": {},
         "driver_blobs": {},
         "driver_digest": "abc",
+        "environment_blobs": {},
         "studies_measured": ["a", "b"],
         "measurement_window": {
             "started": "2026-07-29T05:00:00+02:00",
-            "finished": "2026-07-29T06:00:00+02:00",
+            "finished": finished,
             "head_when_sweep_started": "deadbeef",
         },
     }
@@ -52,24 +53,42 @@ def _sidecar(tmp_path: Path, **overrides: object) -> Path:
     return path
 
 
-class TestPartialCannotOverwriteComplete:
-    """The driver's abort path re-invokes ``--finish --partial``.
+CLOSED = "2026-07-29T06:00:00+02:00"
 
-    A failure AFTER a successful ``--finish`` — a render error, say — would have
-    rewritten ``window_complete`` to false, stamped a new finished timestamp, and
-    added a note claiming the sweep never reached every planned study, over rows
-    that prove otherwise.
+
+class TestAClosedWindowStaysClosed:
+    """Both re-finish directions rewrite history, and both were reachable.
+
+    The driver's abort path re-invokes ``--finish --partial``, so a failure AFTER
+    a successful ``--finish`` — a render error, say — flipped ``window_complete``
+    to false over rows that prove otherwise. The mirror image is worse: a plain
+    ``--finish`` over a partial sidecar sets ``window_complete`` true while
+    KEEPING the ``partial_note`` saying the sweep aborted. Either way ``finished``
+    is restamped and the stability verdict is re-derived from whatever the tree
+    looks like now.
     """
 
-    def test_a_closed_complete_window_refuses_the_downgrade(self, tmp_path: Path) -> None:
-        path = _sidecar(tmp_path, window_complete=True)
+    def test_a_complete_window_refuses_the_partial_downgrade(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
 
         with pytest.raises(SystemExit, match="already closed"):
             PROV.finish(path, partial=True)
 
+    def test_a_partial_window_refuses_the_complete_upgrade(self, tmp_path: Path) -> None:
+        """The direction the first version of this guard left open."""
+        path = _sidecar(
+            tmp_path,
+            finished=CLOSED,
+            window_complete=False,
+            partial_note="The sweep ABORTED before finishing every planned study.",
+        )
+
+        with pytest.raises(SystemExit, match="already closed"):
+            PROV.finish(path, partial=False)
+
     def test_the_refusal_leaves_the_sidecar_untouched(self, tmp_path: Path) -> None:
         """Refusing after writing would be no better than not refusing."""
-        path = _sidecar(tmp_path, window_complete=True)
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
         before = path.read_text()
 
         with pytest.raises(SystemExit):
@@ -90,3 +109,45 @@ class TestPartialCannotOverwriteComplete:
     def test_a_missing_sidecar_says_to_run_start(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit, match="run --start"):
             PROV.finish(tmp_path / "absent.json", partial=True)
+
+
+class TestEnvironmentIsObserved:
+    """Source identity is not measurement identity.
+
+    Every cell is a fresh ``uv run`` with neither ``--no-sync`` nor ``--locked``,
+    so the dependency environment can move between cells while every source hash
+    compares equal and the run is certified "unchanged".
+    """
+
+    def test_pyproject_is_hashed_as_measurement_code(self) -> None:
+        """Fatal, like the sources: it does not move on its own."""
+        assert "pyproject.toml" in PROV.TRACKED
+
+    def test_the_lockfile_is_recorded_without_being_fatal(self, tmp_path: Path) -> None:
+        """`uv.lock` is gitignored and uv rewrites it unprompted."""
+        assert PROV.ENVIRONMENT == ("uv.lock",)
+
+        path = _sidecar(tmp_path, environment_blobs={"uv.lock": "0" * 40})
+        PROV.finish(path)  # must NOT raise
+
+        doc = json.loads(path.read_text())
+        assert doc["environment_unchanged_during_run"] is False
+        assert doc["environment_changed_during_run"] == ["uv.lock"]
+
+    def test_a_window_predating_the_field_reports_not_observed(self, tmp_path: Path) -> None:
+        """`null` means "not observed", never "unchanged" and never "changed"."""
+        path = _sidecar(tmp_path)
+        json_doc = json.loads(path.read_text())
+        del json_doc["environment_blobs"]
+        path.write_text(json.dumps(json_doc))
+
+        PROV.finish(path)
+
+        assert json.loads(path.read_text())["environment_unchanged_during_run"] is None
+
+    def test_an_unchanged_environment_is_recorded_as_such(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, environment_blobs=PROV._environment_blobs())
+
+        PROV.finish(path)
+
+        assert json.loads(path.read_text())["environment_unchanged_during_run"] is True

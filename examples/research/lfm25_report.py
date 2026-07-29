@@ -217,6 +217,40 @@ def _provenance_section() -> list[str]:
                 "swallowed because the `.py`-only digest this study started with certified these "
                 "same edits as “unchanged”.",
             ]
+
+    # Source identity is not measurement identity. Every cell is a fresh `uv run`
+    # with neither --no-sync nor --locked, so the dependency environment can move
+    # between cells while every source hash compares equal. Three states, and
+    # "not recorded" is one of them: this sweep's own sidecar predates the field.
+    # (Cross-model review.)
+    env_ok = doc.get("environment_unchanged_during_run", "missing")
+    lines.append("")
+    if env_ok is True:
+        lines.append(
+            "The resolved **environment** (`uv.lock`) is recorded too, because each cell is a "
+            "fresh `uv run` that may re-synchronise dependencies between cells — a change no "
+            "source hash can see. It did not move while the sweep was in flight."
+        )
+    elif env_ok is False:
+        lines += [
+            "The resolved **environment** (`uv.lock`) **changed while this sweep was in "
+            "flight**, so cells may have run under different dependency versions:",
+            "",
+            *[f"- `{c}`" for c in doc.get("environment_changed_during_run", [])],
+            "",
+            "`pyproject.toml` is hashed as measurement code and did not move — a change there "
+            "refuses the close outright. This is the weaker, non-fatal signal: `uv.lock` is "
+            "gitignored and `uv run` can rewrite it unprompted, so it is disclosed rather than "
+            "used to abort a multi-hour sweep.",
+        ]
+    else:
+        lines.append(
+            "The resolved **environment** was **not recorded** for this window: `uv.lock` "
+            "hashing was added after these rows were measured. Each cell is a fresh `uv run` "
+            "with neither `--no-sync` nor `--locked`, so a dependency re-synchronisation "
+            "between cells would have been invisible to every hash above. Nothing here says it "
+            "happened — only that this run could not have observed it. Later runs can."
+        )
     return lines
 
 

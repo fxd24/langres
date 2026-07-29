@@ -289,6 +289,8 @@ The shell **drivers** are digested separately (`driver_digest`), because they de
 
 The rows stand: no `.py` moved, so every number still means what the table says it means. What this disclosure costs is the claim that re-running the *committed* driver reproduces this exact schedule of cells — it does not, because part of that schedule was a recovery from an OS kill. It is reported rather than swallowed because the `.py`-only digest this study started with certified these same edits as “unchanged”.
 
+The resolved **environment** was **not recorded** for this window: `uv.lock` hashing was added after these rows were measured. Each cell is a fresh `uv run` with neither `--no-sync` nor `--locked`, so a dependency re-synchronisation between cells would have been invisible to every hash above. Nothing here says it happened — only that this run could not have observed it. Later runs can.
+
 ## Reproduce
 
 ```bash

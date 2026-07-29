@@ -42,7 +42,25 @@ DEFAULT_OUTPUT = REPO_ROOT / "docs" / "research" / "20260729_lfm25_provenance.js
 TRACKED = (
     "src/langres/experiments/statistics.py",
     "examples/research/embedder_ladder.py",
+    # Source identity is not measurement identity. Every cell is a fresh
+    # `uv run`, with neither `--no-sync` nor `--locked`, so uv re-synchronises
+    # the environment each time: edit a dependency bound here and the next cell
+    # can embed under a different transformers/torch while every .py blob and
+    # tree digest compares equal and `--finish` certifies the sweep "unchanged".
+    # A hash over the code that cannot see the environment it runs in is a check
+    # decoupled from what it claims. Fatal, like the sources: this file does not
+    # move on its own. (Cross-model review.)
+    "pyproject.toml",
 )
+
+#: The RESOLVED environment, recorded but **not** fatal. ``uv.lock`` is what was
+#: actually installed, so it is the sharper record — but it is gitignored (see
+#: `.gitignore`; `exclude-newer` in `pyproject.toml` is the reproducibility pin
+#: here), and `uv run` may rewrite it mid-sweep without any human touching it.
+#: Aborting a multi-hour paid sweep on that would kill work that would have
+#: succeeded, so it takes the same treatment as the drivers: hashed, disclosed,
+#: never silent. Absent is a legitimate state and is recorded as such.
+ENVIRONMENT = ("uv.lock",)
 
 #: Naming two files is not the measurement's code identity. ``embedder_ladder.py``
 #: executes ``langres.core.embeddings``, ``core.indexes.vector_index``,
@@ -126,6 +144,14 @@ def _changed_drivers(before: dict[str, str], after: dict[str, str]) -> list[str]
     return changed
 
 
+def _environment_blobs() -> dict[str, str]:
+    """Blob hash per resolved-environment file, or ``"absent"`` when it is missing."""
+    return {
+        path: (_worktree_blob(path) if (REPO_ROOT / path).exists() else "absent")
+        for path in ENVIRONMENT
+    }
+
+
 def _blobs() -> dict[str, dict[str, str]]:
     """Working-tree blob hash and last-touching commit for each tracked file."""
     out: dict[str, dict[str, str]] = {}
@@ -190,6 +216,13 @@ COMMENT = [
     "`drivers_unchanged_during_run` and is NOT fatal -- drivers get repaired",
     "mid-sweep -- but it is never silent: the *.py-only digest used to certify such",
     "an edit as 'unchanged'.",
+    "Code identity is not measurement identity: every cell is a fresh `uv run`",
+    "with neither --no-sync nor --locked, so the ENVIRONMENT can move between",
+    "cells while every source hash compares equal. `pyproject.toml` is therefore in",
+    "`blobs` and fatal; `uv.lock` -- gitignored, and rewritable by uv without a",
+    "human touching it -- is in `environment_blobs` and disclosed via",
+    "`environment_unchanged_during_run` without aborting a paid sweep. `null`",
+    "there means the window predates the field: not observed, not unchanged.",
 ]
 
 
@@ -200,6 +233,7 @@ def _snapshot() -> dict[str, Any]:
         "tree_digests": _tree_digest(),
         "driver_digest": _driver_digest(driver_blobs),
         "driver_blobs": driver_blobs,
+        "environment_blobs": _environment_blobs(),
     }
 
 
@@ -235,20 +269,24 @@ def finish(output: Path, partial: bool = False) -> None:
     if not output.exists():
         raise SystemExit(f"{output} missing -- run --start before the sweep")
     doc = json.loads(output.read_text())
-    # A window that already closed COMPLETE cannot be relabelled partial. The
-    # driver's abort path re-invokes `--finish --partial`, so a failure AFTER a
-    # successful `--finish` -- a render error, say -- would have rewritten
-    # `window_complete` to false, stamped a new finished timestamp, and added a
-    # note claiming the sweep never reached every planned study, over rows that
-    # prove otherwise. Refused here rather than left to each caller to remember,
-    # and refused BEFORE anything is written so the closed state survives intact.
+    # A CLOSED window is closed. Not "closed complete": the first version of this
+    # guard refused only the complete->partial direction, which left the mirror
+    # image open -- a plain `--finish` over a sidecar closed with `--partial`
+    # flipped `window_complete` to true while KEEPING the `partial_note` saying
+    # the sweep aborted, a file contradicting itself. Both directions restamp
+    # `finished` and recompute the stability verdict against code that may have
+    # moved since the run ended, turning a historical record into a statement
+    # about now. A second window needs a second `--start`. Refused BEFORE
+    # anything is written, so the closed state survives intact.
     # (Cross-model review.)
-    if partial and doc.get("window_complete") is True:
+    if doc["measurement_window"].get("finished") is not None:
         raise SystemExit(
-            f"Refusing to relabel {output} as partial: this window already closed "
-            f"COMPLETE at {doc['measurement_window'].get('finished')}. Marking it partial "
-            "would assert the sweep never reached every planned study, which the closed "
-            "window contradicts. The sidecar is unchanged; commit it as it stands."
+            f"Refusing to re-finish {output}: this window already closed at "
+            f"{doc['measurement_window']['finished']} "
+            f"(window_complete={doc.get('window_complete')}). Closing it again would "
+            "restamp the timestamp and re-derive the stability verdict from whatever the "
+            "tree looks like now, not from what measured the rows. The sidecar is "
+            "unchanged; commit it as it stands, or run --start to open a new window."
         )
     # `studies_measured` is what was PLANNED at --start. On an abort partway
     # through, merge-commits leave every untouched older row in place, so a
@@ -296,6 +334,28 @@ def finish(output: Path, partial: bool = False) -> None:
             "driver is not the one that scheduled every cell",
             DRIVER_TREE,
             DRIVER_SUFFIX,
+        )
+    # The resolved environment, on the same non-fatal terms as the drivers.
+    # `pyproject.toml` moving IS fatal (it is in `blobs`); `uv.lock` moving under
+    # a `uv run` nobody asked to re-lock is disclosed instead of aborting a paid
+    # sweep. Silent was never an option: without this, a re-sync between cells
+    # left every hash equal and the run certified "unchanged".
+    # A sidecar opened before this field existed did not RECORD the environment;
+    # it did not record it CHANGING. `None` says "not observed", which is the
+    # honest answer -- claiming a change that was never measured is the same
+    # class of false statement as claiming stability that was never measured.
+    before_env = doc.get("environment_blobs")
+    doc["environment_unchanged_during_run"] = (
+        None if before_env is None else before_env == after["environment_blobs"]
+    )
+    if doc["environment_unchanged_during_run"] is False:
+        doc["environment_changed_during_run"] = _changed_drivers(
+            before_env or {}, after["environment_blobs"]
+        )
+        logger.warning(
+            "the resolved ENVIRONMENT (%s) changed mid-run; cells may have run under "
+            "different dependency versions",
+            ", ".join(ENVIRONMENT),
         )
     output.write_text(json.dumps(doc, indent=2) + "\n")
     if changed:

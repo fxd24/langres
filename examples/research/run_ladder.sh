@@ -522,7 +522,17 @@ for model in "${MODELS[@]}"; do
     # The guard existed on one path only, so LADDER_BENCHMARK_GRANULAR -- a
     # performance knob -- silently decided whether a mistyped flag destroyed
     # rows. (Cross-model review.)
-    { [ $code -ne 0 ] && [ $code -ne 2 ] && [ $code -ne 3 ]; } && FAILED_BENCHMARKS="$BENCHMARKS"
+    #
+    # Recorded as "benchmark:code", exactly like the granular path. `code` is a
+    # SCALAR that the memory guard below overwrites with 9, so bare names made
+    # record_process_failure stamp "process exited 9" over a model that actually
+    # died 137 -- the diagnostic artifact recording the stop reason instead of
+    # the death, and only on this branch. (Cross-model review.)
+    if [ $code -ne 0 ] && [ $code -ne 2 ] && [ $code -ne 3 ]; then
+      for failed_benchmark in $BENCHMARKS; do
+        FAILED_BENCHMARKS="$FAILED_BENCHMARKS $failed_benchmark:$code"
+      done
+    fi
     # Same rule as the granular branch: only abort if another model still runs.
     if [ $MODEL_INDEX -lt "$N_MODELS" ]; then
       check_swap || code=9
