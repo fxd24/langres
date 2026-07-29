@@ -111,6 +111,40 @@ class TestAClosedWindowStaysClosed:
             PROV.finish(tmp_path / "absent.json", partial=True)
 
 
+class TestDirtyScopeCoversEveryTrackedFile:
+    """The dirty check ran over directories, so a root-level file escaped it.
+
+    ``pyproject.toml`` is tracked individually at the repo root, outside both
+    ``TRACKED_TREES`` scopes. An uncommitted dependency edit present at
+    ``--start`` and untouched during the sweep therefore passed the endpoint
+    comparison AND left ``dirty_at_start`` empty — the report naming the last
+    committed revision with no modified-tree warning, over a checkout that
+    cannot reproduce the measured environment.
+    """
+
+    def test_every_tracked_file_falls_inside_a_dirty_scope(self) -> None:
+        for path in PROV.TRACKED:
+            assert any(
+                path == scope or path.startswith(f"{scope}/") for scope in PROV.DIRTY_SCOPES
+            ), f"{path} is hashed but no dirty scope would report it modified"
+
+    def test_the_root_level_file_is_the_one_that_used_to_escape(self) -> None:
+        """Named explicitly: a passing derived rule over an empty set proves nothing."""
+        assert "pyproject.toml" in PROV.TRACKED
+        assert "pyproject.toml" in PROV.DIRTY_SCOPES
+        assert not any("pyproject.toml".startswith(f"{t}/") for t in PROV.TRACKED_TREES)
+
+    def test_the_scope_is_a_valid_pathspec_git_will_honour(self) -> None:
+        """A scope git rejects or silently ignores would report clean forever.
+
+        The dynamic proof — modify `pyproject.toml`, observe it appear — lives in
+        `tmp/probe_dirty_scope.py`, which cannot run here without dirtying the
+        tree the rest of the suite reads.
+        """
+        assert PROV._dirty(("pyproject.toml",)) == []
+        assert "pyproject.toml" not in PROV._dirty(PROV.TRACKED_TREES)
+
+
 class TestEnvironmentIsObserved:
     """Source identity is not measurement identity.
 

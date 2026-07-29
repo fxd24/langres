@@ -70,6 +70,20 @@ ENVIRONMENT = ("uv.lock",)
 #: "unchanged". (Cross-model review.)
 TRACKED_TREES = ("src/langres", "examples/research")
 
+#: What the dirty check looks at. **Derived, not a second hand-kept list.** The
+#: check ran over ``TRACKED_TREES`` alone, whose scopes are directories — so
+#: ``pyproject.toml``, tracked individually at the repo root, fell outside it: an
+#: uncommitted dependency edit present at ``--start`` and untouched during the
+#: sweep passed the endpoint comparison, and ``dirty_at_start`` stayed empty. The
+#: report then named the last committed revision with no modified-tree warning,
+#: over a checkout that cannot reproduce the environment that measured the rows.
+#: Computing the scope from ``TRACKED`` means the next root-level entry is
+#: covered on the day it is added, instead of waiting for someone to remember a
+#: parallel list. (Cross-model review.)
+DIRTY_SCOPES = TRACKED_TREES + tuple(
+    path for path in TRACKED if not any(path.startswith(f"{tree}/") for tree in TRACKED_TREES)
+)
+
 #: The shell drivers are hashed SEPARATELY from the Python, because they fail
 #: differently. A change to `.py` changes what a number MEANS -- no single hash
 #: then describes the rows, so `--finish` refuses. A change to a driver changes
@@ -241,7 +255,7 @@ def start(output: Path) -> None:
     # A dirty tree is not fatal -- research often measures uncommitted code -- but
     # it must be recorded, because the blob hashes then name content that exists
     # nowhere in history and cannot be recovered by anyone reading this file.
-    dirty = _dirty(TRACKED_TREES)
+    dirty = _dirty(DIRTY_SCOPES)
     if dirty:
         logger.warning("measuring a DIRTY tree; %d modified path(s) recorded", len(dirty))
     snapshot = _snapshot()
