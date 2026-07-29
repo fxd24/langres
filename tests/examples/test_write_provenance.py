@@ -1063,13 +1063,55 @@ class TestEveryReadInputIsGuarded:
         assert "20260729_lfm25_license.txt" in declared
         assert "20260727_embedder_ladder.md" in declared
 
-    def test_the_outputs_are_not_treated_as_inputs(self) -> None:
+    def test_the_output_is_not_treated_as_an_input(self) -> None:
         """Guarding the file it is about to write would refuse every re-render."""
         report = self._report()
         declared = {Path(x).name for x in report.RENDER_INPUTS}
 
         assert Path(report.OUTPUT).name not in declared
-        assert Path(report.PROVENANCE).name not in declared
+
+    def test_the_sidecar_is_guarded_for_a_standalone_render(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It is READ -- three sections quote it -- so it is an input.
+
+        The first version of this list exempted it outright, and the test written
+        beside it asserted the exemption. That is the failure mode this whole PR
+        keeps circling: a check and a test that agree with each other about
+        something neither of them verified.
+        """
+        report = self._report()
+        stranded = tmp_path / "prov.json"
+        stranded.write_text("{}")
+        monkeypatch.setattr(report, "RENDER_INPUTS", ())
+        monkeypatch.setattr(report, "PROVENANCE", stranded)
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+        monkeypatch.delenv(report.PROVENANCE_PENDING_ENV, raising=False)
+
+        with pytest.raises(SystemExit, match="REFUSING to render"):
+            report._refuse_uncommitted_inputs()
+
+    def test_a_driver_committing_it_with_the_report_may_claim_the_allowance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--finish writes the sidecar moments before the render, by design."""
+        report = self._report()
+        stranded = tmp_path / "prov.json"
+        stranded.write_text("{}")
+        monkeypatch.setattr(report, "RENDER_INPUTS", ())
+        monkeypatch.setattr(report, "PROVENANCE", stranded)
+        monkeypatch.delenv(report.FORCE_ENV, raising=False)
+        monkeypatch.setenv(report.PROVENANCE_PENDING_ENV, "1")
+
+        report._refuse_uncommitted_inputs()
+
+    def test_both_drivers_claim_the_allowance(self) -> None:
+        """A driver that did not would refuse to render on every real sweep."""
+        research = Path(PROV.REPO_ROOT) / "examples" / "research"
+
+        for name in ("run_lfm25.sh", "resume_lfm25_study_a.sh"):
+            source = (research / name).read_text()
+            assert "LFM25_PROVENANCE_PENDING=1" in source, name
 
 
 class TestOnePublicationRule:
@@ -1110,3 +1152,58 @@ class TestOnePublicationRule:
 
         assert "exit " not in lib
         assert "return 1" in lib
+
+
+class TestAVerificationFailureWithholdsPublication:
+    """The previous round's fix re-opened the hole from the other side.
+
+    Giving the abort path a push stopped a closed window being stranded locally.
+    But the push was unconditional, and ``--finish`` exits non-zero precisely when
+    measurement code moved mid-sweep -- the same condition that makes
+    ``run_ladder.sh`` withhold the affected row commits. ``git push HEAD`` then
+    published every commit the child had deliberately held back.
+
+    Committing is never gated. Publication is.
+    """
+
+    RESEARCH = Path(__file__).parents[2] / "examples" / "research"
+
+    def _driver(self) -> str:
+        return (self.RESEARCH / "run_lfm25.sh").read_text()
+
+    def test_every_finish_failure_records_the_verdict(self) -> None:
+        """Both call sites, not just the one that was easy to find.
+
+        "One of N identical sites" is the shape this PR has hit at every round;
+        counting them is the only way the assertion notices a third appearing.
+        """
+        lines = self._driver().splitlines()
+        calls = [
+            i
+            for i, line in enumerate(lines)
+            if "write_provenance.py --finish" in line and line.strip().endswith("|| {")
+        ]
+
+        assert len(calls) == 2, f"expected two guarded --finish calls, found {len(calls)}"
+        for i in calls:
+            handler = "\n".join(lines[i : i + 5])
+            assert "PROVENANCE_OK=0" in handler
+
+    def test_the_abort_push_is_gated_on_the_verdict(self) -> None:
+        driver = self._driver()
+        block = driver[
+            driver.index("commit_provenance() {") : driver.index("abort_with_provenance() {")
+        ]
+
+        gate = block.index('if [ "$PROVENANCE_OK" = "1" ]; then')
+        assert gate < block.index("publish_branch")
+
+    def test_a_rejected_run_still_commits_its_evidence(self) -> None:
+        """Withholding the commit too would destroy the record of the rejection."""
+        driver = self._driver()
+        block = driver[
+            driver.index("commit_provenance() {") : driver.index("abort_with_provenance() {")
+        ]
+        commit = block.index("git commit -q --only")
+
+        assert commit < block.index('if [ "$PROVENANCE_OK" = "1" ]; then')

@@ -90,6 +90,17 @@ export LADDER_PROVENANCE_REQUIRED=1
 
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
+# Whether provenance verification still holds for the commits on this branch.
+#
+# Round 26 gave the abort path a push so a closed window could not be stranded
+# locally while run_ladder.sh had already published the rows. That push was
+# UNCONDITIONAL, which re-opened the hole from the other side: `--finish` rejects a
+# sweep whose measurement code moved mid-run, and run_ladder.sh deliberately
+# withholds the affected row commits when its per-model --verify fails -- so an
+# unconditional `git push HEAD` here published every one of those withheld commits
+# anyway. Publication is gated on this; COMMITTING never is. (Cross-model review.)
+PROVENANCE_OK=1
+
 PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
 # Declared HERE, not at their point of use two hundred lines down, because the
 # preflight below has to name every file this driver OVERWRITES and one
@@ -140,7 +151,13 @@ commit_provenance() {
   # the closing evidence sat on the local branch. Rows published, the record of
   # what produced them withheld -- the exact asymmetry this abort path exists to
   # prevent. (Cross-model review.)
-  publish_branch "lfm25-abort" || true
+  if [ "$PROVENANCE_OK" = "1" ]; then
+    publish_branch "lfm25-abort" || true
+  else
+    say "NOT pushing: provenance verification REJECTED this run."
+    say "  The evidence is committed locally. run_ladder.sh withheld the affected row"
+    say "  commits for the same reason; publishing HEAD here would republish them."
+  fi
   exit "$code"
 }
 
@@ -151,8 +168,10 @@ abort_with_provenance() {
   # still belongs in the sidecar, so record it and keep the original exit code.
   # --partial: this window did NOT reach every planned study, so the report must
   # not read `studies_measured` as "every row in both studies".
-  uv run python examples/research/write_provenance.py --finish --partial ||
+  uv run python examples/research/write_provenance.py --finish --partial || {
     say "provenance --finish reported a problem; recording it and continuing to commit"
+    PROVENANCE_OK=0
+  }
   commit_provenance "$code" "results(lfm25): provenance for a partial sweep (exit $code)"
 }
 
@@ -422,6 +441,7 @@ say "closing the provenance window"
 # and complete; only the commit is still owed. (Cross-model review.)
 uv run python examples/research/write_provenance.py --finish || {
   say "provenance --finish rejected this sweep; committing its evidence before stopping"
+  PROVENANCE_OK=0
   commit_provenance 1 "results(lfm25): provenance for a sweep whose code moved mid-run"
 }
 
@@ -441,7 +461,12 @@ say "rendering the write-up"
 # of the window that produced them. (Cross-model review.) Same reason as above
 # for committing rather than aborting: re-finishing would relabel a complete
 # window as partial.
-uv run python examples/research/lfm25_report.py || {
+# The sidecar was written by --finish moments ago and is committed together with
+# the report a few lines below, so it is legitimately uncommitted at render time.
+# Claimed explicitly rather than exempted inside the renderer, where it would also
+# excuse a standalone render quoting provenance no commit holds.
+LFM25_PROVENANCE_PENDING=1 \
+  uv run python examples/research/lfm25_report.py || {
   say "rendering failed; committing the closed provenance window before stopping"
   commit_provenance 1 "results(lfm25): provenance for a sweep whose write-up failed to render"
 }

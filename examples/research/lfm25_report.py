@@ -2021,6 +2021,13 @@ def render() -> str:
 #: Discard the tracked write-up deliberately, matching `run_lfm25.sh`.
 FORCE_ENV = "LFM25_FORCE"
 
+#: Set by a driver that has just written the provenance sidecar and will commit it
+#: in the SAME commit as the report. Narrow on purpose: it exempts exactly one
+#: input, and only for the caller that owns both halves of that commit. A
+#: standalone render does not set it and is therefore held to the same rule as
+#: every other input the report quotes.
+PROVENANCE_PENDING_ENV = "LFM25_PROVENANCE_PENDING"
+
 
 def _refuse_to_overwrite_uncommitted() -> None:
     """Stop before destroying uncommitted edits to the generated write-up.
@@ -2075,7 +2082,18 @@ def _refuse_uncommitted_inputs() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from write_provenance import _uncommitted
 
-    moved = [name for path in RENDER_INPUTS for name in _uncommitted(path)]
+    # The sidecar is a READ input -- `_provenance_section`, `_window_bounds` and
+    # `_cross_study_caveat` all quote it -- but it is the one input a driver
+    # legitimately writes moments before rendering, then commits together with the
+    # report. Guarding it unconditionally would refuse every real sweep; exempting
+    # it unconditionally (which is what the first version of this list did, with a
+    # test asserting the exemption) lets a STANDALONE render publish provenance
+    # text derived from bytes no commit holds. So the allowance is explicit, and
+    # the driver has to claim it. (Cross-model review.)
+    guarded = list(RENDER_INPUTS)
+    if os.environ.get(PROVENANCE_PENDING_ENV) != "1":
+        guarded.append(PROVENANCE)
+    moved = [name for path in guarded for name in _uncommitted(path)]
     if not moved:
         return
     raise SystemExit(

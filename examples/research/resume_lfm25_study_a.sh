@@ -163,7 +163,9 @@ uv run python examples/research/write_provenance.py --finish --partial || {
 COMMIT_PATHS=("$PROVENANCE_JSON")
 if [ "$code" -eq 0 ]; then
   say "re-rendering the combined write-up"
-  if uv run python examples/research/lfm25_report.py; then
+  # Same allowance as run_lfm25.sh: --finish wrote the sidecar just above and the
+  # commit below carries it with the report.
+  if LFM25_PROVENANCE_PENDING=1 uv run python examples/research/lfm25_report.py; then
     COMMIT_PATHS+=("$REPORT_MD")
   else
     say "the write-up did not re-render; committing the closed window WITHOUT it"
