@@ -740,7 +740,18 @@ def _assert_one_reference_model(rows: Sequence[LadderRow]) -> None:
     at their word as :data:`REFERENCE_MODEL`'s default value, which is what they
     were measured against.
     """
-    seen = {row.reference_model or "all-MiniLM-L6-v2" for row in rows if row.vs_reference_delta}
+    # `is not None`, NOT truthiness: a delta of exactly 0.0 is falsy, and exact
+    # zeros are common -- every model ties on a saturated benchmark, where the
+    # committed rows carry +0.0000. Under truthiness a file whose only
+    # comparisons are those zeros yields an EMPTY `seen`, returns early, and
+    # renders happily under whatever --reference-model was passed, relabelling
+    # the delta column without recomputing it. That is this guard failing open
+    # on precisely the rows it exists to police. (Cross-model review.)
+    seen = {
+        row.reference_model or "all-MiniLM-L6-v2"
+        for row in rows
+        if row.vs_reference_delta is not None
+    }
     if not seen:
         return
     if len(seen) > 1:

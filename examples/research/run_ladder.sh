@@ -206,9 +206,15 @@ fi
 #    Stdlib python only, and explicitly NOT the venv interpreter -- this runs
 #    right after a `uv run` and must not become the second one.
 # ---------------------------------------------------------------------------
+#: $3 (optional) restricts the failure to specific benchmarks. In granular mode a
+#: single failed cell used to condemn the whole model: the loop keeps going, later
+#: benchmarks write GOOD rows, and this function then deleted every row for the
+#: model and committed five failure rows over them. One OOM destroyed four valid
+#: measurements and pushed the deletion. Now only the benchmarks that actually
+#: failed are replaced. (Cross-model review; data-safety rule.)
 record_process_failure() {
-  local model="$1" code="$2"
-  ROWS="$ROWS" FAILED_MODEL="$model" EXIT_CODE="$code" BENCHMARKS="$BENCHMARKS" \
+  local model="$1" code="$2" benchmarks="${3:-$BENCHMARKS}"
+  ROWS="$ROWS" FAILED_MODEL="$model" EXIT_CODE="$code" BENCHMARKS="$benchmarks" \
     /usr/bin/python3 <<'PY'
 import json
 import os
@@ -216,13 +222,23 @@ import os
 rows_path = os.environ["ROWS"]
 model = os.environ["FAILED_MODEL"]
 code = os.environ["EXIT_CODE"]
+failed = os.environ["BENCHMARKS"].split()
 
-with open(rows_path, encoding="utf-8") as handle:
-    rows = [json.loads(line) for line in handle if line.strip()]
+# A missing rows file is an EMPTY row set, not a crash. When LADDER_ARTIFACT
+# names a fresh prefix and the very first model dies before Python creates the
+# file, reading it unconditionally made this function -- the last-resort recorder
+# of process-level death -- die too, so the failure it exists to preserve went
+# unrecorded. (Cross-model review.)
+try:
+    with open(rows_path, encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle if line.strip()]
+except FileNotFoundError:
+    rows = []
 
-# Replace, never append: a re-run must reproduce the table, not grow it.
-rows = [r for r in rows if r["model"] != model]
-for benchmark in os.environ["BENCHMARKS"].split():
+# Replace, never append: a re-run must reproduce the table, not grow it. Scoped
+# to the FAILED benchmarks so a model's other cells survive.
+rows = [r for r in rows if not (r["model"] == model and r["benchmark"] in failed)]
+for benchmark in failed:
     rows.append(
         {
             "model": model,
@@ -346,6 +362,7 @@ for model in "${MODELS[@]}"; do
     # already OOM'd this machine once (42.44 GiB of allocations for a 0.6B model
     # at 0.8 GB RSS).
     first=truncate
+    FAILED_BENCHMARKS=""
     for benchmark in $BENCHMARKS; do
       # Checked BEFORE the encode, not only after it. The 2026-07-29 kill landed
       # *inside* a cell, so a purely post-cell guard never got its turn to run.
@@ -354,7 +371,12 @@ for model in "${MODELS[@]}"; do
       measure_cell "$benchmark" "$first"
       cell_code=$?
       first=append
-      [ $cell_code -ne 0 ] && code=$cell_code
+      if [ $cell_code -ne 0 ]; then
+        code=$cell_code
+        # Name the cell that died. Without this the failure path condemns every
+        # benchmark for this model, including the ones that measured fine.
+        FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark"
+      fi
       # A cache-integrity refusal must stop immediately, not after the remaining
       # benchmarks have each recorded their own failure row.
       [ $cell_code -eq 3 ] && break
@@ -363,6 +385,8 @@ for model in "${MODELS[@]}"; do
   else
     measure_cell "$BENCHMARKS" truncate
     code=$?
+    # Non-granular: one process covers every benchmark, so all of them are lost.
+    [ $code -ne 0 ] && FAILED_BENCHMARKS="$BENCHMARKS"
     check_swap || code=9
   fi
 
@@ -396,8 +420,8 @@ for model in "${MODELS[@]}"; do
   # Recording a failure row would delete every good row this model already
   # produced and commit the deletion -- the same trap as the exit-3 path.
   if [ $code -ne 0 ] && [ $code -ne 9 ]; then
-    log "$model exited $code -- recording a failure row and continuing"
-    record_process_failure "$model" "$code"
+    log "$model exited $code -- recording a failure row for:${FAILED_BENCHMARKS:- $BENCHMARKS}"
+    record_process_failure "$model" "$code" "${FAILED_BENCHMARKS:-$BENCHMARKS}"
     # Re-render so the failure is visible in the report too. The paths and the
     # ladder set must match the measuring call above: rendering the DEFAULT
     # artifact here would rewrite the 2026-07-27 ladder's report from a different

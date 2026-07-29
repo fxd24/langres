@@ -55,6 +55,10 @@ Recall of what is *reachable* — candidate recall divided by the ceiling the cr
 
 | model | `abt_buy` | `amazon_google` | `fodors_zagat` | `walmart_amazon` | `wdc_computers` |
 |---|---|---|---|---|---|
+| `intfloat/e5-base-v2` | 0.9854 | 0.9931 | 1.0000 | 0.9969 | 0.8180 |
+| `all-MiniLM-L6-v2` | 0.9494 | 0.9846 | 1.0000 | 0.9793 | 0.6930 |
+| `BAAI/bge-base-en-v1.5` | 0.9893 | 0.9906 | 1.0000 | 0.9917 | 0.7280 |
+| `LiquidAI/LFM2.5-Embedding-350M` | 0.9893 | 0.9794 | 1.0000 | 0.9948 | 0.7870 |
 
 Reachable ceiling per benchmark: `abt_buy` 0.9847 · `amazon_google` 0.8396 · `fodors_zagat` 1.0000 · `walmart_amazon` 0.8837 · `wdc_computers` 0.9001.
 
@@ -186,12 +190,12 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 
 Benchmarks with usable range: `abt_buy`, `amazon_google`, `wdc_computers`.
 
-**The control also outscores the real base encoders.** Both wear the same untrained mean-pooling head, so the only difference between these rows is whether the backbone weights were pretrained at all:
+**The control also outscores the real base encoders.** All three wear the same untrained mean-pooling head, so pooling is held fixed throughout; whether *pretraining* is the only remaining difference depends on the backbone, and is stated per row:
 
-- Random weights match or beat `LiquidAI/LFM2.5-Encoder-230M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`).
-- Random weights match or beat `LiquidAI/LFM2.5-Encoder-350M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`).
+- Random weights match or beat `LiquidAI/LFM2.5-Encoder-230M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`) — *different backbone and size*, so this pair confounds pretraining with model size and is an observation only.
+- Random weights match or beat `LiquidAI/LFM2.5-Encoder-350M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`) — **matched backbone**, so this pair isolates pretraining.
 
-Pretrained masked-LM features read through an untrained mean-pooling head are therefore **worse than random features read the same way** on this task. That is a statement about the *pooling*, not about the checkpoints: MLM training shapes token representations for a head this pipeline never attaches, and averaging them destroys more than averaging random projections does. It is also the cleanest available demonstration of why an untuned encoder must not be ranked against a retrieval-tuned one.
+**The causal reading applies only to the matched pair.** On `LiquidAI/LFM2.5-Encoder-350M` vs the control, architecture and pooling are held fixed and only pretraining differs, so there the conclusion holds: pretrained masked-LM features read through an untrained mean-pooling head are **worse than random features read the same way**. That is a statement about the *pooling*, not about the checkpoint — MLM training shapes token representations for a head this pipeline never attaches, and averaging them destroys more than averaging random projections does. The 230M row points the same way but **cannot support that claim**, because it varies backbone and size as well as pretraining. Either way it is the cleanest available demonstration of why an untuned encoder must not be ranked against a retrieval-tuned one.
 
 This reframes `fodors_zagat` specifically. It was already labelled *saturated* — every usable embedder scoring near the ceiling. The control shows it is stronger than that: it is **uninformative in the strict sense**, because an untrained network also scores near the ceiling. Saturation says the models agree; this says the benchmark cannot tell a trained retriever from noise. It must never be cited as evidence that one embedder beats another.
 

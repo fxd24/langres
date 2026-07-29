@@ -109,7 +109,7 @@ if [ "$STUDY" = "b" ] || [ "$STUDY" = "both" ]; then
   LADDER_ARTIFACT="docs/research/20260729_lfm25_base_encoders" \
   LADDER_REFERENCE_MODEL="LiquidAI/LFM2.5-Embedding-350M" \
   LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M random-init-control-350M" \
-    bash examples/research/run_ladder.sh
+    bash examples/research/run_ladder.sh "$([ "$STUDY" = "b" ] && echo "${1:-}")"
   code=$?
   if [ $code -ne 0 ]; then
     say "study B exited $code"

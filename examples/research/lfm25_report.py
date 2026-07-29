@@ -194,7 +194,10 @@ def _reachable_table(rows: list[dict[str, Any]], baseline: str) -> str:
         f"`{b}` {_fmt(next((c['reachable_recall_ceiling'] for m in _models(rows, baseline) if (c := _best_arm(rows, m, b))), None))}"
         for b in benchmarks
     )
-    return header + f"\nReachable ceiling per benchmark: {ceilings}.\n"
+    # `body` belongs in the output. It was built and dropped, so the rendered
+    # table was a header with no rows -- directly under prose calling it "the
+    # model comparison". Caught by cross-model review of the committed artifact.
+    return header + body + f"\nReachable ceiling per benchmark: {ceilings}.\n"
 
 
 def _interval_table(rows: list[dict[str, Any]], baseline: str) -> tuple[str, list[str]]:
@@ -309,12 +312,21 @@ def _noise_floor_table(
     return table, uninformative, informative
 
 
+#: The control is the 350M architecture. Only the 350M encoder is therefore a
+#: matched-backbone comparison against it; the 230M encoder declares a DIFFERENT
+#: backbone (LiquidAI/LFM2.5-230M-Base) and a different size, so its gap to the
+#: control confounds pretraining with model size and cannot carry a causal claim
+#: about pretrained weights. Stated per row rather than left to the reader.
+MATCHED_BACKBONE_ENCODER = "LiquidAI/LFM2.5-Encoder-350M"
+
+
 def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
     """Where the untrained control outscores the *real* base encoders.
 
-    Both sides wear the same untrained mean-pooling head, so this isolates the
-    pretrained MLM weights themselves: the only difference between the control
-    and an encoder row is whether those weights were trained at all.
+    Both sides wear the same untrained mean-pooling head. For the 350M encoder
+    that isolates the pretrained weights themselves, because the control shares
+    its architecture. For the 230M encoder it does not — that row is reported as
+    an observation, not as evidence about pretraining.
     """
     encoders = sorted(
         {row["model"] for row in base if "Encoder" in row["model"]},
@@ -328,10 +340,19 @@ def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
             cell = _best_arm(base, encoder, benchmark)
             if control and cell and control["candidate_recall"] >= cell["candidate_recall"]:
                 beaten.append(benchmark)
+        matched = encoder == MATCHED_BACKBONE_ENCODER
+        note = (
+            " — **matched backbone**, so this pair isolates pretraining"
+            if matched
+            else " — *different backbone and size*, so this pair confounds pretraining "
+            "with model size and is an observation only"
+        )
         lines.append(
             f"- Random weights match or beat `{encoder}` on **{len(beaten)} of "
             f"{len(benchmarks)}** benchmarks"
-            + (f" ({', '.join(f'`{b}`' for b in beaten)})." if beaten else ".")
+            + (f" ({', '.join(f'`{b}`' for b in beaten)})" if beaten else "")
+            + note
+            + "."
         )
     return lines
 
@@ -576,19 +597,24 @@ def render() -> str:
             f"{', '.join(f'`{b}`' for b in informative) if informative else '**none**'}."
         ),
         "",
-        "**The control also outscores the real base encoders.** Both wear the same "
-        "untrained mean-pooling head, so the only difference between these rows is "
-        "whether the backbone weights were pretrained at all:",
+        "**The control also outscores the real base encoders.** All three wear the same "
+        "untrained mean-pooling head, so pooling is held fixed throughout; whether "
+        "*pretraining* is the only remaining difference depends on the backbone, and is "
+        "stated per row:",
         "",
         *_control_vs_base_encoders(base),
         "",
-        "Pretrained masked-LM features read through an untrained mean-pooling head are "
-        "therefore **worse than random features read the same way** on this task. That is "
-        "a statement about the *pooling*, not about the checkpoints: MLM training shapes "
-        "token representations for a head this pipeline never attaches, and averaging them "
-        "destroys more than averaging random projections does. It is also the cleanest "
-        "available demonstration of why an untuned encoder must not be ranked against a "
-        "retrieval-tuned one.",
+        f"**The causal reading applies only to the matched pair.** On "
+        f"`{MATCHED_BACKBONE_ENCODER}` vs the control, architecture and pooling are held "
+        "fixed and only pretraining differs, so there the conclusion holds: pretrained "
+        "masked-LM features read through an untrained mean-pooling head are **worse than "
+        "random features read the same way**. That is a statement about the *pooling*, not "
+        "about the checkpoint — MLM training shapes token representations for a head this "
+        "pipeline never attaches, and averaging them destroys more than averaging random "
+        "projections does. The 230M row points the same way but **cannot support that "
+        "claim**, because it varies backbone and size as well as pretraining. Either way "
+        "it is the cleanest available demonstration of why an untuned encoder must not be "
+        "ranked against a retrieval-tuned one.",
         "",
         "This reframes `fodors_zagat` specifically. It was already labelled *saturated* — "
         "every usable embedder scoring near the ceiling. The control shows it is stronger "

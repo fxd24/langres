@@ -2057,6 +2057,21 @@ class TestOneReferenceModel:
 
         LADDER._assert_one_reference_model([row])
 
+    def test_a_delta_of_exactly_zero_still_names_its_baseline(self) -> None:
+        """The guard must not fail open on the rows it exists to police.
+
+        Regression: the baseline set was built with a truthiness filter, and
+        ``0.0`` is falsy. Exact-zero deltas are not exotic -- every model ties
+        on a saturated benchmark, and the committed rows carry ``+0.0000``
+        there. So a file whose only comparisons were zeros produced an EMPTY
+        set, returned early, and rendered under whatever baseline was passed,
+        relabelling the delta column without recomputing it.
+        """
+        row = _cell("a", "none", vs_reference_delta=0.0, reference_model="intfloat/e5-base-v2")
+
+        with pytest.raises(ValueError, match="relabel the delta column"):
+            LADDER._assert_one_reference_model([row])
+
     def test_rows_without_a_delta_constrain_nothing(self) -> None:
         LADDER._assert_one_reference_model([_cell("a", "none")])
 
