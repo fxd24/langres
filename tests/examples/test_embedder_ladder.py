@@ -2352,3 +2352,107 @@ class TestTheResumeGoesThroughTheGuardedDriver:
 
         assert 'LADDER_ALL_MODELS="$STUDY_A_MODELS"' in resume
         assert "BAAI/bge-base-en-v1.5" in resume
+
+
+def _caveat(report: str) -> str:
+    """Just the instruction-axis blockquote.
+
+    Slicing to the end of the report swept in later sections that legitimately
+    name the baseline model, so the assertion passed or failed on unrelated text.
+    """
+    start = report.index("Do not read this table as")
+    return report[start : report.index("by a different route.", start)]
+
+
+class TestTheProseNamesOnlyModelsItMeasured:
+    """The instruction-axis caveat explained each study using a hand-typed model list.
+
+    Rendered into the base-encoder study that list named `all-MiniLM-*`,
+    `all-mpnet-base-v2` and BGE -- none of which have a row there -- while naming
+    none of the models that do. The worked examples in the paragraph immediately
+    above it did the same with `google/embeddinggemma-300m` and
+    `Qwen/Qwen3-Embedding-*`: the SECOND site of one defect, which is how five
+    earlier findings on this branch got half-fixed.
+    """
+
+    @staticmethod
+    def _specs(*names: str) -> tuple[Any, ...]:
+        return tuple(LADDER.MODELS_BY_NAME[name] for name in names)
+
+    @staticmethod
+    def _rows(specs: tuple[Any, ...]) -> list[Any]:
+        return [
+            _cell(spec.name, arm)
+            for spec in specs
+            for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+        ]
+
+    def test_the_lists_come_from_the_ladder_being_rendered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        base_study = self._specs(
+            "LiquidAI/LFM2.5-Embedding-350M",
+            "LiquidAI/LFM2.5-Encoder-350M",
+            "LiquidAI/LFM2.5-Encoder-230M",
+        )
+        monkeypatch.setattr(LADDER, "LADDER", base_study)
+
+        report = LADDER.render_report(self._rows(base_study))
+
+        caveat = _caveat(report)
+        assert "LiquidAI/LFM2.5-Encoder-350M" in caveat
+        for absent in ("all-MiniLM-L6-v2", "all-mpnet-base-v2", "BAAI/bge-base-en-v1.5"):
+            assert absent not in caveat, absent
+
+    def test_the_worked_examples_are_dropped_when_their_model_is_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The twin site: the paragraph above the blockquote."""
+        base_study = self._specs(
+            "LiquidAI/LFM2.5-Embedding-350M",
+            "LiquidAI/LFM2.5-Encoder-350M",
+        )
+        monkeypatch.setattr(LADDER, "LADDER", base_study)
+
+        report = LADDER.render_report(self._rows(base_study))
+
+        assert "prefixes documents with" not in report
+        assert "Qwen/Qwen3-Embedding-*`'s documented instruction" not in report
+
+    def test_the_portfolio_ladder_keeps_its_worked_examples(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control: those examples are correct where the models were measured."""
+        portfolio = self._specs("google/embeddinggemma-300m", "all-MiniLM-L6-v2")
+        monkeypatch.setattr(LADDER, "LADDER", portfolio)
+
+        report = LADDER.render_report(self._rows(portfolio))
+
+        assert "prefixes documents with" in report
+        assert "all-MiniLM-L6-v2" in _caveat(report)
+
+
+class TestTheLicenceSentenceDescribesTheActualLicence:
+    """ "in Gemma's case a prohibited-use policy" was rendered for EVERY restricted model.
+
+    So the LiquidAI `lfm1.0` entries described the wrong licence entirely, in the
+    one paragraph a reader consults to make a legal decision.
+    """
+
+    def test_an_lfm_checkpoint_gets_the_lfm_restriction(self) -> None:
+        sentence = LADDER._licence_restriction("lfm1.0")
+
+        assert "LFM Open License" in sentence
+        assert "$10M" in sentence
+        assert "Gemma" not in sentence
+
+    def test_a_gemma_checkpoint_still_gets_gemma_s(self) -> None:
+        assert "prohibited-use policy" in LADDER._licence_restriction("gemma")
+
+    def test_an_unknown_licence_invents_no_specifics(self) -> None:
+        """Silent about a licence it does not know, never wrong about one."""
+        sentence = LADDER._licence_restriction("some-new-licence-2.0")
+
+        assert "read the checkpoint's own LICENSE" in sentence
+        assert "$10M" not in sentence
+        assert "prohibited-use policy" not in sentence

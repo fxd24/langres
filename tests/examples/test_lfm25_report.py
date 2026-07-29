@@ -609,6 +609,55 @@ class TestProvenance:
         assert "blob" not in section.split("Not recorded")[1]
 
 
+class TestTheDigestScopeIsReadFromTheSidecar:
+    """What the tree digest COVERS is a property of the run, not of today's code.
+
+    The renderer hard-coded "over every `.py`". That was true when written and
+    became false the moment the producer added data suffixes -- the classic shape
+    on this branch: a description that cannot observe the thing it describes
+    changing. It now reads the scope the sidecar recorded.
+    """
+
+    @staticmethod
+    def _section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> str:
+        """Start from the REAL sidecar so this exercises the shape that publishes."""
+        doc = json.loads(REPORT.PROVENANCE.read_text())
+        for key, value in overrides.items():
+            if value is None:
+                doc.pop(key, None)
+            else:
+                doc[key] = value
+        path = tmp_path / "prov.json"
+        path.write_text(json.dumps(doc))
+        monkeypatch.setattr(REPORT, "PROVENANCE", path)
+        return "\n".join(REPORT._provenance_section())
+
+    def test_a_data_inclusive_digest_is_described_as_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        section = self._section(tmp_path, monkeypatch, tree_digest_suffixes=[".py", ".csv"])
+
+        assert "`.csv`" in section
+        assert "the code AND the data it reads" in section
+
+    def test_a_python_only_digest_is_not_relabelled_as_covering_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The committed window really is `.py`-only; saying otherwise is a false claim."""
+        section = self._section(tmp_path, monkeypatch, tree_digest_suffixes=None)
+
+        assert "`.csv`" not in section
+        assert "covers **source only**" in section
+
+    def test_the_committed_sidecar_is_described_by_its_own_field(self) -> None:
+        """The real artifact, not a synthetic one -- this is what actually publishes."""
+        recorded = json.loads(REPORT.PROVENANCE.read_text())
+        section = "\n".join(REPORT._provenance_section())
+
+        for suffix in recorded.get("tree_digest_suffixes", [".py"]):
+            assert f"`{suffix}`" in section
+
+
 class TestLicenceBlocker:
     def test_the_threshold_clause_is_quoted_from_the_committed_licence(self) -> None:
         clauses = REPORT._licence_clauses()

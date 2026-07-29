@@ -47,8 +47,30 @@ export LADDER_PROVENANCE_REQUIRED=1
 
 STUDY_A_MODELS="intfloat/e5-base-v2 all-MiniLM-L6-v2 BAAI/bge-base-en-v1.5 LiquidAI/LFM2.5-Embedding-350M"
 PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
+REPORT_MD="docs/research/20260729_lfm25_encoders.md"
 
 say() { echo "[$(date '+%H:%M:%S')] resume: $*"; }
+
+# `--only`, never a bare `git commit`. A bare commit takes the whole INDEX, so
+# anything the operator had staged before starting -- unrelated WIP, a secret
+# pasted into a scratch file -- rides along inside a "chore(provenance)" commit
+# and is then pushed by the child driver. run_ladder.sh and run_lfm25.sh already
+# commit this way for exactly that reason; this script was the one site that did
+# not. Returns non-zero on failure so callers can decide, rather than warning.
+# (Cross-model review.)
+commit_only() {
+  local message="$1" body="$2"
+  shift 2
+  git add "$@" || {
+    say "could not stage: $*"
+    return 1
+  }
+  git diff --cached --quiet -- "$@" && return 0
+  git commit -q --only "$@" -m "$message" -m "$body" || {
+    say "commit failed for: $*"
+    return 1
+  }
+}
 
 # --start refuses when the sidecar holds uncommitted work, which is the state a
 # killed sweep leaves behind and exactly what must not be overwritten silently.
@@ -56,8 +78,9 @@ uv run python examples/research/write_provenance.py --start --studies a || {
   say "FATAL: could not open a provenance window; not measuring."
   exit 1
 }
-git add "$PROVENANCE_JSON" && git commit --quiet -m "chore(lfm25): open a provenance window for the study-A resume" \
-  -m "Captured on the measurement path, before the cell is re-measured. A resume runs after the original window closed, and a closed window cannot describe rows produced after it." || {
+commit_only "chore(lfm25): open a provenance window for the study-A resume" \
+  "Captured on the measurement path, before the cell is re-measured. A resume runs after the original window closed, and a closed window cannot describe rows produced after it." \
+  "$PROVENANCE_JSON" || {
   say "FATAL: the open window is not committed; it would die with the worktree."
   exit 1
 }
@@ -75,8 +98,32 @@ code=$?
 # state this whole mechanism exists to avoid.
 uv run python examples/research/write_provenance.py --finish --partial || \
   say "the provenance window could not be closed cleanly; committing it as it stands"
-git add "$PROVENANCE_JSON" && git commit --quiet -m "chore(lfm25): close the study-A resume's provenance window" \
-  -m "Marked partial: it describes the re-measured cell only. Every other row in both studies predates it." || \
-  say "WARNING: the closed window is not committed"
+
+# Re-render the COMBINED write-up. run_ladder.sh regenerates only the tuned
+# study's own report; 20260729_lfm25_encoders.md states on its face that it is
+# generated from both committed rows files, so leaving it untouched beside a
+# newly committed row publishes a document contradicting its own source -- and
+# the noise-floor table subtracts across the two studies, so a changed study-A
+# cell can move it. Rendered AFTER --finish, matching run_lfm25.sh: the report
+# quotes the window, so it must read the closed one. (Cross-model review.)
+if [ "$code" -eq 0 ]; then
+  say "re-rendering the combined write-up"
+  uv run python examples/research/lfm25_report.py || {
+    say "the write-up did not re-render; committing the closed window before stopping"
+    code=4
+  }
+fi
+
+# The closed window is the only record of what produced the re-measured row. If
+# it cannot be committed it is not durable, and reporting success would tell
+# automation the resume completed while the evidence dies with the worktree.
+# Previously this only warned and then exited with the child's zero status.
+# (Cross-model review.)
+commit_only "results(lfm25): close the study-A resume's window and re-render" \
+  "Marked partial: the window describes the re-measured cell only; every other row in both studies predates it. The combined write-up is re-rendered from the committed rows so it does not disagree with the row this resume just changed." \
+  "$PROVENANCE_JSON" "$REPORT_MD" || {
+  say "FATAL: the closed window is not durable; failing rather than reporting success."
+  exit 1
+}
 
 exit $code

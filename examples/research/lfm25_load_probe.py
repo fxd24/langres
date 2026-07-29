@@ -72,6 +72,47 @@ PROBE_TEXTS = (
 )
 
 
+#: Discard the tracked probe deliberately, the same escape hatch `run_lfm25.sh`
+#: offers for the study artifacts.
+FORCE_ENV = "LFM25_FORCE"
+
+
+def _refuse_to_overwrite_uncommitted() -> None:
+    """Stop before destroying uncommitted measurements in the probe artifact.
+
+    ``run_lfm25.sh`` refuses to start when this file is dirty, but this module's
+    own docstring — and the generated write-up's "Reproduce" block — advertise
+    running it STANDALONE, and that path reached an unconditional
+    ``write_text``. The guard therefore protected the artifact only from the
+    caller that already had a guard. Same defect shape as five earlier findings
+    on this branch: the fix landed on one of two sites that write the same file.
+    (Cross-model review.)
+
+    The check is ``write_provenance._uncommitted``, not a second implementation:
+    it already handles the cases a naive ``git status`` gets wrong (a gitignored
+    or out-of-repo path reads as clean), and two copies of a safety check are
+    two things that drift.
+    """
+    if os.environ.get(FORCE_ENV) == "1":
+        logger.warning("%s=1: overwriting %s without checking", FORCE_ENV, OUTPUT_PATH)
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from write_provenance import _uncommitted
+
+    lost = _uncommitted(OUTPUT_PATH)
+    if not lost:
+        return
+    raise SystemExit(
+        f"REFUSING to overwrite {OUTPUT_PATH}: it holds uncommitted changes "
+        f"({', '.join(lost)}).\n"
+        "  A probe run costs ~2 minutes; the measurements already in that file may "
+        "not be reproducible.\n"
+        "  Commit them, or copy the file outside this worktree, then re-run. To "
+        f"discard them deliberately:\n"
+        f"    {FORCE_ENV}=1 uv run python examples/research/lfm25_load_probe.py"
+    )
+
+
 def _sentence_transformer(name: str, *, trust: bool) -> Any:
     from sentence_transformers import SentenceTransformer
 
@@ -148,6 +189,11 @@ def _run_isolated(kind: str, argument: str) -> dict[str, Any]:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # BEFORE the probing, not beside the write: refusing after the work is done
+    # spends the two minutes and the model loads to reach the same refusal, and
+    # an operator who then reaches for the force flag is doing so having already
+    # been made to wait -- which is how a guard trains people to bypass it.
+    _refuse_to_overwrite_uncommitted()
     import transformers
 
     from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES

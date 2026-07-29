@@ -287,12 +287,14 @@ A **blob** hash, not a commit: it changes only when the file's *content* does, w
 **Captured retrospectively.** This sweep finished before `examples/research/write_provenance.py` existed, so its `--start`/`--finish` hooks did not run over these rows. The hashes are derived from git at the commit that was `HEAD` when the sweep began, and the stability check below was reconstructed afterwards from `git log` over the measurement window rather than observed live. Later runs capture it on the measurement path; this one did not, and says so.
 No tracked **commit** touched these trees during the measurement window, so the hashes are the best available description of every row in both studies. That is weaker than 'nothing changed': an uncommitted edit made and kept during the sweep would not appear in `git log`, and this sidecar records `dirty_at_start: null` precisely because that state cannot be recovered afterwards. Runs that capture provenance live do observe it.
 
-Naming two files is not the measurement's code identity — the harness also executes the blockers, indexes, embedders and metrics that decide what a row *means*. So whole trees are digested, over every `.py` they contain:
+Naming two files is not the measurement's code identity — the harness also executes the blockers, indexes, embedders and metrics that decide what a row *means*. So whole trees are digested, over every `.py` file they contain:
 
 | tree | digest (`.py` contents) |
 |---|---|
 | `src/langres/**` | `439605d11803d5ed` |
 | `examples/research/**` | `fbb18fc14a753a0a` |
+
+This window's digest covers **source only**. A benchmark CSV or a JSON config could have changed under it and read as an unchanged tree; later windows digest those too.
 
 The shell **drivers** are digested separately (`driver_digest`), because they decide which cells *ran* rather than what a number means — and unlike the measurement code, **they did change while this sweep was in flight**:
 

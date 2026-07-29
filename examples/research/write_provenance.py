@@ -309,6 +309,14 @@ def _snapshot() -> dict[str, Any]:
     driver_blobs = _driver_blobs()
     return {
         "blobs": _blobs(),
+        # What the digest COVERS, recorded beside it. The renderer used to
+        # hard-code "over every `.py`", which was true when written and became
+        # false the moment data files were added to DIGESTED_SUFFIXES -- and
+        # because the sidecar said nothing, a reader could not tell a
+        # Python-only digest from a data-inclusive one, so one of the two
+        # contracts was always going to be described wrongly. A description
+        # derived from the artifact cannot drift from it. (Cross-model review.)
+        "tree_digest_suffixes": list(DIGESTED_SUFFIXES),
         "tree_digests": _tree_digest(),
         "driver_digest": _driver_digest(driver_blobs),
         "driver_blobs": driver_blobs,

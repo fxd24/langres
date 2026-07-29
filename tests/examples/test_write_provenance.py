@@ -508,6 +508,26 @@ class TestDataIsCodeInTheDigest:
         assert ".csv" in PROV.DIGESTED_SUFFIXES
         assert ".py" in PROV.DIGESTED_SUFFIXES
 
+    def test_the_snapshot_records_what_the_digest_covers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The digest's SCOPE travels with the digest.
+
+        The renderer used to hard-code "over every `.py`", which was true when
+        written and false the moment data files joined DIGESTED_SUFFIXES. With
+        nothing in the sidecar saying which contract applied, one of the two was
+        always going to be described wrongly -- and the retrospective window
+        committed here really is `.py`-only.
+        """
+        path = _sidecar(tmp_path)
+        # A tmp_path sidecar sits outside the repo, which `start()` correctly
+        # treats as unestablishable and refuses; that guard has its own tests.
+        monkeypatch.setattr(PROV, "_uncommitted", lambda _p: [])
+
+        PROV.start(path)
+
+        assert json.loads(path.read_text())["tree_digest_suffixes"] == list(PROV.DIGESTED_SUFFIXES)
+
     def test_editing_a_corpus_changes_the_digest(self, tmp_path: Path) -> None:
         """The property the whole mechanism rests on, exercised rather than assumed."""
         corpus = (
@@ -573,7 +593,50 @@ class TestTheResumeOwnsAProvenanceWindow:
         """An open window that dies with the worktree describes nothing."""
         resume = self._resume()
 
-        assert resume.count('git add "$PROVENANCE_JSON"') == 2
+        assert resume.count("commit_only ") == 2
+        assert resume.count('"$PROVENANCE_JSON"') >= 2
+
+    def test_it_commits_only_the_paths_it_names(self) -> None:
+        """A bare `git commit` takes the whole INDEX.
+
+        Anything the operator had staged before starting -- unrelated WIP, a
+        secret in a scratch file -- would ride along inside a provenance commit
+        and then be pushed by the child driver. Every other driver in this study
+        already uses `--only`; this script was the one site that did not.
+        """
+        resume = self._resume()
+
+        assert "git commit -q --only" in resume
+        commits = [
+            line
+            for line in resume.splitlines()
+            if "git commit" in line and not line.lstrip().startswith("#")
+        ]
+        assert commits, "no commit at all"
+        assert all("--only" in line for line in commits), commits
+
+    def test_a_window_that_cannot_be_committed_fails_the_run(self) -> None:
+        """Warning and exiting 0 tells automation a resume it cannot evidence succeeded."""
+        resume = self._resume()
+
+        tail = resume[resume.index("close the study-A resume") :]
+        assert "exit 1" in tail
+        assert "FATAL" in tail
+
+    def test_it_rerenders_the_combined_write_up(self) -> None:
+        """`run_ladder.sh` regenerates only the tuned study's own report.
+
+        The combined write-up states on its face that it is generated from BOTH
+        rows files, and its noise-floor table subtracts across them -- so a
+        changed study-A cell can move it. Left unrendered, the resume publishes a
+        document contradicting the row it just committed.
+        """
+        resume = self._resume()
+
+        assert "lfm25_report.py" in resume
+        assert '"$REPORT_MD"' in resume
+        # After --finish, matching run_lfm25.sh: the report quotes the window.
+        assert resume.index("--finish --partial") < resume.index("lfm25_report.py")
 
     def test_the_partial_note_does_not_assert_an_abort(self, tmp_path: Path) -> None:
         """A resume is a deliberate, successful run; only its SCOPE is partial."""
@@ -584,3 +647,70 @@ class TestTheResumeOwnsAProvenanceWindow:
         note = json.loads(path.read_text())["partial_note"]
         assert "does NOT cover every row" in note
         assert "ABORTED" not in note
+
+
+class TestTheProbeGuardsItsOwnOutput:
+    """`run_lfm25.sh` refuses to start over a dirty load probe.
+
+    But this module's docstring AND the generated write-up's "Reproduce" block
+    both advertise running `lfm25_load_probe.py` STANDALONE, and that path
+    reached an unconditional `write_text`. So the guard protected the artifact
+    only from the caller that already had one -- the sixth time on this branch a
+    fix landed on one of two sites that write the same file.
+    """
+
+    @staticmethod
+    def _probe() -> ModuleType:
+        name = "example_lfm25_load_probe"
+        path = ROOT / "examples" / "research" / "lfm25_load_probe.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_it_refuses_when_the_artifact_holds_uncommitted_work(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probe = self._probe()
+        stranded = tmp_path / "probe.json"
+        stranded.write_text('{"measured": "and never committed"}')
+        monkeypatch.setattr(probe, "OUTPUT_PATH", stranded)
+        monkeypatch.delenv(probe.FORCE_ENV, raising=False)
+
+        with pytest.raises(SystemExit, match="REFUSING to overwrite"):
+            probe._refuse_to_overwrite_uncommitted()
+
+    def test_the_force_flag_is_the_documented_escape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probe = self._probe()
+        stranded = tmp_path / "probe.json"
+        stranded.write_text("{}")
+        monkeypatch.setattr(probe, "OUTPUT_PATH", stranded)
+        monkeypatch.setenv(probe.FORCE_ENV, "1")
+
+        probe._refuse_to_overwrite_uncommitted()
+
+    def test_the_committed_probe_does_not_block_an_ordinary_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The control. A guard that refuses everything is not a guard."""
+        probe = self._probe()
+        monkeypatch.delenv(probe.FORCE_ENV, raising=False)
+
+        probe._refuse_to_overwrite_uncommitted()
+
+    def test_it_runs_before_the_measurement_not_beside_the_write(self) -> None:
+        """Refusing after the work is done trains operators to reach for --force."""
+        source = (ROOT / "examples" / "research" / "lfm25_load_probe.py").read_text()
+        body = source[source.index("def main()") :]
+
+        assert body.index("_refuse_to_overwrite_uncommitted()") < body.index("_run_isolated")
+
+    def test_it_reuses_the_hardened_check(self) -> None:
+        """Two copies of a safety check are two things that drift apart."""
+        source = (ROOT / "examples" / "research" / "lfm25_load_probe.py").read_text()
+
+        assert "from write_provenance import _uncommitted" in source

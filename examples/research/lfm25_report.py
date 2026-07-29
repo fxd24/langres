@@ -185,16 +185,35 @@ def _provenance_section() -> list[str]:
 
     digests = doc.get("tree_digests")
     if digests:
+        # Read the covered suffixes from the sidecar rather than naming them
+        # here. A sidecar written before this field existed is a Python-only
+        # digest, and saying so is the honest default -- inheriting the CURRENT
+        # suffix set would silently relabel those older, narrower hashes as
+        # covering data they never hashed. (Cross-model review.)
+        suffixes = doc.get("tree_digest_suffixes") or [".py"]
+        covered = ", ".join(f"`{s}`" for s in suffixes)
+        scope = (
+            f"over every {covered} file they contain"
+            if len(suffixes) == 1
+            else f"over every {covered} file they contain — the code AND the data it reads"
+        )
         lines += [
             "",
             "Naming two files is not the measurement's code identity — the harness also "
             "executes the blockers, indexes, embedders and metrics that decide what a row "
-            "*means*. So whole trees are digested, over every `.py` they contain:",
+            f"*means*. So whole trees are digested, {scope}:",
             "",
-            "| tree | digest (`.py` contents) |",
+            f"| tree | digest ({covered} contents) |",
             "|---|---|",
         ]
         lines += [f"| `{tree}/**` | `{d[:16]}` |" for tree, d in digests.items()]
+        if len(suffixes) == 1:
+            lines += [
+                "",
+                "This window's digest covers **source only**. A benchmark CSV or a JSON "
+                "config could have changed under it and read as an unchanged tree; later "
+                "windows digest those too.",
+            ]
 
     drivers_ok = doc.get("drivers_unchanged_during_run")
     if drivers_ok is not None:

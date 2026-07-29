@@ -261,6 +261,40 @@ def _opt_in_snippet(spec: ModelSpec) -> str:
     )
 
 
+#: What each non-OSI licence actually restricts, keyed by the identifier the
+#: checkpoint itself declares. Hard-coded into the sentence, "in Gemma's case a
+#: prohibited-use policy" was rendered for every restricted model — so the
+#: LiquidAI `lfm1.0` rows described the wrong licence entirely, in the one
+#: paragraph a reader consults for a legal decision.
+#:
+#: Unknown identifiers get NO invented specifics: an unrecognised licence must
+#: send the reader to the text, not to a guess. That is the allow-list direction
+#: — this table can only ever be silent about a licence it does not know, never
+#: wrong about one.
+LICENCE_RESTRICTIONS: dict[str, str] = {
+    "gemma": (
+        "a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose."
+    ),
+    "lfm1.0": (
+        "the LFM Open License v1.0, whose §5 conditions **Commercial Use** on the user's "
+        "legal entity staying under $10M annual revenue (§5(c) exempts a qualified "
+        "non-profit's non-commercial or research use). Apache-2.0 imposes no such "
+        "condition, so this cannot be a default — see the licence section of "
+        "`20260729_lfm25_encoders.md`, which quotes the clauses from the committed "
+        "LICENSE file."
+    ),
+}
+
+
+def _licence_restriction(license_id: str) -> str:
+    """The named restriction for ``license_id``, or a pointer to the text."""
+    return LICENCE_RESTRICTIONS.get(
+        license_id,
+        f"this report does not summarise `{license_id}`, so read the checkpoint's own "
+        "LICENSE before shipping it; Apache-2.0's terms do not carry over to it.",
+    )
+
+
 #: Listed in roughly ascending expected size so a truncated sweep still covers
 #: the cheap tiers completely. Ordering is a *scheduling* hint only — every
 #: published number comes from the measured ``parameter_count``.
@@ -2388,9 +2422,7 @@ def _render_recommendation(
                 f"\n- **`{name}` — licence `{spec.license}`, which is NOT OSI-approved.** "
                 f"{evidence_phrase(name)} {consequence}: a user who names it accepts its "
                 "terms; a user who names nothing must not be given them. Anyone shipping "
-                "it must read the checkpoint's own licence — in Gemma's case a "
-                "prohibited-use policy that survives redistribution, which Apache-2.0 "
-                "does not impose.\n"
+                f"it must read the checkpoint's own licence — {_licence_restriction(spec.license)}\n"
                 f"\n  ```python\n"
                 f"{_opt_in_snippet(spec)}"
                 f"  ```\n"
@@ -2897,37 +2929,80 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "\n**The `instruct` arm prefixes queries against BARE documents**, which is a "
         "structurally different configuration from the asymmetric recipe an "
         "instruction-trained checkpoint documents — not the same recipe with "
-        "different wording. `google/embeddinggemma-300m` prefixes documents with "
-        "`'title: none | text: '` and queries with `'task: search result | query: '`; "
-        "running only `instruct` measures half of that. Checkpoints that ship a "
+        "different wording. Checkpoints that ship a "
         "query-side instruction therefore carry a third `documented` arm, read from "
         "their own `config_sentence_transformers.json` rather than from a model card "
         "or from memory. Where that arm is missing from the tables it is listed under "
         "'What did not run'.\n"
-        "\n`Qwen/Qwen3-Embedding-*`'s documented instruction is about retrieving **web "
-        "search passages**, and its document side is empty. Applying it to entity "
-        "matching is out of its stated domain — which is precisely what a user "
-        "following the model card would do, so it is worth measuring, but a poor "
-        "result for that arm is a statement about a transplanted instruction, not "
-        "about the model's instruction-following.\n"
     )
+    # The worked examples are the SECOND site of the defect the blockquote below
+    # was flagged for, and they sat in the paragraph immediately above it: the
+    # base-encoder study contains neither `google/embeddinggemma-300m` nor
+    # `Qwen/Qwen3-Embedding-*`, so it explained its own `instruct` column with
+    # two models it never measured. Emitted only where the model has a row.
+    rendered = {spec.name for spec in LADDER}
+    if "google/embeddinggemma-300m" in rendered:
+        out.append(
+            "\n`google/embeddinggemma-300m` prefixes documents with "
+            "`'title: none | text: '` and queries with `'task: search result | query: '`; "
+            "running only `instruct` measures half of that.\n"
+        )
+    if any(name.startswith("Qwen/Qwen3-Embedding") for name in rendered):
+        out.append(
+            "\n`Qwen/Qwen3-Embedding-*`'s documented instruction is about retrieving **web "
+            "search passages**, and its document side is empty. Applying it to entity "
+            "matching is out of its stated domain — which is precisely what a user "
+            "following the model card would do, so it is worth measuring, but a poor "
+            "result for that arm is a statement about a transplanted instruction, not "
+            "about the model's instruction-following.\n"
+        )
+    # Both lists are DERIVED from the ladder being rendered, not typed. Hard-coded,
+    # this paragraph explained the base-encoder study using `all-MiniLM-*`,
+    # `all-mpnet-base-v2` and BGE — none of which have a row in it — while omitting
+    # every model that does. `documented_arm` is precisely the "ships a query-side
+    # instruction" flag, so the partition is a property of the specs rather than a
+    # second list to keep in sync. The random-init control is excluded: it has no
+    # training of any kind, so "was not trained with an instruction" says nothing
+    # about it. (Cross-model review.)
+    trainable = [spec for spec in LADDER if not spec.random_init]
+    uninstructed = [spec.name for spec in trainable if spec.documented_arm is None]
+    instructed = [spec.name for spec in trainable if spec.documented_arm is not None]
+    names = lambda group: ", ".join(f"`{n}`" for n in group)  # noqa: E731
     out.append(
         "\n> ### Do not read this table as 'instructions do not help retrieval'\n"
         ">\n"
         "> **A negative result here is mostly a statement about the models in it.**\n"
-        "> `all-MiniLM-*`, `all-mpnet-base-v2` and the BGE v1.5 family were not\n"
-        "> trained with a task instruction on the query side. Prepending one to a\n"
-        "> model that never saw one in training does not give it an instruction to\n"
-        "> follow — it moves the query vector away from the document vectors it is\n"
-        "> supposed to match. Measuring that it hurts is a real, useful, and\n"
-        "> actionable finding: **do not switch these models on by default with a\n"
-        "> prompt.** It is not evidence about instruction-following embedders.\n"
-        ">\n"
-        "> The hypothesis this axis exists to test is about the models trained for\n"
-        "> it — `google/embeddinggemma-300m`, `Qwen/Qwen3-Embedding-*`, and E5's\n"
-        "> native `query:`/`passage:` scheme (which this sweep's single generic\n"
-        "> instruction is **not**; see `own prompt names`). Until those are in the\n"
-        "> table, the instruction-following question is **open**, not answered.\n"
+    )
+    if uninstructed:
+        out.append(
+            f"> {names(uninstructed)} ship no documented query-side\n"
+            "> instruction, so they were not trained with one. Prepending one to a\n"
+            "> model that never saw one in training does not give it an instruction to\n"
+            "> follow — it moves the query vector away from the document vectors it is\n"
+            "> supposed to match. Measuring that it hurts is a real, useful, and\n"
+            "> actionable finding: **do not switch these models on by default with a\n"
+            "> prompt.** It is not evidence about instruction-following embedders.\n"
+            ">\n"
+        )
+    if instructed:
+        out.append(
+            "> The hypothesis this axis exists to test is about the models trained for\n"
+            f"> it. In this table that is {names(instructed)}, "
+            f"{'which carry' if len(instructed) > 1 else 'which carries'} a\n"
+            f"> `documented` arm read from {'their' if len(instructed) > 1 else 'its'} own "
+            "configuration — the generic\n"
+            "> `instruct` arm is **not** that recipe (see `own prompt names`), so read\n"
+            "> the two separately.\n"
+        )
+    else:
+        out.append(
+            "> The hypothesis this axis exists to test is about models TRAINED for a\n"
+            "> query-side instruction, and **this table contains none** — no model here\n"
+            "> carries a `documented` arm. For this study the instruction-following\n"
+            "> question is therefore **open, not answered**; the `instruct` column\n"
+            "> measures a generic prefix on models that never asked for one.\n"
+        )
+    out.append(
         ">\n"
         "> This distinction is the whole reason the axis was worth fixing. Before\n"
         "> the `query_prompt` no-op was repaired every cell here read exactly\n"

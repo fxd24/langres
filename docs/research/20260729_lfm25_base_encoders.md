@@ -130,15 +130,13 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 
 **This paragraph describes the `instruct` arm only.** For it: same model, same `k`, same index — only the query side is re-encoded with a single fixed instruction (`'Find the duplicate product or business record for: '`). This is deliberately **one** instruction for every model, so it answers 'does a task instruction on the query help', not 'is each model at its documented best'. The `own prompt names` column above shows which models ship a documented recipe this sweep did not use.
 
-**The `instruct` arm prefixes queries against BARE documents**, which is a structurally different configuration from the asymmetric recipe an instruction-trained checkpoint documents — not the same recipe with different wording. `google/embeddinggemma-300m` prefixes documents with `'title: none | text: '` and queries with `'task: search result | query: '`; running only `instruct` measures half of that. Checkpoints that ship a query-side instruction therefore carry a third `documented` arm, read from their own `config_sentence_transformers.json` rather than from a model card or from memory. Where that arm is missing from the tables it is listed under 'What did not run'.
-
-`Qwen/Qwen3-Embedding-*`'s documented instruction is about retrieving **web search passages**, and its document side is empty. Applying it to entity matching is out of its stated domain — which is precisely what a user following the model card would do, so it is worth measuring, but a poor result for that arm is a statement about a transplanted instruction, not about the model's instruction-following.
+**The `instruct` arm prefixes queries against BARE documents**, which is a structurally different configuration from the asymmetric recipe an instruction-trained checkpoint documents — not the same recipe with different wording. Checkpoints that ship a query-side instruction therefore carry a third `documented` arm, read from their own `config_sentence_transformers.json` rather than from a model card or from memory. Where that arm is missing from the tables it is listed under 'What did not run'.
 
 > ### Do not read this table as 'instructions do not help retrieval'
 >
 > **A negative result here is mostly a statement about the models in it.**
-> `all-MiniLM-*`, `all-mpnet-base-v2` and the BGE v1.5 family were not
-> trained with a task instruction on the query side. Prepending one to a
+> `LiquidAI/LFM2.5-Encoder-350M`, `LiquidAI/LFM2.5-Encoder-230M` ship no documented query-side
+> instruction, so they were not trained with one. Prepending one to a
 > model that never saw one in training does not give it an instruction to
 > follow — it moves the query vector away from the document vectors it is
 > supposed to match. Measuring that it hurts is a real, useful, and
@@ -146,10 +144,10 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 > prompt.** It is not evidence about instruction-following embedders.
 >
 > The hypothesis this axis exists to test is about the models trained for
-> it — `google/embeddinggemma-300m`, `Qwen/Qwen3-Embedding-*`, and E5's
-> native `query:`/`passage:` scheme (which this sweep's single generic
-> instruction is **not**; see `own prompt names`). Until those are in the
-> table, the instruction-following question is **open**, not answered.
+> it. In this table that is `LiquidAI/LFM2.5-Embedding-350M`, which carries a
+> `documented` arm read from its own configuration — the generic
+> `instruct` arm is **not** that recipe (see `own prompt names`), so read
+> the two separately.
 >
 > This distinction is the whole reason the axis was worth fixing. Before
 > the `query_prompt` no-op was repaired every cell here read exactly
@@ -261,7 +259,7 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
 
 ### Use-restricted checkpoints — documented opt-in, never a silent default
 
-- **`LiquidAI/LFM2.5-Encoder-350M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
+- **`LiquidAI/LFM2.5-Encoder-350M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — the LFM Open License v1.0, whose §5 conditions **Commercial Use** on the user's legal entity staying under $10M annual revenue (§5(c) exempts a qualified non-profit's non-commercial or research use). Apache-2.0 imposes no such condition, so this cannot be a default — see the licence section of `20260729_lfm25_encoders.md`, which quotes the clauses from the committed LICENSE file.
 
   ```python
   # opt in explicitly, having read the licence.
@@ -276,7 +274,7 @@ langres ships under Apache-2.0. A default that carries a use-restricted licence 
   )
   ```
 
-- **`LiquidAI/LFM2.5-Encoder-230M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — in Gemma's case a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose.
+- **`LiquidAI/LFM2.5-Encoder-230M` — licence `lfm1.0`, which is NOT OSI-approved.** **This sweep measured no benchmark where it beats `LiquidAI/LFM2.5-Embedding-350M` with an interval clear of zero**, so nothing here recommends it. If you use it anyway, the documented opt-in is the required exposure mechanism: a user who names it accepts its terms; a user who names nothing must not be given them. Anyone shipping it must read the checkpoint's own licence — the LFM Open License v1.0, whose §5 conditions **Commercial Use** on the user's legal entity staying under $10M annual revenue (§5(c) exempts a qualified non-profit's non-commercial or research use). Apache-2.0 imposes no such condition, so this cannot be a default — see the licence section of `20260729_lfm25_encoders.md`, which quotes the clauses from the committed LICENSE file.
 
   ```python
   # opt in explicitly, having read the licence.
