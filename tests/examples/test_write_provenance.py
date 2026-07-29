@@ -1063,6 +1063,19 @@ class TestEveryReadInputIsGuarded:
         assert "20260729_lfm25_license.txt" in declared
         assert "20260727_embedder_ladder.md" in declared
 
+    def test_the_declaration_is_the_same_object_the_reader_uses(self) -> None:
+        """Matching by NAME cannot see two literals that agree today.
+
+        The guard listed `docs/research/20260727_embedder_ladder.md` as its own
+        string while `_noise_band_warning` read `PRIOR_LADDER`. Both spelled the
+        same path, so every name-based assertion passed -- and changing one would
+        have left the guard protecting a file nothing reads. Same shape as the
+        defect the guard exists for, one constant over.
+        """
+        report = self._report()
+
+        assert report.REPO_ROOT / report.PRIOR_LADDER in report.RENDER_INPUTS
+
     def test_the_output_is_not_treated_as_an_input(self) -> None:
         """Guarding the file it is about to write would refuse every re-render."""
         report = self._report()
@@ -1105,13 +1118,33 @@ class TestEveryReadInputIsGuarded:
 
         report._refuse_uncommitted_inputs()
 
-    def test_both_drivers_claim_the_allowance(self) -> None:
-        """A driver that did not would refuse to render on every real sweep."""
+    def test_both_drivers_claim_the_allowance_on_the_render_itself(self) -> None:
+        """A driver that did not would refuse to render on every real sweep.
+
+        Checked against the INVOCATION, not the file: every one of these drivers
+        also *discusses* the flag in a comment, and a substring test over the whole
+        source would pass on the prose alone after the assignment was deleted.
+
+        Finding the invocation needs the same care. The filename alone also appears
+        in a comment and inside a commit-message body, so this matches the command
+        that RUNS it -- prose about an artifact is not the artifact.
+        """
         research = Path(PROV.REPO_ROOT) / "examples" / "research"
 
         for name in ("run_lfm25.sh", "resume_lfm25_study_a.sh"):
-            source = (research / name).read_text()
-            assert "LFM25_PROVENANCE_PENDING=1" in source, name
+            lines = (research / name).read_text().splitlines()
+            calls = [
+                i
+                for i, line in enumerate(lines)
+                if "python examples/research/lfm25_report.py" in line
+                and not line.lstrip().startswith("#")
+            ]
+            assert calls, name
+            for i in calls:
+                # The assignment sits on the call itself or on a continued line
+                # immediately above it; comments in that window do not count.
+                window = [x for x in lines[max(0, i - 2) : i + 1] if not x.lstrip().startswith("#")]
+                assert any("LFM25_PROVENANCE_PENDING=1" in x for x in window), f"{name}:{i + 1}"
 
 
 class TestOnePublicationRule:

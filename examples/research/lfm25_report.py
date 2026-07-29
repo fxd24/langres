@@ -36,6 +36,14 @@ LOAD_PROBE = RESEARCH / "20260729_lfm25_load_probe.json"
 LICENSE = RESEARCH / "20260729_lfm25_license.txt"
 OUTPUT = RESEARCH / "20260729_lfm25_encoders.md"
 
+#: The earlier portfolio study, whose margins predate any noise-floor control.
+#: Relative, because it is also QUOTED into the prose by name. Declared here
+#: rather than beside its reader 1300 lines down: the guard below listed the same
+#: path as a second string literal, so changing one would have left the guard
+#: silently protecting a file nothing reads -- the same defect the guard itself
+#: was added for, one constant over. (Self-audit.)
+PRIOR_LADDER = "docs/research/20260727_embedder_ladder.md"
+
 #: Every file this renderer READS. One list, because the uncommitted-input guard
 #: was written against the three that were on my mind and silently skipped the
 #: licence text and the prior ladder -- both of which are QUOTED into the output,
@@ -47,7 +55,7 @@ RENDER_INPUTS: tuple[Path, ...] = (
     BASE_ROWS,
     LOAD_PROBE,
     LICENSE,
-    REPO_ROOT / "docs" / "research" / "20260727_embedder_ladder.md",
+    REPO_ROOT / PRIOR_LADDER,
 )
 
 HEADLINE_K = 20
@@ -1330,10 +1338,6 @@ def _pretraining_section(base: list[dict[str, Any]]) -> list[str]:
         "encoder must not be ranked against a retrieval-tuned one.",
     ]
     return lines
-
-
-#: The earlier portfolio study, whose margins predate any noise-floor control.
-PRIOR_LADDER = "docs/research/20260727_embedder_ladder.md"
 
 
 def _noise_band_warning(tuned: list[dict[str, Any]], base: list[dict[str, Any]]) -> list[str]:
