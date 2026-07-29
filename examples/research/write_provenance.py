@@ -235,6 +235,21 @@ def finish(output: Path, partial: bool = False) -> None:
     if not output.exists():
         raise SystemExit(f"{output} missing -- run --start before the sweep")
     doc = json.loads(output.read_text())
+    # A window that already closed COMPLETE cannot be relabelled partial. The
+    # driver's abort path re-invokes `--finish --partial`, so a failure AFTER a
+    # successful `--finish` -- a render error, say -- would have rewritten
+    # `window_complete` to false, stamped a new finished timestamp, and added a
+    # note claiming the sweep never reached every planned study, over rows that
+    # prove otherwise. Refused here rather than left to each caller to remember,
+    # and refused BEFORE anything is written so the closed state survives intact.
+    # (Cross-model review.)
+    if partial and doc.get("window_complete") is True:
+        raise SystemExit(
+            f"Refusing to relabel {output} as partial: this window already closed "
+            f"COMPLETE at {doc['measurement_window'].get('finished')}. Marking it partial "
+            "would assert the sweep never reached every planned study, which the closed "
+            "window contradicts. The sidecar is unchanged; commit it as it stands."
+        )
     # `studies_measured` is what was PLANNED at --start. On an abort partway
     # through, merge-commits leave every untouched older row in place, so a
     # sidecar still claiming ["a", "b"] made the report say the window covers

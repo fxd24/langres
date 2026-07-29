@@ -84,15 +84,8 @@ PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
 # next `--start`. That is exactly the "commit before the worktree disappears"
 # failure this repo has already paid for once. The window is closed, marked
 # partial, and committed on the way out. (Cross-model review.)
-abort_with_provenance() {
-  local code="$1"
-  say "closing the provenance window for the partial run"
-  # --finish exits non-zero when measurement code moved mid-sweep; that verdict
-  # still belongs in the sidecar, so record it and keep the original exit code.
-  # --partial: this window did NOT reach every planned study, so the report must
-  # not read `studies_measured` as "every row in both studies".
-  uv run python examples/research/write_provenance.py --finish --partial ||
-    say "provenance --finish reported a problem; recording it and continuing to commit"
+commit_provenance() {
+  local code="$1" subject="$2"
   if [ -f "$PROVENANCE_JSON" ]; then
     # A WARNING here is not enough. Partial rows are already committed and may be
     # pushed, so this snapshot is the only description of what produced them --
@@ -102,16 +95,16 @@ abort_with_provenance() {
     # "the sweep aborted" from "the sweep aborted AND its provenance was lost".
     # Exit 10 says the second thing loudly. (Cross-model review.)
     if ! git add "$PROVENANCE_JSON"; then
-      say "FATAL: could not stage the partial-run provenance. It is the ONLY record of"
+      say "FATAL: could not stage the run's provenance. It is the ONLY record of"
       say "  what produced the rows already committed. Save it before teardown:"
       say "    cp $PROVENANCE_JSON <somewhere outside this worktree>"
       exit 10
     fi
     if ! git diff --cached --quiet -- "$PROVENANCE_JSON"; then
       if ! git commit -q --only "$PROVENANCE_JSON" \
-        -m "results(lfm25): provenance for a partial sweep (exit $code)" \
-        -m "The sweep stopped early; rows already committed by run_ladder.sh are described by this window."; then
-        say "FATAL: the partial-run provenance is staged but NOT committed, and it is the"
+        -m "$subject" \
+        -m "Rows already committed by run_ladder.sh are described by this window."; then
+        say "FATAL: the provenance is staged but NOT committed, and it is the"
         say "  ONLY record of what produced the rows already committed. Save it before"
         say "  teardown:  cp $PROVENANCE_JSON <somewhere outside this worktree>"
         exit 10
@@ -119,6 +112,18 @@ abort_with_provenance() {
     fi
   fi
   exit "$code"
+}
+
+abort_with_provenance() {
+  local code="$1"
+  say "closing the provenance window for the partial run"
+  # --finish exits non-zero when measurement code moved mid-sweep; that verdict
+  # still belongs in the sidecar, so record it and keep the original exit code.
+  # --partial: this window did NOT reach every planned study, so the report must
+  # not read `studies_measured` as "every row in both studies".
+  uv run python examples/research/write_provenance.py --finish --partial ||
+    say "provenance --finish reported a problem; recording it and continuing to commit"
+  commit_provenance "$code" "results(lfm25): provenance for a partial sweep (exit $code)"
 }
 
 STUDY="${LFM25_STUDY:-both}"
@@ -129,6 +134,32 @@ case "$STUDY" in
     exit 2
     ;;
 esac
+
+# ---------------------------------------------------------------------------
+# Wait for the in-flight sweep FIRST -- before --start, not inside run_ladder.sh.
+#
+# The documented invocation is `run_lfm25.sh PID`, and the PID used to be handed
+# straight to run_ladder.sh, which waits. But `--start` runs before that: it
+# OVERWROTE the shared sidecar while the previous sweep was still measuring, so
+# the older process went on to commit and push rows, then verified or closed a
+# window describing the replacement run -- rows published under provenance for
+# code they never touched. `--start` is also itself a `uv run`, and two of those
+# in one worktree do not fail loudly, they invent failures. The wait belongs
+# ahead of both. (Cross-model review.)
+#
+# Still passed down: run_ladder.sh is also run standalone, its own wait is then
+# the only one, and a second wait on a PID that has already exited returns at
+# once.
+# ---------------------------------------------------------------------------
+WAIT_PID="${1:-}"
+if [ -n "$WAIT_PID" ]; then
+  say "waiting for pid $WAIT_PID to exit before opening the provenance window"
+  while kill -0 "$WAIT_PID" 2>/dev/null; do
+    sleep 15
+  done
+  say "pid $WAIT_PID is gone"
+  sleep 10
+fi
 
 # ---------------------------------------------------------------------------
 # Provenance is captured HERE, in the measurement path, before a single row is
@@ -220,9 +251,16 @@ say "closing the provenance window"
 # discarded the very record explaining that already-committed rows came from
 # mixed code -- the one warning a reader of those rows would need. Routed through
 # the close-and-commit path, which persists it. (Cross-model review.)
+#
+# `commit_provenance`, NOT `abort_with_provenance`: every selected study RAN. The
+# abort helper re-invokes `--finish --partial`, which would overwrite the
+# `window_complete=true` and the finished timestamp this call just wrote with
+# `false` plus the note "the sweep ABORTED before finishing every planned study"
+# -- a statement contradicted by the rows sitting beside it. The window is closed
+# and complete; only the commit is still owed. (Cross-model review.)
 uv run python examples/research/write_provenance.py --finish || {
   say "provenance --finish rejected this sweep; committing its evidence before stopping"
-  abort_with_provenance 1
+  commit_provenance 1 "results(lfm25): provenance for a sweep whose code moved mid-run"
 }
 
 say "rendering the write-up"
@@ -231,10 +269,12 @@ say "rendering the write-up"
 # render failure here (cohort validation rejecting the artifacts, say) would
 # otherwise leave that closed sidecar uncommitted, to be lost on teardown or
 # overwritten by the next --start. The rows would then be durable with no record
-# of the window that produced them. (Cross-model review.)
+# of the window that produced them. (Cross-model review.) Same reason as above
+# for committing rather than aborting: re-finishing would relabel a complete
+# window as partial.
 uv run python examples/research/lfm25_report.py || {
   say "rendering failed; committing the closed provenance window before stopping"
-  abort_with_provenance 1
+  commit_provenance 1 "results(lfm25): provenance for a sweep whose write-up failed to render"
 }
 
 REPORT_MD="docs/research/20260729_lfm25_encoders.md"

@@ -433,18 +433,31 @@ def _assert_comparable_cohorts(tuned: list[dict[str, Any]], base: list[dict[str,
     refused rather than rendered with a caveat. (Cross-model review.)
 
     Returns the shared revision, for the report to state.
+
+    **One revision across both files, not two matching sets.** Comparing
+    ``tuned_revs != base_revs`` accepted a CROSSED cohort: study A holding
+    benchmark 1 at revision 1 and benchmark 2 at revision 2 while study B holds
+    the reverse gives equal sets ``{1, 2}`` and passes, yet *every* per-benchmark
+    subtraction then crosses revisions. That state is reachable — ``merge_rows()``
+    replaces re-measured cells in place, so a partial re-run leaves a mixed file
+    — and it is the guard passing while the thing it guards is broken, which is
+    the failure shape this repo keeps paying for. The report also states a single
+    revision number, which is only well-defined when there is one.
+    (Cross-model review.)
     """
     tuned_revs = {row.get("metric_revision") for row in tuned if row.get("status") == "ok"}
     base_revs = {row.get("metric_revision") for row in base if row.get("status") == "ok"}
-    if tuned_revs != base_revs:
+    if len(tuned_revs | base_revs) > 1:
         raise SystemExit(
-            "Refusing to render: the two studies were measured at different metric "
-            f"revisions (study A {sorted(map(str, tuned_revs))}, study B "
+            "Refusing to render: these rows carry different metric revisions "
+            f"(study A {sorted(map(str, tuned_revs))}, study B "
             f"{sorted(map(str, base_revs))}). The noise floor subtracts study B's control "
-            "from study A's best tuned score, which is only meaningful within one cohort. "
-            "Re-measure both studies (LFM25_STUDY=both) before generating this report."
+            "from study A's best tuned score, which is only meaningful within one cohort — "
+            "and a single mixed file is no safer than two mismatched ones, because the "
+            "subtraction is per benchmark. Re-measure both studies (LFM25_STUDY=both) "
+            "before generating this report."
         )
-    return ", ".join(sorted(str(r) for r in tuned_revs)) or "unrecorded"
+    return ", ".join(sorted(str(r) for r in tuned_revs | base_revs)) or "unrecorded"
 
 
 def _cross_study_caveat() -> list[str]:
@@ -453,10 +466,27 @@ def _cross_study_caveat() -> list[str]:
     A partial re-run leaves the other study's rows untouched, so the noise floor
     then spans two measurement windows. The provenance section records the scope;
     this surfaces it where the cross-study number is actually used.
+
+    ``studies_measured`` is **intent**, ``window_complete`` is what was reached.
+    An aborted ``LFM25_STUDY=both`` run still lists both studies, so keying only
+    on the list suppressed this warning over exactly the rows that need it — the
+    caveat going silent in the one case it exists for. ``_provenance_section()``
+    already honours ``window_complete``; this now does too. (Cross-model review.)
     """
     if not PROVENANCE.exists():
         return []
-    studies = json.loads(PROVENANCE.read_text()).get("studies_measured")
+    doc = json.loads(PROVENANCE.read_text())
+    studies = doc.get("studies_measured")
+    if doc.get("window_complete") is False:
+        return [
+            "",
+            "⚠️ **This gap may span two measurement windows.** The provenance sidecar "
+            "records that the last sweep **aborted before finishing every planned study**, "
+            "so rows it never reached predate the window described here and the tuned score "
+            "and the control below can come from rows captured at different times. Both "
+            "cohorts share a metric revision — that is checked, and rendering is refused "
+            "otherwise — but an aborted sweep is weaker evidence than one that completed.",
+        ]
     if studies is None or sorted(studies) == ["a", "b"]:
         return []
     named = ", ".join(s.upper() for s in studies)
@@ -492,7 +522,7 @@ def _control_intervals(base: list[dict[str, Any]], benchmark: str) -> list[str]:
 
 
 def _correction_paragraph(
-    base: list[dict[str, Any]], uninformative: list[str], narrow: list[str]
+    base: list[dict[str, Any]], blind: list[str], narrow: list[str]
 ) -> list[str]:
     """State the retracted claim, with its refuting numbers taken from the rows.
 
@@ -500,6 +530,10 @@ def _correction_paragraph(
     opposite verdict, and a correction that quietly disappears is how a reader
     ends up trusting the wrong version they already read. Every quantity is
     derived, so a re-measure cannot leave the retraction contradicting the table.
+
+    ``blind``, not the full unusable set: the closing sentence says a benchmark
+    "genuinely fails to separate", which is false of an *inverted* one — there
+    the interval separates cleanly, just the wrong way round.
     """
     if not narrow:
         # Nothing was misclassified by the old rule on these rows, so there is
@@ -513,7 +547,7 @@ def _correction_paragraph(
             quoted.append(f"on `{benchmark}` they are {' and '.join(intervals)}")
     if not quoted:
         return []
-    unusable = ", ".join(f"`{b}`" for b in uninformative) if uninformative else "**no benchmark**"
+    unusable = ", ".join(f"`{b}`" for b in blind) if blind else "**no benchmark**"
     return [
         "",
         "**A correction, stated plainly because it was published the other way round for "
@@ -531,7 +565,7 @@ def _correction_paragraph(
 
 def _noise_floor_table(
     tuned: list[dict[str, Any]], base: list[dict[str, Any]]
-) -> tuple[str, list[str], list[str], list[str]]:
+) -> tuple[str, list[str], list[str], list[str], list[str]]:
     """Every benchmark's tuned-model spread against the random-init control.
 
     The control is the same 350M architecture with seeded random weights, so the
@@ -548,7 +582,16 @@ def _noise_floor_table(
     (``walmart_amazon``: the control is significantly below the tuned model, and
     the whole range is 0.018). Only a benchmark failing (1) carries no evidence.
 
-    Returns ``(table, uninformative, informative, narrow)``.
+    Returns ``(table, uninformative, informative, narrow, inverted)``.
+
+    ``uninformative`` is "no ranking may be read off this benchmark" and holds
+    **two different reasons**: the interval fails to exclude zero (blind), or it
+    excludes zero the wrong way and the control beats every tuned model
+    (inverted). ``inverted`` is a subset, returned separately because the prose
+    justified the whole list with "the interval does not exclude zero" — which is
+    the *opposite* of what the inverted branch requires. One list, two reasons,
+    one sentence: the sentence had to be false for one of them.
+    (Cross-model review.)
     """
     benchmarks = sorted({row["benchmark"] for row in tuned} | {row["benchmark"] for row in base})
     table = (
@@ -559,6 +602,7 @@ def _noise_floor_table(
     uninformative: list[str] = []
     informative: list[str] = []
     narrow: list[str] = []
+    inverted: list[str] = []
     for benchmark in benchmarks:
         control = _best_arm(base, CONTROL, benchmark)
         # sorted(), not the raw set: iteration order over a set of strings varies
@@ -604,6 +648,7 @@ def _noise_floor_table(
             # off it, and it gets said rather than bucketed. (Cross-model review.)
             verdict = "**control BEATS every tuned model — inverted, unusable for ranking**"
             uninformative.append(benchmark)
+            inverted.append(benchmark)
         elif margin < NARROW_RANGE:
             verdict = f"separates, but narrow (<{NARROW_RANGE:.2f})"
             narrow.append(benchmark)
@@ -615,7 +660,7 @@ def _noise_floor_table(
             f"| `{benchmark}` | {_fmt(floor)} | {_fmt(best['candidate_recall'])} "
             f"(`{best['model']}`) | **{margin:+.4f}** | {_ci(low, high)} | {verdict} |\n"
         )
-    return table, uninformative, informative, narrow
+    return table, uninformative, informative, narrow, inverted
 
 
 #: The control is the 350M architecture. Only the 350M encoder is therefore a
@@ -665,6 +710,7 @@ def _control_vs_base_comparisons(base: list[dict[str, Any]]) -> list[dict[str, A
     comparisons: list[dict[str, Any]] = []
     for encoder in encoders:
         beaten: list[str] = []
+        strict: list[str] = []
         compared: list[str] = []
         arms_used: set[str] = set()
         for benchmark in benchmarks:
@@ -675,17 +721,27 @@ def _control_vs_base_comparisons(base: list[dict[str, Any]]) -> list[dict[str, A
                 continue
             compared.append(benchmark)
             arms_used.update(shared)
-            if all(
-                control_arms[a]["candidate_recall"] >= encoder_arms[a]["candidate_recall"]
+            deltas = [
+                control_arms[a]["candidate_recall"] - encoder_arms[a]["candidate_recall"]
                 for a in shared
-            ):
+            ]
+            # `beaten` is "matches or beats" and is what the bullet list says.
+            # `strict` additionally requires the control to be AHEAD somewhere:
+            # `>=` alone counts an exact tie as a win, and recall ties are common
+            # on saturated cells, so a directional claim ("outscores", "scores
+            # WORSE than random") built on `beaten` is false for a tie.
+            # (Cross-model review.)
+            if all(d >= 0 for d in deltas):
                 beaten.append(benchmark)
+                if any(d > 0 for d in deltas):
+                    strict.append(benchmark)
         if not compared:
             continue
         comparisons.append(
             {
                 "encoder": encoder,
                 "beaten": beaten,
+                "strict": strict,
                 "compared": compared,
                 "arms": sorted(arms_used),
                 "matched_backbone": encoder == MATCHED_BACKBONE_ENCODER,
@@ -746,12 +802,16 @@ def _pretraining_section(base: list[dict[str, Any]]) -> list[str]:
         ]
 
     matched = next((c for c in comparisons if c["matched_backbone"]), None)
-    sweeps = [c for c in comparisons if c["beaten"]]
-    headline = (
-        "**The control also outscores the real base encoders.**"
-        if sweeps
-        else "**The control does not outscore the real base encoders in this run.**"
-    )
+    # `strict`, not `beaten`: "outscores" is directional and an exact tie is not
+    # a win. The bullets below stay on "matches or beats", which ties satisfy.
+    if any(c["strict"] for c in comparisons):
+        headline = "**The control also outscores the real base encoders.**"
+    elif any(c["beaten"] for c in comparisons):
+        headline = (
+            "**The control matches, but never outscores, the real base encoders in this run.**"
+        )
+    else:
+        headline = "**The control does not outscore the real base encoders in this run.**"
     lines = [
         f"{headline} All measured pairs wear the same untrained mean-pooling head, so "
         "pooling is held fixed throughout; whether *pretraining* is the only remaining "
@@ -771,23 +831,39 @@ def _pretraining_section(base: list[dict[str, Any]]) -> list[str]:
         )
         return lines
 
+    fixed = (
+        f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
+        "the control, architecture and pooling are held fixed and only pretrained-vs-random "
+        "weights differ"
+    )
     if not matched["beaten"]:
         lines.append(
-            f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
-            "the control, architecture and pooling are held fixed and only pretrained-vs-random "
-            "weights differ — but the control did **not** match or beat it on any of the "
+            f"{fixed} — but the control did **not** match or beat it on any of the "
             f"{len(matched['compared'])} benchmarks where both ran a shared arm. The "
             "pretrained-scores-worse-than-random finding is therefore **not** reproduced here."
         )
         return lines
 
+    if not matched["strict"]:
+        lines.append(
+            f"{fixed} — but the control never scored *above* it on any shared arm either: "
+            f"every one of the {len(matched['beaten'])} benchmarks it matched is an exact "
+            "recall tie. A tie is not a direction, so **no claim is made** about pretrained "
+            "versus random weights here; the pair is measured and inconclusive."
+        )
+        return lines
+
     lines += [
-        f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
-        "the control, architecture and pooling are held fixed and only pretrained-vs-random "
-        "weights differ. So the *finding* is exactly this: **under this untrained "
+        f"{fixed}. So the *finding* is exactly this: **under this untrained "
         "mean-pooling configuration, the pretrained checkpoint scores worse than random "
-        f"weights** on {len(matched['beaten'])} of {len(matched['compared'])} benchmarks "
-        "where both ran a shared arm. Any other encoder row points the same way but cannot "
+        f"weights** on {len(matched['strict'])} of {len(matched['compared'])} benchmarks "
+        "where both ran a shared arm and the control was strictly ahead"
+        + (
+            f" (it also ties on {len(matched['beaten']) - len(matched['strict'])})"
+            if len(matched["beaten"]) > len(matched["strict"])
+            else ""
+        )
+        + ". Any other encoder row points the same way but cannot "
         "even support that, because it varies backbone and size as well as pretraining.",
         "",
         "A tempting explanation is that MLM training shapes token representations for a head "
@@ -982,7 +1058,11 @@ def render() -> str:
     # computed across the two studies, and a partial re-run can leave them in
     # different cohorts.
     metric_revision = _assert_comparable_cohorts(tuned, base)
-    noise_table, uninformative, informative, narrow = _noise_floor_table(tuned, base)
+    noise_table, uninformative, informative, narrow, inverted = _noise_floor_table(tuned, base)
+    # Both are unusable for ranking, for OPPOSITE reasons: `blind` fails to
+    # exclude zero, `inverted` excludes it the wrong way. One sentence cannot
+    # justify both.
+    blind = [b for b in uninformative if b not in inverted]
 
     parts = [
         "# LiquidAI LFM2.5 encoders on ER candidate blocking",
@@ -1200,12 +1280,28 @@ def render() -> str:
         "",
         (
             f"**Benchmarks that cannot tell a trained retriever from random weights: "
-            f"{', '.join(f'`{b}`' for b in uninformative) if uninformative else '**none**'}.** "
+            f"{', '.join(f'`{b}`' for b in blind) if blind else '**none**'}.** "
             f"The control's paired interval there does not exclude zero, so a model ranking "
-            f"read off {'it' if len(uninformative) == 1 else 'them'} is not evidence about any "
+            f"read off {'it' if len(blind) == 1 else 'them'} is not evidence about any "
             f"embedder."
         ),
         "",
+        # The OTHER way a benchmark becomes unusable, and the one the sentence
+        # above cannot describe: here the interval DOES exclude zero — in the
+        # wrong direction. Filed under the same "no ranking" heading, justified
+        # separately. (Cross-model review.)
+        *(
+            [
+                f"**Benchmarks where the untrained control BEATS every tuned model: "
+                f"{', '.join(f'`{b}`' for b in inverted)}.** Not the same failure: the "
+                f"control's interval there *does* exclude zero, on the wrong side. That is "
+                f"a result about the benchmark, not about any embedder — a ranking read off "
+                f"{'it' if len(inverted) == 1 else 'them'} is inverted, not merely noisy.",
+                "",
+            ]
+            if inverted
+            else []
+        ),
         (
             f"**Benchmarks that do separate the two, but narrowly "
             f"(&lt;{NARROW_RANGE:.2f} of range): "
@@ -1221,13 +1317,18 @@ def render() -> str:
             f"Benchmarks that separate the two with room to spare: "
             f"{', '.join(f'`{b}`' for b in informative if b not in narrow) or '**none**'}."
         ),
-        *_correction_paragraph(base, uninformative, narrow),
+        # `blind`, not `uninformative`: "genuinely fails to separate" is false of
+        # an inverted benchmark, whose interval separates the two perfectly well.
+        *_correction_paragraph(base, blind, narrow),
         "",
         *_pretraining_section(base),
         "",
         # Named benchmark, conditional claim: the sentence is only true while the
-        # measured intervals actually put fodors_zagat in `uninformative`. Printing
-        # it unconditionally would restate a previous run's result as this one's.
+        # measured intervals actually put fodors_zagat in `blind`. Printing it
+        # unconditionally would restate a previous run's result as this one's, and
+        # `blind` rather than `uninformative` because the paragraph's reason --
+        # "cannot tell a trained retriever from noise" -- is the interval failing
+        # to exclude zero, not the inverted case.
         *(
             [
                 "This reframes `fodors_zagat` specifically. It was already labelled "
@@ -1239,7 +1340,7 @@ def render() -> str:
                 "embedder beats another.",
                 "",
             ]
-            if "fodors_zagat" in uninformative
+            if "fodors_zagat" in blind
             else []
         ),
         *_noise_band_warning(tuned, base),

@@ -513,7 +513,16 @@ for model in "${MODELS[@]}"; do
     measure_cell "$BENCHMARKS" truncate
     code=$?
     # Non-granular: one process covers every benchmark, so all of them are lost.
-    [ $code -ne 0 ] && FAILED_BENCHMARKS="$BENCHMARKS"
+    # SAME exclusion as the granular branch, and it was missing here: 2
+    # (configuration refused) and 3 (cache integrity) are REFUSALS -- the harness
+    # stopped before writing anything and the recorded rows are fine. Listing
+    # every benchmark for them made the flush below call record_process_failure,
+    # which DELETES the model's valid cells and commits the deletion, while the
+    # refusal branches further down still printed "NOT recording a failure row".
+    # The guard existed on one path only, so LADDER_BENCHMARK_GRANULAR -- a
+    # performance knob -- silently decided whether a mistyped flag destroyed
+    # rows. (Cross-model review.)
+    { [ $code -ne 0 ] && [ $code -ne 2 ] && [ $code -ne 3 ]; } && FAILED_BENCHMARKS="$BENCHMARKS"
     # Same rule as the granular branch: only abort if another model still runs.
     if [ $MODEL_INDEX -lt "$N_MODELS" ]; then
       check_swap || code=9

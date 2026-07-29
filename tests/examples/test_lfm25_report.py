@@ -338,7 +338,7 @@ class TestNoiseFloor:
     ) -> None:
         # fodors_zagat: control 0.9880 vs best tuned 0.9900 -> margin 0.0020, and
         # the control's paired interval [-0.01, +0.01] CONTAINS zero.
-        table, uninformative, informative, _narrow = REPORT._noise_floor_table(
+        table, uninformative, informative, _narrow, _inv = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 
@@ -348,7 +348,7 @@ class TestNoiseFloor:
 
     def test_a_benchmark_with_real_range_is_called_usable(self, artifacts: Path) -> None:
         # abt_buy: control 0.2000 vs best tuned 0.8700 -> margin 0.6700.
-        _table, uninformative, informative, narrow = REPORT._noise_floor_table(
+        _table, uninformative, informative, narrow, _inv = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 
@@ -369,7 +369,7 @@ class TestNoiseFloor:
         Narrow is a statement about RESOLUTION; blind is a statement about
         SIGNIFICANCE, and only the interval can make it.
         """
-        table, uninformative, informative, narrow = REPORT._noise_floor_table(
+        table, uninformative, informative, narrow, _inv = REPORT._noise_floor_table(
             REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
         )
 
@@ -732,13 +732,148 @@ class TestInvertedControl:
             )
         ]
 
-        table, uninformative, informative, narrow = REPORT._noise_floor_table(tuned, base)
+        table, uninformative, informative, narrow, inverted = REPORT._noise_floor_table(tuned, base)
 
         assert "inverted_bm" in uninformative
         assert "inverted_bm" not in narrow
         assert "inverted_bm" not in informative
         line = next(ln for ln in table.splitlines() if "inverted_bm" in ln)
         assert "control BEATS every tuned model" in line
+
+    def test_an_inverted_benchmark_is_reported_separately_from_a_blind_one(self) -> None:
+        """One list, two OPPOSITE reasons, one justifying sentence.
+
+        `uninformative` means "no ranking may be read off this", and the prose
+        justified the whole list with "the control's paired interval there does
+        not exclude zero" — which the inverted branch specifically *requires* to
+        be false. The interval `[+0.02, +0.08]` excludes zero cleanly.
+        """
+        tuned = [
+            _row("intfloat/e5-base-v2", "inverted_bm", candidate_recall=0.85),
+            _row("intfloat/e5-base-v2", "blind_bm", candidate_recall=0.85),
+        ]
+        base = [
+            _row(
+                REPORT.CONTROL,
+                "inverted_bm",
+                candidate_recall=0.90,
+                vs_reference_delta=0.05,
+                vs_reference_ci_low=0.02,
+                vs_reference_ci_high=0.08,
+            ),
+            _row(
+                REPORT.CONTROL,
+                "blind_bm",
+                candidate_recall=0.84,
+                vs_reference_delta=-0.01,
+                vs_reference_ci_low=-0.05,
+                vs_reference_ci_high=0.03,
+            ),
+        ]
+
+        _, uninformative, _, _, inverted = REPORT._noise_floor_table(tuned, base)
+
+        assert inverted == ["inverted_bm"]
+        assert sorted(uninformative) == ["blind_bm", "inverted_bm"]
+        # The retraction's closing sentence names what "genuinely fails to
+        # separate" -- true of the blind one, false of the inverted one.
+        blind = [b for b in uninformative if b not in inverted]
+        assert blind == ["blind_bm"]
+
+
+class TestCrossedMetricRevisions:
+    """Two matching SETS of revisions are not one shared revision."""
+
+    def test_crossed_cohorts_are_refused(self) -> None:
+        """Both sides hold `{1, 2}`, so the set comparison passed.
+
+        Every per-benchmark subtraction still crosses revisions: study A holds
+        `abt_buy` at 1 and `fodors_zagat` at 2, study B the reverse.
+        """
+        tuned = [
+            _row("intfloat/e5-base-v2", "abt_buy", metric_revision=1),
+            _row("intfloat/e5-base-v2", "fodors_zagat", metric_revision=2),
+        ]
+        base = [
+            _row(REPORT.CONTROL, "abt_buy", metric_revision=2),
+            _row(REPORT.CONTROL, "fodors_zagat", metric_revision=1),
+        ]
+
+        assert {r["metric_revision"] for r in tuned} == {r["metric_revision"] for r in base}
+        with pytest.raises(SystemExit, match="different metric revisions"):
+            REPORT._assert_comparable_cohorts(tuned, base)
+
+    def test_one_shared_revision_is_accepted(self) -> None:
+        tuned = [_row("intfloat/e5-base-v2", "abt_buy")]
+        base = [_row(REPORT.CONTROL, "abt_buy")]
+
+        assert REPORT._assert_comparable_cohorts(tuned, base) == "1"
+
+
+class TestPartialWindowCaveat:
+    """`studies_measured` is intent; `window_complete` is what was reached."""
+
+    def test_an_aborted_both_study_run_still_warns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The caveat went silent in the one case it exists for.
+
+        An aborted `LFM25_STUDY=both` sweep leaves `studies_measured == ['a',
+        'b']`, so keying only on that list returned no warning beside the
+        cross-study subtraction — over rows the window never touched.
+        """
+        sidecar = json.loads(REPORT.PROVENANCE.read_text())
+        sidecar["studies_measured"] = ["a", "b"]
+        sidecar["window_complete"] = False
+        path = tmp_path / "prov.json"
+        path.write_text(json.dumps(sidecar))
+        monkeypatch.setattr(REPORT, "PROVENANCE", path)
+
+        caveat = "\n".join(REPORT._cross_study_caveat())
+
+        assert "aborted before finishing every planned study" in caveat
+
+    def test_a_completed_both_study_run_stays_quiet(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sidecar = json.loads(REPORT.PROVENANCE.read_text())
+        sidecar["studies_measured"] = ["a", "b"]
+        sidecar["window_complete"] = True
+        path = tmp_path / "prov.json"
+        path.write_text(json.dumps(sidecar))
+        monkeypatch.setattr(REPORT, "PROVENANCE", path)
+
+        assert REPORT._cross_study_caveat() == []
+
+
+class TestTiesAreNotWins:
+    """`>=` counts an exact tie as a win; "outscores" is directional."""
+
+    def test_an_all_tie_pair_makes_no_directional_claim(self) -> None:
+        """Recall ties are ordinary on saturated cells."""
+        base = [
+            _row(REPORT.MATCHED_BACKBONE_ENCODER, "fodors_zagat", candidate_recall=1.0),
+            _row(REPORT.CONTROL, "fodors_zagat", candidate_recall=1.0),
+        ]
+
+        section = "\n".join(REPORT._pretraining_section(base))
+
+        assert "matches, but never outscores" in section
+        assert "exact recall tie" in section
+        assert "scores worse than random weights" not in section
+        # The bullet's own wording -- "match or beat" -- is still true of a tie.
+        assert "**1 of 1**" in section
+
+    def test_a_strict_win_still_states_the_finding(self) -> None:
+        base = [
+            _row(REPORT.MATCHED_BACKBONE_ENCODER, "abt_buy", candidate_recall=0.31),
+            _row(REPORT.CONTROL, "abt_buy", candidate_recall=0.60),
+        ]
+
+        section = "\n".join(REPORT._pretraining_section(base))
+
+        assert "scores worse than random weights" in section
+        assert "strictly ahead" in section
 
 
 class TestDirtyTreeDisclosure:
