@@ -322,6 +322,58 @@ def test_a_typo_in_arms_is_refused_and_nothing_is_deleted(
     assert rows_path.read_text() == original, "a typo in --arms destroyed committed rows"
 
 
+def test_a_scoped_run_declines_to_publish_instead_of_failing_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`prompt_axis_sweep.sh` runs one cell per process under `set -e`.
+
+    The publish guard added a round earlier fired at the end of *every*
+    invocation, so the first scoped cell against a fresh rows file returned 1 and
+    killed the documented sweep after its most expensive step. A narrowed run now
+    logs that it is not publishing and exits 0; `--render-only`, which is where
+    the sweep publishes, still exits non-zero. The two halves are asserted
+    together because either alone is satisfiable by breaking the other.
+    """
+    rows_path = tmp_path / "rows.jsonl"
+    everything = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    partial = [row for row in everything if row.model == "intfloat/e5-base-v2"]
+    harness.write_rows(partial, rows_path)
+    report_path = tmp_path / "report.md"
+
+    # Scoped, and every requested cell already recorded -- so this measures nothing
+    # and lands directly on the end-of-run publish decision.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prompt_axis",
+            "--models",
+            "intfloat/e5-base-v2",
+            "--rows",
+            str(rows_path),
+            "--report",
+            str(report_path),
+            "--resume",
+        ],
+    )
+    assert harness.main() == 0, "a scoped sweep invocation must not fail the outer loop"
+    assert not report_path.exists(), "an incomplete design must not be published"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prompt_axis",
+            "--rows",
+            str(rows_path),
+            "--report",
+            str(report_path),
+            "--render-only",
+        ],
+    )
+    assert harness.main() == 1, "publication must still be enforced where the sweep publishes"
+
+
 def test_merging_replaces_only_the_rows_it_actually_recomputed() -> None:
     """A narrow rerun must never cost an unselected measurement.
 
@@ -580,9 +632,35 @@ def test_a_family_short_of_a_benchmark_is_refused_rather_than_reported() -> None
     were the design -- an expectation regenerated from the thing that broke.
     """
     rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
-    dropped = [r for r in rows if not (r.benchmark == "amazon_google" and r.k == 20)]
-    with pytest.raises(ValueError, match="must span all"):
+    dropped = [
+        r
+        for r in rows
+        if not (
+            r.benchmark == "amazon_google"
+            and r.k == 20
+            and r.model == "BAAI/bge-base-en-v1.5"
+            and r.arm == "official_query_instruction"
+        )
+    ]
+    with pytest.raises(ValueError, match="do not all span the same benchmarks"):
         harness.render_report(dropped)
+
+
+def test_a_sweep_that_measures_a_different_benchmark_set_can_still_publish() -> None:
+    """The guard's invariant is agreement between families, not the committed count.
+
+    `--benchmarks` is a supported knob. Requiring `len(BENCHMARKS)` exactly was
+    wrong in both directions at once: it rejected a coherent sweep that adds a
+    benchmark to *every* family, while admitting a family made of three declared
+    benchmarks plus a substituted fourth. What invalidates Holm is a denominator
+    that varies with the outcome -- families disagreeing about what they contain.
+    """
+    rows = harness.read_rows(ROOT / "docs" / "research" / "20260728_prompt_axis_rows.jsonl")
+    # Drop one benchmark from EVERY family: a smaller but self-consistent design.
+    narrower = [r for r in rows if r.benchmark != "amazon_google"]
+    report = harness.render_report(narrower)
+    assert "m = 3" in report, "the report must state the size it actually corrected at"
+    assert "amazon_google" not in report
 
 
 def test_a_family_that_vanishes_entirely_is_refused_too() -> None:

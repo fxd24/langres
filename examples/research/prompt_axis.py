@@ -66,6 +66,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
@@ -1010,8 +1011,22 @@ def find_mixed_provenance(rows: Iterable[Row]) -> dict[str, list[str]]:
 
 
 def write_rows(rows: Sequence[Row], path: Path) -> None:
+    """Replace the rows file atomically.
+
+    This file is the *sole* artifact of a sweep that costs hours, and it is
+    rewritten in full after every arm. A plain ``write_text`` truncates first, so
+    a kill or a full disk between truncate and write leaves it empty or
+    half-parsed -- destroying every previously completed cell, which is exactly
+    the accident `.claude/rules/data-safety.md` exists for and which this repo has
+    paid for once already. Writing a sibling temp file and ``os.replace``-ing it
+    means the destination is always either the old complete file or the new one.
+    (Found by automated review on PR #252.)
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(asdict(row)) for row in rows) + "\n")
+    payload = "\n".join(json.dumps(asdict(row)) for row in rows) + "\n"
+    temporary = path.with_name(f"{path.name}.tmp{os.getpid()}")
+    temporary.write_text(payload)
+    os.replace(temporary, path)
 
 
 def _missing_p_value(row: Row) -> bool:
@@ -1534,25 +1549,43 @@ def render_report(rows: Sequence[Row]) -> str:
     )
     add("")
     observed_families = {key[:2] for key in verdicts}
-    sizes = sorted(
-        {sum(1 for key in verdicts if key[:2] == family) for family in observed_families}
-    )
+    covered = {
+        family: frozenset(key[2] for key in verdicts if key[:2] == family)
+        for family in observed_families
+    }
+    sizes = sorted({len(benchmarks) for benchmarks in covered.values()})
     # The paragraph below *claims* the family size is fixed by the design. Nothing made
     # that true: both the sizes AND the set of families are counted from the verdicts,
     # so a lost comparison shrinks its family and a wholly lost family simply vanishes
     # -- and the sentence then reports the survivors' shape as if it were the design.
     # An expectation regenerated from the thing that broke cannot detect it breaking, so
-    # both halves are checked against the DECLARATION, which is upstream of any
-    # measurement: `BENCHMARKS` for the width, `MODELS` for which families must exist.
+    # both halves are checked against something upstream of the loss: the families
+    # against `MODELS`, and each family's benchmark **set** against the other families'.
+    #
+    # Set identity, not size. Comparing counts let a family made of three declared
+    # benchmarks plus a substituted fourth pass as complete, and simultaneously rejected
+    # a legitimate `--benchmarks` sweep that adds a fifth to every family -- wrong in
+    # both directions at once. Identity is also the property the correction actually
+    # needs: what invalidates Holm is a denominator that varies with the outcome, which
+    # is exactly two families disagreeing about which benchmarks they contain. A sweep
+    # that deliberately measures a different set is coherent, and every table names the
+    # benchmarks it used. (Found by automated review on PR #252.)
+    #
     # An empty set is a different condition (nothing comparable was measured at all,
     # e.g. a single-arm smoke render) and is not this guard's business.
-    if sizes and sizes != [len(BENCHMARKS)]:
+    if len(set(covered.values())) > 1:
+        widest = max(covered.values(), key=len)
+        short = {
+            f"{model}/{arm}": sorted(widest - benchmarks)
+            for (model, arm), benchmarks in sorted(covered.items())
+            if benchmarks != widest
+        }
         raise ValueError(
-            f"refusing to render: every Holm family must span all {len(BENCHMARKS)} "
-            f"declared benchmarks ({', '.join(BENCHMARKS)}), but the observed family "
-            f"sizes are {sizes}. A family that lost a benchmark is corrected against a "
-            "smaller denominator than the design -- the data-dependent family size this "
-            "section says it avoids. Re-measure the missing cells. Nothing was written."
+            "refusing to render: Holm families do not all span the same benchmarks, so "
+            "the correction's denominator depends on what the data happened to do -- "
+            "the data-dependent family size this section says it avoids. "
+            f"Widest family spans {sorted(widest)}; these are short of it: {short}. "
+            "Re-measure the missing cells. Nothing was written."
         )
     declared_families = {
         (spec.name, recipe.arm)
@@ -1725,7 +1758,11 @@ def main() -> int:
 
     if args.render_only:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(render_report(read_rows(args.rows)))
+        try:
+            args.report.write_text(render_report(read_rows(args.rows)))
+        except ValueError as error:
+            logger.error("refusing to publish: %s", error)
+            return 1
         return 0
 
     # Reject an unknown --arms up front. Nothing downstream deletes rows any more,
@@ -1805,11 +1842,35 @@ def main() -> int:
             "; ".join(f"{model}: {revisions}" for model, revisions in mixed.items()),
         )
         return 1
+    # Publish -- but only *enforce* publication when this invocation was asked to
+    # produce the whole declared design. `prompt_axis_sweep.sh` runs one
+    # (model, benchmark) per process, so a scoped run legitimately leaves the rows
+    # short and the publish guard is right to refuse them; treating that refusal as
+    # an error made the documented sweep abort after its first (expensive) cell
+    # under `set -e`. The sweep publishes once at the end with `--render-only`,
+    # which is where the refusal is a real failure. (Found by automated review on
+    # PR #252 -- a guard added one round earlier turned this from "renders a partial
+    # report" into "kills the sweep".)
+    scope = []
+    if set(args.models) != {spec.name for spec in MODELS}:
+        scope.append("--models")
+    if set(args.benchmarks) != set(BENCHMARKS):
+        scope.append("--benchmarks")
+    if args.arms is not None:
+        scope.append("--arms")
     try:
         args.report.write_text(render_report(final_rows))
     except ValueError as error:
-        logger.error("rows are complete but cannot be published: %s", error)
-        return 1
+        if not scope:
+            logger.error("rows are complete but cannot be published: %s", error)
+            return 1
+        logger.info(
+            "not publishing: this run was narrowed by %s, so the rows are not expected "
+            "to cover the declared design yet. Every measured row is on disk; run with "
+            "--render-only once the sweep is complete. (%s)",
+            "/".join(scope),
+            error,
+        )
     return 0
 
 

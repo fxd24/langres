@@ -627,7 +627,7 @@ if any verdict here were close enough for that to matter; §4's resolution check
 reports whether any is.
 
 **Every p-value is an estimate from a finite draw.** `B = 20 000` puts the
-Monte-Carlo error at `≈0.0010` near `p = 0.02`, and nothing below `2/20001 ≈
+Monte-Carlo error at `≈0.00141` near `p = 0.02`, and nothing below `2/20001 ≈
 1e-4` is observable at all — so a very strong effect and an overwhelming one are
 not distinguishable here, and are not claimed to be. Verdicts within 3 Monte-Carlo
 standard errors of their threshold are named in §4 rather than reported as

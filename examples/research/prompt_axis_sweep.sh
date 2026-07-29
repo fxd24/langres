@@ -34,4 +34,13 @@ for model in $MODELS; do
   done
 done
 
+# Publish once, at the end, and let it FAIL here if the rows cannot carry the
+# report. Each invocation above is scoped to one cell, so its rows are expected
+# to be short of the declared design and it declines to publish rather than
+# erroring -- otherwise `set -e` would kill the sweep after its first expensive
+# cell. This is the one place where a refusal to publish is a real failure.
+echo "=== publishing ==="
+uv run python examples/research/prompt_axis.py \
+  --rows "$ROWS" --report "$REPORT" --render-only
+
 echo "=== sweep complete ==="
