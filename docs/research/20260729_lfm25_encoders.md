@@ -6,7 +6,7 @@ Measured with the standing embedder-ladder harness (`examples/research/embedder_
 
 ## The headline
 
-`LiquidAI/LFM2.5-Embedding-350M` vs. `intfloat/e5-base-v2` — langres's current `DEFAULT_EMBEDDING_MODEL` and therefore the baseline every interval below is measured against.
+`LiquidAI/LFM2.5-Embedding-350M` vs. `intfloat/e5-base-v2` — langres's current `DEFAULT_EMBEDDING_MODEL`, and the baseline every **study A** interval is measured against. **Study B uses a different baseline**: its deltas are against `LiquidAI/LFM2.5-Embedding-350M`, which shares the 350M backbone, so a study-B interval reads as "what retrieval tuning bought on this backbone" and must never be compared with a study-A one. Each table states its own baseline in the heading.
 
 - Ahead with an interval excluding zero on: **no benchmark/arm**.
 - Behind with an interval excluding zero on: `abt_buy` (instruct), `abt_buy` (none), `amazon_google` (instruct), `amazon_google` (none), `wdc_computers` (instruct), `wdc_computers` (none).
@@ -272,7 +272,7 @@ The paired intervals were computed by `langres.experiments.statistics.paired_ent
 
 A **blob** hash, not a commit: it changes only when the file's *content* does, which is the property being recorded.
 **Captured retrospectively.** This sweep finished before `examples/research/write_provenance.py` existed, so its `--start`/`--finish` hooks did not run over these rows. The hashes are derived from git at the commit that was `HEAD` when the sweep began, and the stability check below was reconstructed afterwards from `git log` over the measurement window rather than observed live. Later runs capture it on the measurement path; this one did not, and says so.
-No tracked file changed while the sweep was running, so these hashes apply to every row in both studies.
+No tracked **commit** touched these trees during the measurement window, so the hashes are the best available description of every row in both studies. That is weaker than 'nothing changed': an uncommitted edit made and kept during the sweep would not appear in `git log`, and this sidecar records `dirty_at_start: null` precisely because that state cannot be recovered afterwards. Runs that capture provenance live do observe it.
 
 Naming two files is not the measurement's code identity — the harness also executes the blockers, indexes, embedders and metrics that decide what a row *means*. So whole trees are digested, over every `.py` they contain:
 

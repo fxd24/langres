@@ -177,6 +177,19 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 # review.)
 push_results() {
   local branch default
+  # Provenance is verified per PUBLICATION, not once at the end. --finish runs
+  # after every model has run, but this function publishes after EACH one, so a
+  # mid-sweep edit to a tracked .py could already be pushed by the time --finish
+  # rejects the run. Deliberately blocks the PUSH and not the COMMIT: the rows
+  # stay durable (this repo has lost a paid run to an uncommitted result), while
+  # artifacts produced by code the open window does not describe are not
+  # published. A no-op when no provenance sidecar exists, which is how the
+  # standing portfolio ladder runs. (Cross-model review.)
+  if ! uv run python examples/research/write_provenance.py --verify 2>&1; then
+    log "NOT pushing: measurement code changed mid-sweep (see above)."
+    log "  Rows are COMMITTED and safe. Re-measure on a stable tree before publishing."
+    return 0
+  fi
   branch=$(git rev-parse --abbrev-ref HEAD)
   default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
   default=${default#origin/}

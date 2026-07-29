@@ -72,6 +72,37 @@ export LADDER_BENCHMARK_GRANULAR=1
 
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
+PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
+
+# Close and COMMIT the provenance window before bailing out.
+#
+# An expected abort -- memory pressure (9), a cache refusal (3), any child
+# failure -- used to `exit` straight from the study branch. By then `--start` had
+# already overwritten the sidecar and run_ladder.sh had committed (and possibly
+# pushed) partial rows, so the only snapshot describing those now-durable rows was
+# an uncommitted file that dies with the worktree, or is silently replaced by the
+# next `--start`. That is exactly the "commit before the worktree disappears"
+# failure this repo has already paid for once. The window is closed, marked
+# partial, and committed on the way out. (Cross-model review.)
+abort_with_provenance() {
+  local code="$1"
+  say "closing the provenance window for the partial run"
+  # --finish exits non-zero when measurement code moved mid-sweep; that verdict
+  # still belongs in the sidecar, so record it and keep the original exit code.
+  uv run python examples/research/write_provenance.py --finish || \
+    say "provenance --finish reported a problem; recording it and continuing to commit"
+  if [ -f "$PROVENANCE_JSON" ]; then
+    git add "$PROVENANCE_JSON" || say "WARNING: could not stage provenance"
+    if ! git diff --cached --quiet -- "$PROVENANCE_JSON"; then
+      git commit -q --only "$PROVENANCE_JSON" \
+        -m "results(lfm25): provenance for a partial sweep (exit $code)" \
+        -m "The sweep stopped early; rows already committed by run_ladder.sh are described by this window." \
+        || say "WARNING: provenance commit failed -- it is staged but NOT durable"
+    fi
+  fi
+  exit "$code"
+}
+
 STUDY="${LFM25_STUDY:-both}"
 case "$STUDY" in
   a | b | both) ;;
@@ -113,7 +144,7 @@ if [ "$STUDY" = "a" ] || [ "$STUDY" = "both" ]; then
   code=$?
   if [ $code -ne 0 ]; then
     say "study A exited $code -- stopping before study B (its baseline comes from A's checkpoint)"
-    exit $code
+    abort_with_provenance $code
   fi
 fi
 
@@ -130,7 +161,7 @@ if [ "$STUDY" = "b" ] || [ "$STUDY" = "both" ]; then
   code=$?
   if [ $code -ne 0 ]; then
     say "study B exited $code"
-    exit $code
+    abort_with_provenance $code
   fi
 fi
 
@@ -149,7 +180,6 @@ say "rendering the write-up"
 uv run python examples/research/lfm25_report.py || exit 1
 
 REPORT_MD="docs/research/20260729_lfm25_encoders.md"
-PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
 git add "$REPORT_MD" "$PROVENANCE_JSON" || {
   say "FATAL: could not stage the write-up or its provenance"
   exit 1

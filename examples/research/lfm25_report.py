@@ -123,10 +123,26 @@ def _provenance_section() -> list[str]:
                 "described here"
             )
         )
-        lines.append(
-            f"No tracked file changed while the sweep was running, so these hashes apply to "
-            f"{scope}."
-        )
+        if retrospective:
+            # The retrospective sidecar reconstructed stability from `git log` and
+            # records dirty_at_start: null -- uncommitted edits during the run are
+            # unobservable after the fact. Saying "no tracked file changed" over
+            # that asserts strictly more than the artifact supports, which is the
+            # same overclaim this document already had to retract once.
+            lines.append(
+                "No tracked **commit** touched these trees during the measurement window, so "
+                f"the hashes are the best available description of {scope}. That is weaker "
+                "than 'nothing changed': an uncommitted edit made and kept during the sweep "
+                "would not appear in `git log`, and this sidecar records "
+                "`dirty_at_start: null` precisely because that state cannot be recovered "
+                "afterwards. Runs that capture provenance live do observe it."
+            )
+        else:
+            lines.append(
+                f"No tracked file changed between the start and end of the sweep, so these "
+                f"hashes apply to {scope}. This is an endpoint comparison: it catches a "
+                f"change that persists, not one reverted before the sweep ended."
+            )
     elif stable is False:
         lines.append(
             "**A tracked file changed mid-sweep** "
@@ -847,8 +863,11 @@ def render() -> str:
         "## The headline",
         "",
         f"`LiquidAI/LFM2.5-Embedding-350M` vs. `{TUNED_BASELINE}` — langres's current "
-        f"`DEFAULT_EMBEDDING_MODEL` and therefore the baseline every interval below is "
-        f"measured against.",
+        f"`DEFAULT_EMBEDDING_MODEL`, and the baseline every **study A** interval is "
+        f"measured against. **Study B uses a different baseline**: its deltas are against "
+        f"`{BASE_BASELINE}`, which shares the 350M backbone, so a study-B interval reads as "
+        f'"what retrieval tuning bought on this backbone" and must never be compared with '
+        f"a study-A one. Each table states its own baseline in the heading.",
         "",
         (
             f"- Ahead with an interval excluding zero on: "

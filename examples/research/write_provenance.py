@@ -96,14 +96,34 @@ def _tree_digest() -> dict[str, str]:
     return digests
 
 
-def _driver_digest() -> str:
-    """Digest of the shell drivers that decide which cells the sweep runs."""
+def _driver_blobs() -> dict[str, str]:
+    """Per-file blobs of the shell drivers that decide which cells the sweep runs.
+
+    Per FILE, not just one digest over all of them: the digest answers "did
+    anything move", but the report discloses *which* schedule produced the rows,
+    and that needs names. Keeping only the digest left that disclosure permanently
+    empty on live sidecars. (Cross-model review.)
+    """
     root = REPO_ROOT / DRIVER_TREE
-    parts = [
-        f"{p.relative_to(REPO_ROOT)}:{_worktree_blob(str(p.relative_to(REPO_ROOT)))}"
+    return {
+        str(p.relative_to(REPO_ROOT)): _worktree_blob(str(p.relative_to(REPO_ROOT)))
         for p in sorted(root.rglob(f"*{DRIVER_SUFFIX}"))
-    ]
+    }
+
+
+def _driver_digest(blobs: dict[str, str] | None = None) -> str:
+    """Digest of the shell drivers that decide which cells the sweep runs."""
+    blobs = _driver_blobs() if blobs is None else blobs
+    parts = [f"{path}:{blob}" for path, blob in blobs.items()]
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def _changed_drivers(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    """Which driver files were added, removed or edited during the window."""
+    changed = [f"{p} (added)" for p in sorted(set(after) - set(before))]
+    changed += [f"{p} (removed)" for p in sorted(set(before) - set(after))]
+    changed += [p for p in sorted(set(before) & set(after)) if before[p] != after[p]]
+    return changed
 
 
 def _blobs() -> dict[str, dict[str, str]]:
@@ -157,8 +177,14 @@ COMMENT = [
     "`tree_digests` covers every .py under the tracked trees, because naming two",
     "files is not the measurement's code identity: the harness executes blockers,",
     "indexes, embedders and metrics that can change what a row means.",
-    "`verified_unchanged_during_run` is the check that none of it moved mid-sweep;",
-    "without it no single hash describes all the rows.",
+    "`verified_unchanged_during_run` compares the START and FINISH snapshots. It is",
+    "an ENDPOINT check, not a continuous one: a file edited during the sweep, used",
+    "by some cells, and restored before --finish would leave both endpoints equal",
+    "and read as unchanged. It catches a change that PERSISTS, which is the",
+    "realistic case (edits are made and kept); it cannot catch edit-and-revert.",
+    "Stated here rather than implied, because a guarantee is only worth what its",
+    "weakest case is. Per-cell hashing or an immutable checkout is what would close",
+    "it; this run did neither and does not claim to.",
     "`driver_digest` covers the *.sh sweep drivers separately, because they decide",
     "which cells RAN rather than what a number means. A driver edit is recorded in",
     "`drivers_unchanged_during_run` and is NOT fatal -- drivers get repaired",
@@ -168,10 +194,12 @@ COMMENT = [
 
 
 def _snapshot() -> dict[str, Any]:
+    driver_blobs = _driver_blobs()
     return {
         "blobs": _blobs(),
         "tree_digests": _tree_digest(),
-        "driver_digest": _driver_digest(),
+        "driver_digest": _driver_digest(driver_blobs),
+        "driver_blobs": driver_blobs,
     }
 
 
@@ -225,6 +253,16 @@ def finish(output: Path) -> None:
     # committed driver would run today.
     doc["drivers_unchanged_during_run"] = doc.get("driver_digest") == after["driver_digest"]
     if not doc["drivers_unchanged_during_run"]:
+        # NAME them. Storing only the boolean meant `_provenance_section()` -- which
+        # renders a "they did change" list from `drivers_changed_during_run` -- had
+        # nothing to render on a live sidecar, so the disclosure printed empty and
+        # the reader could not tell which schedule produced the rows. A report field
+        # that can only ever be populated by the retroactive backfill is a
+        # disclosure decoupled from the thing it discloses.
+        doc["drivers_changed_during_run"] = _changed_drivers(
+            doc.get("driver_blobs", {}), after["driver_blobs"]
+        )
+        doc["driver_digest_at_finish"] = after["driver_digest"]
         logger.warning(
             "the sweep DRIVERS (%s/*%s) changed mid-run; rows stand, but the committed "
             "driver is not the one that scheduled every cell",
@@ -240,12 +278,54 @@ def finish(output: Path) -> None:
     logger.info("provenance closed at %s", output)
 
 
+def verify(output: Path) -> None:
+    """Has the measurement code moved since ``--start``? Exit non-zero if so.
+
+    Called from the driver before each model's results are PUBLISHED, because
+    ``--finish`` runs once at the end while ``run_ladder.sh`` commits and pushes
+    after every model. Without this, a mid-sweep edit to a tracked ``.py`` could
+    have its rows already committed and pushed by the time ``--finish`` rejects
+    the run — the refusal arriving after publication it was meant to prevent.
+
+    Silent success when there is no sidecar or the window is already closed: the
+    standing portfolio ladder runs this driver with no provenance at all, and
+    must not be blocked by a file it never creates.
+    """
+    if not output.exists():
+        return
+    doc = json.loads(output.read_text())
+    if doc.get("measurement_window", {}).get("finished") is not None:
+        return
+    after = _snapshot()
+    changed = [
+        p for p, meta in doc.get("blobs", {}).items() if meta["blob"] != after["blobs"][p]["blob"]
+    ]
+    changed += [
+        f"{tree}/**"
+        for tree, d in doc.get("tree_digests", {}).items()
+        if d != after["tree_digests"].get(tree)
+    ]
+    if changed:
+        raise SystemExit(
+            f"Measurement code changed mid-sweep ({', '.join(changed)}). These rows were "
+            "not produced by the code the open provenance window describes."
+        )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--start", action="store_true", help="open the window before measuring")
     group.add_argument("--finish", action="store_true", help="close it and verify stability")
+    group.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "check stability WITHOUT closing the window, for use before each "
+            "per-model publication. Silent no-op when no open sidecar exists."
+        ),
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--studies",
@@ -263,6 +343,8 @@ def main() -> None:
         doc = json.loads(args.output.read_text())
         doc["studies_measured"] = list(args.studies)
         args.output.write_text(json.dumps(doc, indent=2) + "\n")
+    elif args.verify:
+        verify(args.output)
     else:
         finish(args.output)
 

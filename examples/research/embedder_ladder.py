@@ -3213,6 +3213,29 @@ def main(argv: Sequence[str] | None = None) -> None:
             "specific model, and it is not one you can make for the whole ladder at once."
         )
 
+    # Checked HERE -- before a single embedding is computed or a single file is
+    # written -- and not only from render_report().
+    #
+    # The baseline is a property of the RUN (--reference-model) while
+    # `vs_reference_delta` is a property of the ROW, so pairing a flag with
+    # another baseline's artifact is a live mistake. Validating it at render time
+    # meant the refusal arrived AFTER the reference sidecar had been refreshed and
+    # the merged JSONL rewritten: the exception left costly, valid rows already
+    # mutated on disk, and the shell driver then read the non-zero exit as a model
+    # failure and replaced the affected cell with a failure row. A guard that only
+    # fires after the damage is a report of the damage. Rendering keeps its own
+    # copy of the check -- --render-only never reaches this path.
+    # (Cross-model review.)
+    if args.rows.exists():
+        try:
+            _assert_one_reference_model(read_rows(args.rows))
+        except ValueError as exc:
+            parser.error(
+                f"{exc}\n\nRefused before measuring, so nothing on disk was touched. "
+                f"The existing rows in {args.rows} were measured against a different "
+                f"baseline than --reference-model names."
+            )
+
     arms = {name: PROMPT_ARMS[name] for name in args.prompts}
 
     for model_name in args.models:
