@@ -301,7 +301,19 @@ import os
 rows_path = os.environ["ROWS"]
 model = os.environ["FAILED_MODEL"]
 code = os.environ["EXIT_CODE"]
-failed = os.environ["BENCHMARKS"].split()
+# Entries are either "benchmark" or "benchmark:code". The per-cell form exists
+# because `code` is a SCALAR that the terminal stop overwrites: a cell exiting
+# 137 (OOM-killed) followed by a memory-guard stop was persisted for every
+# earlier failure as "process exited 9", so the diagnostic artifact recorded the
+# stop reason instead of the death. Falls back to the caller's scalar for the
+# non-granular path, where one process really does own every benchmark.
+# (Cross-model review.)
+failed_spec = os.environ["BENCHMARKS"].split()
+failed_codes: dict[str, str] = {}
+for entry in failed_spec:
+    name, _, own = entry.partition(":")
+    failed_codes[name] = own or code
+failed = list(failed_codes)
 
 # A missing rows file is an EMPTY row set, not a crash. When LADDER_ARTIFACT
 # names a fresh prefix and the very first model dies before Python creates the
@@ -327,7 +339,7 @@ for benchmark in failed:
             "status": "failed",
             "metric_revision": 1,
             "error": (
-                f"process exited {code} without writing rows "
+                f"process exited {failed_codes[benchmark]} without writing rows "
                 "(killed, OOM, or segfault -- the harness never got to catch it)"
             ),
         }
@@ -481,8 +493,11 @@ for model in "${MODELS[@]}"; do
         # 3 (cache integrity) and 2 (configuration refusal) are REFUSALS, not
         # deaths: the harness stopped before producing anything, and the recorded
         # rows are fine. Condemning the cell would delete them.
+        # "benchmark:code", so each cell keeps ITS OWN exit status. `code` is a
+        # scalar the terminal stop overwrites, and recording that for every
+        # earlier failure logged the stop reason instead of the death.
         [ $cell_code -ne 3 ] && [ $cell_code -ne 2 ] &&
-          FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark"
+          FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark:$cell_code"
       fi
       # A cache-integrity refusal must stop immediately, not after the remaining
       # benchmarks have each recorded their own failure row.

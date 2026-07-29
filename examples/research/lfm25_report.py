@@ -113,10 +113,18 @@ def _provenance_section() -> list[str]:
             "name whatever is checked out now instead of what measured the rows."
         )
     studies = doc.get("studies_measured")
+    # `studies_measured` is INTENT; `window_complete` is what was reached. An
+    # aborted sweep still lists both studies, and reading that as "every row in
+    # both studies" attributes rows the run never touched to this window.
+    if doc.get("window_complete") is False:
+        studies = None  # force the partial wording below
     if stable is True:
         scope = (
             "every row in both studies"
-            if studies in (None, ["a", "b"])
+            if studies in (None, ["a", "b"]) and doc.get("window_complete") is not False
+            else "the rows this window actually re-measured — the sweep ABORTED before "
+            "finishing every planned study, so rows it never reached predate it"
+            if doc.get("window_complete") is False
             else (
                 f"the rows re-measured in study {', '.join(s.upper() for s in studies)} only — "
                 "the other study's rows predate this window and their provenance is not "
@@ -630,8 +638,8 @@ def _arm_cells(rows: list[dict[str, Any]], model: str, benchmark: str) -> dict[s
     return best
 
 
-def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
-    """Where the untrained control outscores the *real* base encoders.
+def _control_vs_base_comparisons(base: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The control-versus-base-encoder tallies, as data rather than prose.
 
     **Compared ARM BY ARM, not best-arm against best-arm.** Both sides wear the
     same untrained mean-pooling head, so pooling is held fixed either way — but
@@ -643,12 +651,18 @@ def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
     remaining difference the weights — for the matched-backbone encoder. For the
     230M encoder the backbone and size differ as well, so that row stays an
     observation. (Cross-model review.)
+
+    A pair contributes nothing unless *both* sides produced an ``ok`` cell under
+    the same prompt arm, so an encoder or control that died mid-sweep drops out
+    of the tally instead of being silently scored zero — which is what lets the
+    caller notice there is no evidence rather than publish a conclusion drawn
+    from missing rows.
     """
     encoders = sorted(
         {row["model"] for row in base if "Encoder" in row["model"]},
     )
     benchmarks = sorted({row["benchmark"] for row in base})
-    lines: list[str] = []
+    comparisons: list[dict[str, Any]] = []
     for encoder in encoders:
         beaten: list[str] = []
         compared: list[str] = []
@@ -666,27 +680,125 @@ def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
                 for a in shared
             ):
                 beaten.append(benchmark)
-        matched = encoder == MATCHED_BACKBONE_ENCODER
+        if not compared:
+            continue
+        comparisons.append(
+            {
+                "encoder": encoder,
+                "beaten": beaten,
+                "compared": compared,
+                "arms": sorted(arms_used),
+                "matched_backbone": encoder == MATCHED_BACKBONE_ENCODER,
+            }
+        )
+    return comparisons
+
+
+def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
+    """Render :func:`_control_vs_base_comparisons` as one bullet per encoder."""
+    lines: list[str] = []
+    for comparison in _control_vs_base_comparisons(base):
         note = (
             " — **matched backbone and matched prompt arm**, so this pair isolates pretraining"
-            if matched
+            if comparison["matched_backbone"]
             else " — *different backbone and size*, so this pair confounds pretraining "
             "with model size and is an observation only"
         )
+        arms = comparison["arms"]
         arm_note = (
-            f", comparing the same prompt arm on both sides "
-            f"({', '.join(f'`{a}`' for a in sorted(arms_used))})"
-            if arms_used
+            f", comparing the same prompt arm on both sides ({', '.join(f'`{a}`' for a in arms)})"
+            if arms
             else ""
         )
+        beaten = comparison["beaten"]
         lines.append(
-            f"- Random weights match or beat `{encoder}` on **{len(beaten)} of "
-            f"{len(compared)}** benchmarks where both ran a shared arm"
+            f"- Random weights match or beat `{comparison['encoder']}` on "
+            f"**{len(beaten)} of {len(comparison['compared'])}** benchmarks where both "
+            f"ran a shared arm"
             + (f" ({', '.join(f'`{b}`' for b in beaten)})" if beaten else "")
             + arm_note
             + note
             + "."
         )
+    return lines
+
+
+def _pretraining_section(base: list[dict[str, Any]]) -> list[str]:
+    """The pretrained-versus-random conclusion, gated on the rows that support it.
+
+    The harness records a failure row and keeps going when a model dies, so the
+    control or the matched-backbone encoder can be **absent** from a rendered
+    report. The earlier version asserted "the control also outscores the real
+    base encoders" unconditionally: with those rows missing, the bullet list
+    below it was empty, the Failures table said why — and the claim was still
+    printed as a finding. A conclusion is emitted here only when cells exist to
+    carry it, and the matched-backbone causal claim only when that specific pair
+    both ran and went the way the sentence says. (Cross-model review.)
+    """
+    comparisons = _control_vs_base_comparisons(base)
+    if not comparisons:
+        return [
+            "**No pretrained-versus-random comparison is available in this run.** It needs "
+            f"the control and at least one base encoder to produce an `ok` cell on the same "
+            f"benchmark under the same prompt arm, at k={HEADLINE_K}; no pair did. See the "
+            "failures table for which cells are missing. Nothing is concluded here about "
+            "pretrained versus random weights.",
+        ]
+
+    matched = next((c for c in comparisons if c["matched_backbone"]), None)
+    sweeps = [c for c in comparisons if c["beaten"]]
+    headline = (
+        "**The control also outscores the real base encoders.**"
+        if sweeps
+        else "**The control does not outscore the real base encoders in this run.**"
+    )
+    lines = [
+        f"{headline} All measured pairs wear the same untrained mean-pooling head, so "
+        "pooling is held fixed throughout; whether *pretraining* is the only remaining "
+        "difference depends on the backbone, and is stated per row:",
+        "",
+        *_control_vs_base_encoders(base),
+        "",
+    ]
+
+    if matched is None:
+        lines.append(
+            f"**What this supports, and what it does not.** `{MATCHED_BACKBONE_ENCODER}` — the "
+            "only encoder here that shares the control's backbone, and so the only pair that "
+            "could isolate pretraining — produced no comparable cell in this run. The rows "
+            "above vary backbone and size as well as pretraining, so **no causal claim about "
+            "pretrained versus random weights is made**."
+        )
+        return lines
+
+    if not matched["beaten"]:
+        lines.append(
+            f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
+            "the control, architecture and pooling are held fixed and only pretrained-vs-random "
+            "weights differ — but the control did **not** match or beat it on any of the "
+            f"{len(matched['compared'])} benchmarks where both ran a shared arm. The "
+            "pretrained-scores-worse-than-random finding is therefore **not** reproduced here."
+        )
+        return lines
+
+    lines += [
+        f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
+        "the control, architecture and pooling are held fixed and only pretrained-vs-random "
+        "weights differ. So the *finding* is exactly this: **under this untrained "
+        "mean-pooling configuration, the pretrained checkpoint scores worse than random "
+        f"weights** on {len(matched['beaten'])} of {len(matched['compared'])} benchmarks "
+        "where both ran a shared arm. Any other encoder row points the same way but cannot "
+        "even support that, because it varies backbone and size as well as pretraining.",
+        "",
+        "A tempting explanation is that MLM training shapes token representations for a head "
+        "this pipeline never attaches, so averaging them destroys more than averaging random "
+        "projections does. That is a **hypothesis, not a result** — this experiment holds "
+        "pooling *fixed*, so it cannot attribute the gap to pooling rather than to the "
+        "checkpoint. Testing it means varying the pooling over the same features (CLS, "
+        "last-token, a trained head) and seeing whether the ordering reverses. Not done "
+        "here. What is safe to conclude either way is narrower and sufficient: an untuned "
+        "encoder must not be ranked against a retrieval-tuned one.",
+    ]
     return lines
 
 
@@ -890,9 +1002,13 @@ def render() -> str:
         f"`LiquidAI/LFM2.5-Embedding-350M` vs. `{TUNED_BASELINE}` — langres's current "
         f"`DEFAULT_EMBEDDING_MODEL`, and the baseline every **study A** interval is "
         f"measured against. **Study B uses a different baseline**: its deltas are against "
-        f"`{BASE_BASELINE}`, which shares the 350M backbone, so a study-B interval reads as "
-        f'"what retrieval tuning bought on this backbone" and must never be compared with '
-        f"a study-A one. Each table states its own baseline in the heading.",
+        f"`{BASE_BASELINE}`, and a study-B interval must never be compared with a study-A "
+        f"one. That baseline shares its 350M backbone with **`{MATCHED_BACKBONE_ENCODER}` "
+        f'only**, so the reading "what retrieval tuning bought on this backbone" applies '
+        f"to that pair alone. `LiquidAI/LFM2.5-Encoder-230M` declares a different, smaller "
+        f"backbone and `{CONTROL}` has no training at all, so their deltas confound tuning "
+        f"with model size or with the absence of weights entirely. Each table states its "
+        f"own baseline in the heading.",
         "",
         (
             f"- Ahead with an interval excluding zero on: "
@@ -1107,36 +1223,25 @@ def render() -> str:
         ),
         *_correction_paragraph(base, uninformative, narrow),
         "",
-        "**The control also outscores the real base encoders.** All three wear the same "
-        "untrained mean-pooling head, so pooling is held fixed throughout; whether "
-        "*pretraining* is the only remaining difference depends on the backbone, and is "
-        "stated per row:",
+        *_pretraining_section(base),
         "",
-        *_control_vs_base_encoders(base),
-        "",
-        f"**What this supports, and what it does not.** On `{MATCHED_BACKBONE_ENCODER}` vs "
-        "the control, architecture and pooling are held fixed and only pretrained-vs-random "
-        "weights differ. So the *finding* is exactly this: **under this untrained "
-        "mean-pooling configuration, the pretrained checkpoint scores worse than random "
-        "weights.** The 230M row points the same way but cannot even support that, because "
-        "it varies backbone and size as well as pretraining.",
-        "",
-        "A tempting explanation is that MLM training shapes token representations for a head "
-        "this pipeline never attaches, so averaging them destroys more than averaging random "
-        "projections does. That is a **hypothesis, not a result** — this experiment holds "
-        "pooling *fixed*, so it cannot attribute the gap to pooling rather than to the "
-        "checkpoint. Testing it means varying the pooling over the same features (CLS, "
-        "last-token, a trained head) and seeing whether the ordering reverses. Not done "
-        "here. What is safe to conclude either way is narrower and sufficient: an untuned "
-        "encoder must not be ranked against a retrieval-tuned one.",
-        "",
-        "This reframes `fodors_zagat` specifically. It was already labelled *saturated* — "
-        "every usable embedder scoring near the ceiling. The control shows it is stronger "
-        "than that: it is **uninformative in the strict sense**, because an untrained network "
-        "also scores near the ceiling. Saturation says the models agree; this says the "
-        "benchmark cannot tell a trained retriever from noise. It must never be cited as "
-        "evidence that one embedder beats another.",
-        "",
+        # Named benchmark, conditional claim: the sentence is only true while the
+        # measured intervals actually put fodors_zagat in `uninformative`. Printing
+        # it unconditionally would restate a previous run's result as this one's.
+        *(
+            [
+                "This reframes `fodors_zagat` specifically. It was already labelled "
+                "*saturated* — every usable embedder scoring near the ceiling. The control "
+                "shows it is stronger than that: it is **uninformative in the strict "
+                "sense**, because an untrained network also scores near the ceiling. "
+                "Saturation says the models agree; this says the benchmark cannot tell a "
+                "trained retriever from noise. It must never be cited as evidence that one "
+                "embedder beats another.",
+                "",
+            ]
+            if "fodors_zagat" in uninformative
+            else []
+        ),
         *_noise_band_warning(tuned, base),
         "",
         "The control also exists because this harness *shipped* the bug it now guards "

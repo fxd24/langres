@@ -609,6 +609,106 @@ class TestLoadVerification:
         assert "**no**" in report  # not deterministic across two loads
 
 
+class TestPretrainingConclusionIsGated:
+    """A conclusion about pretrained-vs-random needs rows that carry it.
+
+    The harness records a failure row and continues when a model dies, so a
+    rendered report can contain no control cells at all. The paragraph was
+    unconditional: it asserted "the pretrained checkpoint scores worse than
+    random weights" over an empty bullet list, with the failures table right
+    there naming the missing data.
+    """
+
+    def test_no_comparable_rows_conclude_nothing(self) -> None:
+        """Control died: no `ok` cell, so no pair shares an arm."""
+        base = [
+            _row(REPORT.MATCHED_BACKBONE_ENCODER, "abt_buy", candidate_recall=0.55),
+            _row(REPORT.CONTROL, "abt_buy", status="process_failure", candidate_recall=None),
+        ]
+
+        section = "\n".join(REPORT._pretraining_section(base))
+
+        assert "No pretrained-versus-random comparison is available" in section
+        assert "scores worse than random weights" not in section
+
+    def test_a_missing_matched_backbone_blocks_the_causal_claim(self) -> None:
+        """Only the 350M encoder shares the control's backbone.
+
+        With it absent, the 230M row still renders as an observation, but the
+        sentence that isolates pretraining must not be printed.
+        """
+        base = [
+            _row("LiquidAI/LFM2.5-Encoder-230M", "abt_buy", candidate_recall=0.40),
+            _row(REPORT.CONTROL, "abt_buy", candidate_recall=0.60),
+        ]
+
+        section = "\n".join(REPORT._pretraining_section(base))
+
+        assert "produced no comparable cell in this run" in section
+        assert "no causal claim" in section
+        assert "scores worse than random weights" not in section
+
+    def test_a_control_that_loses_does_not_print_the_finding(self) -> None:
+        """The rows going the other way must flip the sentence, not be ignored."""
+        base = [
+            _row(REPORT.MATCHED_BACKBONE_ENCODER, "abt_buy", candidate_recall=0.70),
+            _row(REPORT.CONTROL, "abt_buy", candidate_recall=0.30),
+        ]
+
+        section = "\n".join(REPORT._pretraining_section(base))
+
+        assert "does not outscore the real base encoders" in section
+        assert "is therefore **not** reproduced here" in section
+
+    def test_supported_rows_still_state_the_finding(self) -> None:
+        """The gate must not silence a conclusion the rows do support."""
+        base = [
+            _row(REPORT.MATCHED_BACKBONE_ENCODER, "abt_buy", candidate_recall=0.31),
+            _row(REPORT.CONTROL, "abt_buy", candidate_recall=0.60),
+        ]
+
+        section = "\n".join(REPORT._pretraining_section(base))
+
+        assert "scores worse than random weights" in section
+        assert "matched backbone and matched prompt arm" in section
+        assert "**1 of 1**" in section
+
+    def test_the_fodors_zagat_reframing_is_dropped_when_it_is_not_uninformative(
+        self, artifacts: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """It names one benchmark, so it is only true while that row says so.
+
+        Here the control's interval on ``fodors_zagat`` excludes zero, so the
+        benchmark *does* separate a trained retriever from random weights and
+        the reframing paragraph is simply false.
+        """
+        base = [
+            row
+            if row["model"] != REPORT.CONTROL or row["benchmark"] != "fodors_zagat"
+            else dict(
+                row,
+                candidate_recall=0.40,
+                vs_reference_delta=-0.59,
+                vs_reference_ci_low=-0.65,
+                vs_reference_ci_high=-0.53,
+            )
+            for row in REPORT._read_rows(REPORT.BASE_ROWS)
+        ]
+        path = tmp_path / "separating_base.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in base))
+        monkeypatch.setattr(REPORT, "BASE_ROWS", path)
+
+        report = REPORT.render()
+
+        assert "This reframes `fodors_zagat` specifically" not in report
+
+    def test_the_fodors_zagat_reframing_is_kept_when_it_is_uninformative(
+        self, artifacts: Path
+    ) -> None:
+        """The committed fixture's control interval there DOES contain zero."""
+        assert "This reframes `fodors_zagat` specifically" in REPORT.render()
+
+
 class TestInvertedControl:
     """A control that BEATS every tuned model is not a 'narrow' benchmark."""
 

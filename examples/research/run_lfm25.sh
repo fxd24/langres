@@ -89,7 +89,9 @@ abort_with_provenance() {
   say "closing the provenance window for the partial run"
   # --finish exits non-zero when measurement code moved mid-sweep; that verdict
   # still belongs in the sidecar, so record it and keep the original exit code.
-  uv run python examples/research/write_provenance.py --finish || \
+  # --partial: this window did NOT reach every planned study, so the report must
+  # not read `studies_measured` as "every row in both studies".
+  uv run python examples/research/write_provenance.py --finish --partial ||
     say "provenance --finish reported a problem; recording it and continuing to commit"
   if [ -f "$PROVENANCE_JSON" ]; then
     # A WARNING here is not enough. Partial rows are already committed and may be
@@ -224,7 +226,16 @@ uv run python examples/research/write_provenance.py --finish || {
 }
 
 say "rendering the write-up"
-uv run python examples/research/lfm25_report.py || exit 1
+# Not a bare exit: --finish has already CLOSED the window and written the
+# finished timestamp and stability verdict, and the model rows are committed. A
+# render failure here (cohort validation rejecting the artifacts, say) would
+# otherwise leave that closed sidecar uncommitted, to be lost on teardown or
+# overwritten by the next --start. The rows would then be durable with no record
+# of the window that produced them. (Cross-model review.)
+uv run python examples/research/lfm25_report.py || {
+  say "rendering failed; committing the closed provenance window before stopping"
+  abort_with_provenance 1
+}
 
 REPORT_MD="docs/research/20260729_lfm25_encoders.md"
 git add "$REPORT_MD" "$PROVENANCE_JSON" || {

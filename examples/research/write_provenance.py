@@ -231,10 +231,23 @@ def start(output: Path) -> None:
     logger.info("provenance opened at %s", output)
 
 
-def finish(output: Path) -> None:
+def finish(output: Path, partial: bool = False) -> None:
     if not output.exists():
         raise SystemExit(f"{output} missing -- run --start before the sweep")
     doc = json.loads(output.read_text())
+    # `studies_measured` is what was PLANNED at --start. On an abort partway
+    # through, merge-commits leave every untouched older row in place, so a
+    # sidecar still claiming ["a", "b"] made the report say the window covers
+    # "every row in both studies" and attributed stale rows to a measurement that
+    # never reached them. The completeness of the window is recorded separately
+    # from its intent. (Cross-model review.)
+    doc["window_complete"] = not partial
+    if partial:
+        doc["partial_note"] = (
+            "The sweep ABORTED before finishing every planned study. "
+            "`studies_measured` is what was planned, not what was reached: rows "
+            "left untouched by this run predate the window described here."
+        )
     after = _snapshot()
     changed = [p for p, meta in doc["blobs"].items() if meta["blob"] != after["blobs"][p]["blob"]]
     changed += [
@@ -328,6 +341,14 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
+        "--partial",
+        action="store_true",
+        help=(
+            "with --finish: the sweep aborted before reaching every planned "
+            "study, so rows it never touched are NOT described by this window."
+        ),
+    )
+    parser.add_argument(
         "--studies",
         nargs="*",
         default=["a", "b"],
@@ -346,7 +367,7 @@ def main() -> None:
     elif args.verify:
         verify(args.output)
     else:
-        finish(args.output)
+        finish(args.output, partial=args.partial)
 
 
 if __name__ == "__main__":
