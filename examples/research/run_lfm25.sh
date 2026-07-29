@@ -90,7 +90,8 @@ export LADDER_PROVENANCE_REQUIRED=1
 
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
-# Whether provenance verification still holds for the commits on this branch.
+# A `--finish` rejection withholds publication for this BRANCH, via the shared
+# `block_publication` in publish_lib.sh.
 #
 # Round 26 gave the abort path a push so a closed window could not be stranded
 # locally while run_ladder.sh had already published the rows. That push was
@@ -98,9 +99,15 @@ say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 # sweep whose measurement code moved mid-run, and run_ladder.sh deliberately
 # withholds the affected row commits when its per-model --verify fails -- so an
 # unconditional `git push HEAD` here published every one of those withheld commits
-# anyway. Publication is gated on this; COMMITTING never is. (Cross-model review.)
-PROVENANCE_OK=1
-
+# anyway.
+#
+# Round 27 fixed that with a shell variable, which was the THIRD site of one
+# defect: a variable dies with this process, so the study-A resume run afterwards
+# on the same branch published exactly the commits this sweep had rejected. The
+# verdict belongs to the branch -- the withheld commits are still on it -- so it is
+# recorded where `publish_branch` can see it, and every driver inherits the refusal
+# without knowing anything about this one. Publication is gated; COMMITTING never
+# is. (Cross-model review, three rounds running.)
 PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
 # Declared HERE, not at their point of use two hundred lines down, because the
 # preflight below has to name every file this driver OVERWRITES and one
@@ -151,13 +158,12 @@ commit_provenance() {
   # the closing evidence sat on the local branch. Rows published, the record of
   # what produced them withheld -- the exact asymmetry this abort path exists to
   # prevent. (Cross-model review.)
-  if [ "$PROVENANCE_OK" = "1" ]; then
-    publish_branch "lfm25-abort" || true
-  else
-    say "NOT pushing: provenance verification REJECTED this run."
-    say "  The evidence is committed locally. run_ladder.sh withheld the affected row"
-    say "  commits for the same reason; publishing HEAD here would republish them."
-  fi
+  #
+  # Unconditional again, and safe this time: `publish_branch` refuses on its own
+  # when `block_publication` has been called -- by this driver, by run_ladder.sh
+  # mid-sweep, or by an earlier run on this branch. Re-deriving the decision here
+  # is what made it a per-process flag that the resume driver could not see.
+  publish_branch "lfm25-abort" || true
   exit "$code"
 }
 
@@ -170,7 +176,7 @@ abort_with_provenance() {
   # not read `studies_measured` as "every row in both studies".
   uv run python examples/research/write_provenance.py --finish --partial || {
     say "provenance --finish reported a problem; recording it and continuing to commit"
-    PROVENANCE_OK=0
+    block_publication "provenance --finish REJECTED this sweep: rows on this branch were measured under code the window does not describe."
   }
   commit_provenance "$code" "results(lfm25): provenance for a partial sweep (exit $code)"
 }
@@ -441,7 +447,7 @@ say "closing the provenance window"
 # and complete; only the commit is still owed. (Cross-model review.)
 uv run python examples/research/write_provenance.py --finish || {
   say "provenance --finish rejected this sweep; committing its evidence before stopping"
-  PROVENANCE_OK=0
+  block_publication "provenance --finish REJECTED this sweep: rows on this branch were measured under code the window does not describe."
   commit_provenance 1 "results(lfm25): provenance for a sweep whose code moved mid-run"
 }
 

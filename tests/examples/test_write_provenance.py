@@ -1202,6 +1202,11 @@ class TestAVerificationFailureWithholdsPublication:
     published every commit the child had deliberately held back.
 
     Committing is never gated. Publication is.
+
+    The first fix was a shell variable, which was the THIRD site of one defect: it
+    died with the process, so the study-A resume run afterwards on the same branch
+    published exactly the commits this sweep had rejected. The verdict is recorded
+    on the BRANCH now, so these assert the driver DELEGATES rather than re-deriving.
     """
 
     RESEARCH = Path(__file__).parents[2] / "examples" / "research"
@@ -1225,16 +1230,21 @@ class TestAVerificationFailureWithholdsPublication:
         assert len(calls) == 2, f"expected two guarded --finish calls, found {len(calls)}"
         for i in calls:
             handler = "\n".join(lines[i : i + 5])
-            assert "PROVENANCE_OK=0" in handler
+            assert "block_publication" in handler
 
-    def test_the_abort_push_is_gated_on_the_verdict(self) -> None:
+    def test_the_driver_keeps_no_verdict_of_its_own(self) -> None:
+        """A per-process flag is invisible to the next driver on this branch."""
+        driver = self._driver()
+
+        assert "PROVENANCE_OK" not in driver
+
+    def test_the_abort_push_delegates_to_the_shared_rule(self) -> None:
         driver = self._driver()
         block = driver[
             driver.index("commit_provenance() {") : driver.index("abort_with_provenance() {")
         ]
 
-        gate = block.index('if [ "$PROVENANCE_OK" = "1" ]; then')
-        assert gate < block.index("publish_branch")
+        assert "publish_branch" in block
 
     def test_a_rejected_run_still_commits_its_evidence(self) -> None:
         """Withholding the commit too would destroy the record of the rejection."""
@@ -1242,9 +1252,8 @@ class TestAVerificationFailureWithholdsPublication:
         block = driver[
             driver.index("commit_provenance() {") : driver.index("abort_with_provenance() {")
         ]
-        commit = block.index("git commit -q --only")
 
-        assert commit < block.index('if [ "$PROVENANCE_OK" = "1" ]; then')
+        assert block.index("git commit -q --only") < block.index("publish_branch")
 
 
 class TestPublicationIsWithheldForTheWholeSweep:
