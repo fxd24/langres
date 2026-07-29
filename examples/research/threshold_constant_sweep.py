@@ -1406,11 +1406,19 @@ def run_benchmark_isolated(
         if not reasons:
             print(f"[adopt] {name}: reusing the completed worker artifact", flush=True)
             return adopted.cells
+        # Rejected for THIS invocation is not worthless: those cells are still
+        # valid measurements of the invocation that produced them, and in the
+        # parent-crash window this file can be their only durable copy. Deleting
+        # it here and then failing to re-measure loses an hour of compute for
+        # nothing (raised in review). Move it aside instead -- it stays visible to
+        # `git status -uall`, so an operator decides rather than a crash deciding.
+        rejected = worker_out.with_name(worker_out.name + ".rejected")
+        worker_out.replace(rejected)
         print(
-            f"[stale] {name}: worker artifact rejected ({'; '.join(reasons)}) -- re-measuring",
+            f"[stale] {name}: worker artifact rejected ({'; '.join(reasons)}) -- "
+            f"kept at {rejected.name}, re-measuring",
             flush=True,
         )
-        worker_out.unlink()
 
     completed = subprocess.run(_worker_command(name, args, worker_out), check=False)
     if completed.returncode != 0 or not worker_out.exists():
@@ -1644,13 +1652,20 @@ def main() -> None:
             # writes that loss to disk permanently. Old cells are swapped out only
             # once replacements are in hand (raised in review).
             kept = [c for c in cells if c.benchmark != name]
+            previous = [c for c in cells if c.benchmark == name]
             if args.in_process:
                 # Per-cell checkpointing is load-bearing here: an --in-process run
                 # IS the worker, so this loop is what writes `<worker_out>.partial`
-                # for the parent's resume. So it swaps incrementally rather than at
-                # the end -- `kept + fresh` each time, which keeps progress durable
-                # and cannot duplicate identities the way plain `.append` did.
-                fresh: list[CellResult] = []
+                # for the parent's resume.
+                #
+                # Reconcile PER IDENTITY, not per benchmark. Swapping the whole
+                # slice for `fresh` on the first yielded cell truncates it: with
+                # seeds 0 and 1 already durable, a retry that yields seed 0 and
+                # then fails on seed 1 would drop seed 1, and the next successful
+                # benchmark's checkpoint() would persist that loss (raised in
+                # review -- my previous fix bounded this window but did not close
+                # it). An old cell survives until its own replacement exists.
+                fresh: dict[tuple[str, str, int], CellResult] = {}
                 for cell in run_benchmark(
                     name,
                     methods=tuple(args.methods),
@@ -1658,8 +1673,11 @@ def main() -> None:
                     resamples=args.resamples,
                     embedder=args.embedder,
                 ):
-                    fresh.append(cell)
-                    cells = kept + fresh
+                    fresh[(cell.benchmark, cell.method, cell.seed)] = cell
+                    not_yet_replaced = [
+                        c for c in previous if (c.benchmark, c.method, c.seed) not in fresh
+                    ]
+                    cells = kept + not_yet_replaced + list(fresh.values())
                     checkpoint()
             else:
                 # The worker is atomic from here, so the swap is too: measure

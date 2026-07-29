@@ -670,3 +670,105 @@ class TestAFailedRetryDoesNotDestroyDurableCells:
         # original cell must still be on disk.
         survivors = {(c.benchmark, c.method, c.seed) for c in read_report(scratch).cells}
         assert ("abt_buy", "rapidfuzz", 0) in survivors
+
+
+class TestInProcessRetryReconcilesPerIdentity:
+    """A partial retry must not truncate the durable slice.
+
+    Swapping the whole benchmark slice for ``fresh`` on the first yielded cell
+    means a retry that yields seed 0 and then dies on seed 1 destroys the
+    previously durable seed-1 result, which the next successful benchmark's
+    checkpoint() then persists. Found in review, refining an earlier fix in this
+    same PR that bounded the window without closing it.
+    """
+
+    def test_a_half_finished_retry_keeps_the_seed_it_has_not_reached(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "sweep.json"
+        scratch = out.with_name(out.name + ".partial")
+        # Only seed 1 is durable, so the benchmark is INCOMPLETE and is retried
+        # (with both seeds present it is skipped and nothing is exercised).
+        durable = [_cell("abt_buy").model_copy(update={"method": "rapidfuzz", "seed": 1})]
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=1000,
+                source_fingerprint=_source_fingerprint(),
+                cells=[*durable, _cell("dblp_acm").model_copy(update={"seed": 9})],
+            ),
+            scratch,
+        )
+
+        def half_then_die(name: str, **_k: Any) -> Any:
+            if name == "abt_buy":
+                yield _cell("abt_buy").model_copy(update={"method": "rapidfuzz", "seed": 0})
+                raise RuntimeError("died before seed 1")
+            yield _cell(name).model_copy(update={"method": "rapidfuzz", "seed": 0})
+
+        monkeypatch.setattr(
+            "examples.research.threshold_constant_sweep.run_benchmark", half_then_die
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "threshold_constant_sweep.py",
+                "--out",
+                str(out),
+                "--resume",
+                "--in-process",
+                "--methods",
+                "rapidfuzz",
+                "--seeds",
+                "0",
+                "1",
+                "--only",
+                "abt_buy",
+                "dblp_acm",
+                "--no-tables",
+            ],
+        )
+        with pytest.raises(SystemExit):
+            main()
+        survivors = {(c.benchmark, c.method, c.seed) for c in read_report(scratch).cells}
+        assert ("abt_buy", "rapidfuzz", 1) in survivors, (
+            "seed 1 was durable and was never re-measured; it must not be dropped"
+        )
+
+
+class TestARejectedWorkerArtifactIsPreservedNotDeleted:
+    """Rejected for THIS invocation still means valid for its own.
+
+    In the parent-crash window the file can be the only durable copy of an
+    hour-long benchmark, so deleting it and then failing to re-measure loses it
+    for nothing. Found in review.
+    """
+
+    def test_it_is_moved_aside_rather_than_unlinked(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scratch = tmp_path / "sweep.json.partial"
+        worker_out = scratch.with_name(f"{scratch.name}.abt_buy.json")
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=250,  # mismatches the args below -> rejected
+                source_fingerprint=_source_fingerprint(),
+                cells=[_cell("abt_buy").model_copy(update={"method": "rapidfuzz", "seed": 0})],
+            ),
+            worker_out,
+        )
+        fingerprint = _source_fingerprint()
+        monkeypatch.setattr(
+            "examples.research.threshold_constant_sweep.subprocess.run",
+            lambda *_a, **_k: subprocess.CompletedProcess([], 1),
+        )
+        args = argparse.Namespace(methods=["rapidfuzz"], seeds=[0], resamples=1000, embedder=None)
+        with pytest.raises(RuntimeError):
+            run_benchmark_isolated("abt_buy", args, scratch, fingerprint)
+        assert not worker_out.exists(), "it must not be left where it would be re-adopted"
+        assert worker_out.with_name(worker_out.name + ".rejected").exists(), (
+            "the rejected artifact is durable data and must be preserved"
+        )

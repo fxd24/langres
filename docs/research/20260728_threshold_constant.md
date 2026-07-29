@@ -5,12 +5,26 @@
 > printed by `examples/research/threshold_constant_sweep.py --render` and spliced
 > in by `tools/render_threshold_constant_writeup.py`. Edit the body, re-run the
 > tool. Three PRs on 2026-07-28 shipped factual errors and **every one was in
-> hand-typed prose sitting beside a correct generated table**, which is why
-> **no number produced by this study is typed by hand anywhere in this
-> document** — every one arrives in a generated table. The prose does quote
-> figures from *other* documents (`45 of 54` and the `0.174–0.695` derived-cut
-> span, both from PR #250); each was re-read in its source before being repeated
-> here.
+> hand-typed prose sitting beside a correct generated table**, which is what this
+> split is defending against.
+>
+> **What that does and does not guarantee** — stated narrowly, because two
+> earlier drafts of this note overclaimed it and review caught both. What is
+> guaranteed: **every table and every count in them is generated** from the
+> committed artifacts — no table is transcribed, and the constant-vs-labels
+> scoreboard under the ladder is computed by the harness rather than typed.
+>
+> What is **not** guaranteed: the interpretive prose *quotes* individual figures
+> from those tables — the shipped `0.90`, `dblp_acm`'s ≈`0.22` at the old cut,
+> the four benchmarks that tie on e5, the claim that every eligible `sim_cos`
+> interval sits above zero. Those are hand-typed and **can drift**. They are
+> quotes from the generated tables in this same document, so a reader can check
+> any of them in place — but "check it against the table" is the safeguard here,
+> not "it was generated".
+>
+> The prose also quotes figures from *other* documents (`45 of 54` and the
+> `0.174–0.695` derived-cut span, both from PR #250); each was re-read in its
+> source before being repeated here.
 
 - **Date**: 2026-07-28 (checkpoint-transfer run, §7, completed 2026-07-29)
 - **Harness**: `examples/research/threshold_constant_sweep.py` (committed before the run)
