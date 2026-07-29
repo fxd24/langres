@@ -123,8 +123,11 @@ def _provenance_section() -> list[str]:
         scope = (
             "every row in both studies"
             if studies in (None, ["a", "b"]) and doc.get("window_complete") is not False
-            else "the rows this window actually re-measured — the sweep ABORTED before "
-            "finishing every planned study, so rows it never reached predate it"
+            # NOT "the sweep ABORTED": a resume marks its window partial on
+            # purpose, having succeeded. The property is the same and the cause
+            # is not this document's to assert. (Cross-model review.)
+            else "the rows this window actually re-measured — it did not cover every "
+            "planned study, so rows it never reached predate it"
             if doc.get("window_complete") is False
             else (
                 f"the rows re-measured in study {', '.join(s.upper() for s in studies)} only — "
@@ -767,8 +770,8 @@ def _cross_study_caveat() -> list[str]:
     ]
 
 
-def _control_intervals(base: list[dict[str, Any]], benchmark: str) -> list[str]:
-    """Every measured paired interval for the control on ``benchmark``, formatted.
+def _control_intervals(base: list[dict[str, Any]], benchmark: str) -> tuple[list[str], list[str]]:
+    """The control's measured intervals on ``benchmark``, split by whether they exclude zero.
 
     Read from the rows rather than typed into the prose beside them. The
     paragraph these feed used to quote two endpoints literally, which is the
@@ -776,16 +779,28 @@ def _control_intervals(base: list[dict[str, Any]], benchmark: str) -> list[str]:
     regenerates the document, and the hard-coded sentence would then contradict
     the table directly above it while the page still claimed every number came
     from the artifact. (Cross-model review.)
+
+    **Split, because the sentence quoting them says "all excluding zero" and this
+    returned every arm.** A benchmark enters ``narrow`` on its BEST arm's
+    interval alone; a second arm whose interval spans zero was printed
+    immediately before that claim, making the claim false about a number on the
+    same line. Both groups are returned so the paragraph can quote the
+    refutation and still disclose the arm that does not support it, rather than
+    filtering it out invisibly. (Cross-model review.)
+
+    Returns ``(excluding_zero, spanning_zero)``.
     """
-    seen: list[str] = []
+    excluding: list[str] = []
+    spanning: list[str] = []
     for row in _cells(base, model=CONTROL, benchmark=benchmark, k=HEADLINE_K, status="ok"):
         low, high = row.get("vs_reference_ci_low"), row.get("vs_reference_ci_high")
         if low is None or high is None:
             continue
         formatted = f"`{_ci(low, high)}`"
-        if formatted not in seen:
-            seen.append(formatted)
-    return sorted(seen)
+        bucket = excluding if (low > 0 or high < 0) else spanning
+        if formatted not in bucket:
+            bucket.append(formatted)
+    return sorted(excluding), sorted(spanning)
 
 
 def _correction_paragraph(
@@ -808,13 +823,30 @@ def _correction_paragraph(
         # run did not measure that way.
         return []
     quoted = []
+    also_spanning: list[str] = []
     for benchmark in narrow:
-        intervals = _control_intervals(base, benchmark)
-        if intervals:
-            quoted.append(f"on `{benchmark}` they are {' and '.join(intervals)}")
+        excluding, spanning = _control_intervals(base, benchmark)
+        if excluding:
+            quoted.append(f"on `{benchmark}` they are {' and '.join(excluding)}")
+        also_spanning += [f"`{benchmark}` {interval}" for interval in spanning]
     if not quoted:
         return []
     unusable = ", ".join(f"`{b}`" for b in blind) if blind else "**no benchmark**"
+    # Disclosed, never dropped: a benchmark enters `narrow` on its best arm, so
+    # another arm's interval can span zero while the sentence above says "all
+    # excluding zero". Filtering it out silently would make the claim true by
+    # hiding its counterexample. (Cross-model review.)
+    caveat = (
+        (
+            " Not every arm clears zero — "
+            + ", ".join(also_spanning)
+            + f" {'spans' if len(also_spanning) == 1 else 'span'} it, and "
+            f"{'that arm is' if len(also_spanning) == 1 else 'those arms are'} not part of "
+            "the refutation above; the verdict is read off each benchmark's best arm."
+        )
+        if also_spanning
+        else ""
+    )
     return [
         "",
         "**A correction, stated plainly because it was published the other way round for "
@@ -822,11 +854,12 @@ def _correction_paragraph(
         f"*uninformative* whenever the tuned-vs-random gap was under {NARROW_RANGE:g} recall, "
         f"and on that basis said {', '.join(f'`{b}`' for b in narrow)} could not distinguish "
         "a trained retriever from noise. That was wrong, and this study's own rows say so: "
-        f"of the control's paired intervals, {'; '.join(quoted)} — all excluding zero. The "
-        "gap between one seeded control and the best tuned score is a point estimate, not a "
-        "variance estimate, and it cannot be used as a significance test — least of all "
-        f"against measured intervals sitting in the same file. Only {unusable} genuinely "
-        "fails to separate.",
+        f"of the control's paired intervals, {'; '.join(quoted)} — all excluding zero."
+        + caveat
+        + " The gap between one seeded control and the best tuned score is a point "
+        "estimate, not a variance estimate, and it cannot be used as a significance test — "
+        f"least of all against measured intervals sitting in the same file. Only {unusable} "
+        "genuinely fails to separate.",
     ]
 
 
@@ -925,6 +958,7 @@ def _noise_floor_table(
     narrow: list[str] = []
     inverted: list[str] = []
     unpaired_rows: list[str] = []
+    unmeasured: list[str] = []
     for benchmark in benchmarks:
         control = _best_arm(base, CONTROL, benchmark)
         # sorted(), not the raw set: iteration order over a set of strings varies
@@ -957,7 +991,23 @@ def _noise_floor_table(
         # low-resolution, not blind.
         low = control.get("vs_reference_ci_low")
         high = control.get("vs_reference_ci_high")
-        separates = low is not None and high is not None and (low > 0 or high < 0)
+        # THREE outcomes, not two. An interval that was never measured is not an
+        # interval that failed to exclude zero, and collapsing them made a
+        # missing measurement read as a finding about the benchmark:
+        # ``merge_rows()`` clears the retained control's ``vs_reference_*`` when
+        # study B's reference is re-measured, and the prose downstream then said
+        # of that benchmark that "the control's paired interval does not exclude
+        # zero" — about a number nobody has. Unmeasured benchmarks are excluded
+        # from every blind/separates conclusion instead. (Cross-model review.)
+        if low is None or high is None:
+            verdict = "— **no control interval in these rows** (not measured, not a finding)"
+            unmeasured.append(benchmark)
+            table += (
+                f"| `{benchmark}` | {_fmt(floor)} | {_fmt(best['candidate_recall'])} "
+                f"(`{best['model']}`) | **{margin:+.4f}** | — | {verdict} |\n"
+            )
+            continue
+        separates = low > 0 or high < 0
         if not separates:
             verdict = "**cannot separate trained from random**"
             uninformative.append(benchmark)
@@ -995,6 +1045,16 @@ def _noise_floor_table(
             f"and the model in that cell**. The gap there is a point estimate spanning the "
             f"two studies; the interval beside it is about `{reference}` alone. Nothing in "
             f"this table is a significance test against the named best model.\n"
+        )
+    if unmeasured:
+        table += (
+            f"\n**{', '.join(f'`{b}`' for b in unmeasured)} carry no control interval in "
+            f"these rows**, so they appear in none of the verdicts below — neither as "
+            f"benchmarks that separate nor as benchmarks that cannot. `merge_rows()` clears "
+            f"a retained challenger's `vs_reference_*` when the reference is re-measured, "
+            f"and a bootstrap needs enough gold clusters; either way the absence is a "
+            f"missing measurement, not a result. Re-run the control on "
+            f"{'it' if len(unmeasured) == 1 else 'them'} to restore the evidence.\n"
         )
     return table, uninformative, informative, narrow, inverted
 
@@ -1875,12 +1935,21 @@ def render() -> str:
         "uv run python examples/research/lfm25_load_probe.py   # the loading artifact, on its own",
         "```",
         "",
-        "The driver refreshes the load probe **before** rendering, inside the same "
-        "measurement window as the rows, so the loading section and the scores describe "
-        "one environment. The standalone command exists for re-checking a checkpoint "
-        "without re-measuring; listing it *after* the render, as this block used to, told "
-        "readers to refresh the probe once the document quoting it had already been "
-        "written.",
+        # Prospective ("a sweep run this way produces"), never retrospective
+        # ("these artifacts are"). Stated as fact it contradicted THIS document:
+        # the loading section above already warns that the committed probe
+        # postdates the measurement window, and eight paragraphs later the same
+        # file asserted the two describe one environment. A generated document
+        # that argues with itself is worse than one that admits the gap.
+        # (Cross-model review.)
+        "Run that way, the driver refreshes the load probe **before** rendering and inside "
+        "the same measurement window as the rows, so the loading section and the scores "
+        "describe one environment. **Whether that holds for the artifacts committed here is "
+        "a separate question, answered by the loading section itself** — it compares the "
+        "probe's `captured_at` against both ends of the window and says so when they do not "
+        "line up. The standalone command exists for re-checking a checkpoint without "
+        "re-measuring; listing it *after* the render, as this block used to, told readers "
+        "to refresh the probe once the document quoting it had already been written.",
         "",
         "There is **no skip-completed logic**: `merge_rows()` replaces a re-measured "
         "cell, and re-measuring the reference model clears every other model's "

@@ -105,7 +105,7 @@ class TestAClosedWindowStaysClosed:
 
         doc = json.loads(path.read_text())
         assert doc["window_complete"] is False
-        assert "ABORTED" in doc["partial_note"]
+        assert "does NOT cover every row" in doc["partial_note"]
 
     def test_a_missing_sidecar_says_to_run_start(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit, match="run --start"):
@@ -486,3 +486,101 @@ class TestThePreflightCoversWhatTheDriverOverwrites:
         assert driver.index('LOAD_PROBE_JSON="docs/research/') < driver.index(
             'GUARDED_ARTIFACTS="$LOAD_PROBE_JSON'
         )
+
+
+class TestDataIsCodeInTheDigest:
+    """Every subprocess in a granular sweep reloads the tracked benchmark CSVs.
+
+    A ``.py``-only digest certified a sweep unchanged across an edited corpus,
+    and the report's population guard compares record COUNTS -- so a same-sized
+    replacement passed there too. There was no check anywhere that could see it.
+    """
+
+    def test_the_benchmark_corpora_are_inside_a_tracked_tree(self) -> None:
+        datasets = Path(PROV.REPO_ROOT) / "src" / "langres" / "data" / "datasets"
+
+        assert datasets.exists()
+        assert any(
+            str(datasets).startswith(str(Path(PROV.REPO_ROOT) / t)) for t in PROV.TRACKED_TREES
+        )
+
+    def test_csv_inputs_are_digested(self) -> None:
+        assert ".csv" in PROV.DIGESTED_SUFFIXES
+        assert ".py" in PROV.DIGESTED_SUFFIXES
+
+    def test_editing_a_corpus_changes_the_digest(self, tmp_path: Path) -> None:
+        """The property the whole mechanism rests on, exercised rather than assumed."""
+        corpus = (
+            Path(PROV.REPO_ROOT)
+            / "src"
+            / "langres"
+            / "data"
+            / "datasets"
+            / "fodors_zagat"
+            / "fodors.csv"
+        )
+        assert corpus.exists(), "the corpus this test edits must exist, or it proves nothing"
+        original = corpus.read_bytes()
+        before = PROV._tree_digest()["src/langres"]
+        try:
+            corpus.write_bytes(original + b"\n")
+            after = PROV._tree_digest()["src/langres"]
+        finally:
+            corpus.write_bytes(original)
+
+        assert after != before
+        assert PROV._tree_digest()["src/langres"] == before, "the test must leave no trace"
+
+    def test_hashing_is_batched(self) -> None:
+        """~500 subprocesses per snapshot, and verify() snapshots before every model."""
+        paths = [Path(PROV.REPO_ROOT) / "pyproject.toml", Path(PROV.REPO_ROOT) / "README.md"]
+
+        hashes = PROV._hash_many(paths)
+
+        assert len(hashes) == 2
+        assert hashes[0] == PROV._worktree_blob("pyproject.toml")
+
+    def test_an_empty_batch_is_not_a_git_call(self) -> None:
+        assert PROV._hash_many([]) == []
+
+
+class TestTheResumeOwnsAProvenanceWindow:
+    """A closed window is a deliberate no-op for --verify, which is how the standing
+    portfolio ladder publishes with no provenance at all.
+
+    A resume runs AFTER the original sweep closed, so routing it through the
+    guarded driver was not enough: the re-measured row would be committed and
+    pushed with the only window describing it having ended before it was
+    produced.
+    """
+
+    @staticmethod
+    def _resume() -> str:
+        return (
+            Path(PROV.REPO_ROOT) / "examples" / "research" / "resume_lfm25_study_a.sh"
+        ).read_text()
+
+    def test_it_opens_and_closes_its_own_window(self) -> None:
+        resume = self._resume()
+
+        assert "write_provenance.py --start --studies a" in resume
+        assert "write_provenance.py --finish --partial" in resume
+
+    def test_it_requires_the_window_to_be_open(self) -> None:
+        assert "export LADDER_PROVENANCE_REQUIRED=1" in self._resume()
+
+    def test_it_commits_the_window_at_both_ends(self) -> None:
+        """An open window that dies with the worktree describes nothing."""
+        resume = self._resume()
+
+        assert resume.count('git add "$PROVENANCE_JSON"') == 2
+
+    def test_the_partial_note_does_not_assert_an_abort(self, tmp_path: Path) -> None:
+        """A resume is a deliberate, successful run; only its SCOPE is partial."""
+        path = _sidecar(tmp_path)
+
+        PROV.finish(path, partial=True)
+
+        note = json.loads(path.read_text())["partial_note"]
+        assert "does NOT cover every row" in note
+        assert "ABORTED" not in note

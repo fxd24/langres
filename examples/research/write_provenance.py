@@ -70,6 +70,16 @@ ENVIRONMENT = ("uv.lock",)
 #: "unchanged". (Cross-model review.)
 TRACKED_TREES = ("src/langres", "examples/research")
 
+#: Which files inside those trees the digest covers. **Not just ``.py``.** Every
+#: subprocess in a granular sweep reloads the tracked benchmark CSVs under
+#: ``src/langres/data/datasets``, and those are the measurement's *inputs* —
+#: edit one between cells and every source hash still compares equal, so
+#: ``verify()`` and ``finish()`` both certify a mixed-data sweep as unchanged.
+#: The report's population guard cannot catch it either: it compares
+#: ``n_records``/``n_gold_pairs``, which are cardinalities, so a same-sized
+#: replacement passes. Data is code here. (Cross-model review.)
+DIGESTED_SUFFIXES = (".py", ".csv", ".tsv", ".json", ".jsonl", ".txt")
+
 #: What the dirty check looks at. **Derived, not a second hand-kept list.** The
 #: check ran over ``TRACKED_TREES`` alone, whose scopes are directories — so
 #: ``pyproject.toml``, tracked individually at the repo root, fell outside it: an
@@ -141,14 +151,42 @@ def _worktree_blob(path: str) -> str:
     return "absent"
 
 
+def _hash_many(paths: list[Path]) -> list[str]:
+    """Blob hashes for many files in ONE ``git hash-object`` call.
+
+    Per-file would be ~500 subprocesses per snapshot once the benchmark CSVs are
+    in scope, and ``verify()`` runs a snapshot before every model's publication.
+    Batching keeps the digest a second rather than a minute. Order is preserved
+    by git, one hash per line.
+    """
+    if not paths:
+        return []
+    result = subprocess.run(
+        ["git", "hash-object", "--", *[str(p) for p in paths]],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    hashes = result.stdout.split()
+    if result.returncode != 0 or len(hashes) != len(paths):
+        # A file vanished between the glob and the hash, or git failed. Fall back
+        # to per-file, which distinguishes "deleted" from "broken" and never
+        # silently shortens the list -- a short list would shift every subsequent
+        # pairing and change the digest for reasons unrelated to the content.
+        return [_worktree_blob(str(p.relative_to(REPO_ROOT))) for p in paths]
+    return hashes
+
+
 def _tree_digest() -> dict[str, str]:
-    """One digest per tracked tree, over the working-tree contents of its .py files."""
+    """One digest per tracked tree, over the working-tree contents of its digested files."""
     digests: dict[str, str] = {}
     for tree in TRACKED_TREES:
         root = REPO_ROOT / tree
+        files = sorted(p for p in root.rglob("*") if p.suffix in DIGESTED_SUFFIXES and p.is_file())
         parts = [
-            f"{p.relative_to(REPO_ROOT)}:{_worktree_blob(str(p.relative_to(REPO_ROOT)))}"
-            for p in sorted(root.rglob("*.py"))
+            f"{p.relative_to(REPO_ROOT)}:{blob}"
+            for p, blob in zip(files, _hash_many(files), strict=True)
         ]
         digests[tree] = hashlib.sha256("\n".join(parts).encode()).hexdigest()
     return digests
@@ -237,9 +275,13 @@ COMMENT = [
     "path -- never derived from HEAD at render time, which would name whatever is",
     "checked out now rather than what measured the rows, and would silently",
     "reattribute every row after the next harness commit. Not stale: false.",
-    "`tree_digests` covers every .py under the tracked trees, because naming two",
-    "files is not the measurement's code identity: the harness executes blockers,",
-    "indexes, embedders and metrics that can change what a row means.",
+    "`tree_digests` covers every source AND DATA file under the tracked trees,",
+    "because naming two files is not the measurement's code identity: the harness",
+    "executes blockers, indexes, embedders and metrics that can change what a row",
+    "means, and it reads the tracked benchmark CSVs that ARE the measurement's",
+    "input. A .py-only digest certified a sweep unchanged across an edited corpus,",
+    "and the report's population guard compares record COUNTS, so a same-sized",
+    "replacement passed there too.",
     "`verified_unchanged_during_run` compares the START and FINISH snapshots. It is",
     "an ENDPOINT check, not a continuous one: a file edited during the sweep, used",
     "by some cells, and restored before --finish would leave both endpoints equal",
@@ -395,8 +437,15 @@ def finish(output: Path, partial: bool = False) -> None:
     # from its intent. (Cross-model review.)
     doc["window_complete"] = not partial
     if partial:
+        # Worded for BOTH callers. It said "the sweep ABORTED", which is one
+        # reason a window can be partial; a RESUME is the other, and it is a
+        # deliberate, successful run measuring one cell on purpose. The property
+        # the report needs is identical either way -- this window does not cover
+        # every row in the studies it names -- and stating a cause the driver did
+        # not report is a claim, not a caveat. (Cross-model review.)
         doc["partial_note"] = (
-            "The sweep ABORTED before finishing every planned study. "
+            "This window does NOT cover every row in the studies it names — the run "
+            "aborted, or deliberately re-measured only part of one. "
             "`studies_measured` is what was planned, not what was reached: rows "
             "left untouched by this run predate the window described here."
         )

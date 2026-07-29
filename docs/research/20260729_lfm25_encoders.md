@@ -312,6 +312,6 @@ LFM25_STUDY=b bash examples/research/run_lfm25.sh     # just the base-encoder st
 uv run python examples/research/lfm25_load_probe.py   # the loading artifact, on its own
 ```
 
-The driver refreshes the load probe **before** rendering, inside the same measurement window as the rows, so the loading section and the scores describe one environment. The standalone command exists for re-checking a checkpoint without re-measuring; listing it *after* the render, as this block used to, told readers to refresh the probe once the document quoting it had already been written.
+Run that way, the driver refreshes the load probe **before** rendering and inside the same measurement window as the rows, so the loading section and the scores describe one environment. **Whether that holds for the artifacts committed here is a separate question, answered by the loading section itself** — it compares the probe's `captured_at` against both ends of the window and says so when they do not line up. The standalone command exists for re-checking a checkpoint without re-measuring; listing it *after* the render, as this block used to, told readers to refresh the probe once the document quoting it had already been written.
 
 There is **no skip-completed logic**: `merge_rows()` replaces a re-measured cell, and re-measuring the reference model clears every other model's `vs_reference_*` on the benchmarks it touches. Re-running a finished study is a re-do, not a resume — use `LFM25_STUDY` to name the part that is missing.

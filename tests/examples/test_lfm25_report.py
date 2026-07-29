@@ -484,11 +484,12 @@ class TestNoiseFloor:
         """
         base = REPORT._read_rows(REPORT.BASE_ROWS)
 
-        intervals = REPORT._control_intervals(base, "walmart_amazon")
+        excluding, spanning = REPORT._control_intervals(base, "walmart_amazon")
 
         # The fixture's control interval on walmart_amazon is [-0.03, -0.01].
-        assert intervals == ["`[-0.0300, -0.0100]`"]
-        assert "".join(intervals).strip("`") in REPORT.render()
+        assert excluding == ["`[-0.0300, -0.0100]`"]
+        assert spanning == []
+        assert "".join(excluding).strip("`") in REPORT.render()
 
     def test_no_correction_is_printed_when_nothing_was_misclassified(self, artifacts: Path) -> None:
         """Do not retract a claim about a benchmark this run did not measure."""
@@ -1347,3 +1348,134 @@ class TestInvertedDirectionIsNotAssumed:
         # the cross-study gap is inverted. Calling that interval wrong-sided is
         # the claim this test exists to block.
         assert REPORT._control_direction(base, "inv_bm") == "below"
+
+
+class TestAMissingControlIntervalIsNotAFinding:
+    """``merge_rows()`` CLEARS the retained control's interval when the reference moves.
+
+    Both bounds are then ``None`` — the same shape as "the interval contains
+    zero", and the earlier code collapsed the two. A benchmark whose control was
+    never measured was published as one that *cannot separate a trained
+    retriever from random weights*, with prose asserting an interval nobody has.
+    """
+
+    @staticmethod
+    def _rows() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        tuned = [_row("intfloat/e5-base-v2", "cleared_bm", candidate_recall=0.85)]
+        base = [
+            _row(
+                REPORT.CONTROL,
+                "cleared_bm",
+                candidate_recall=0.20,
+                reference_model=REPORT.BASE_BASELINE,
+            )
+        ]
+        return tuned, base
+
+    def test_it_is_not_counted_as_blind(self) -> None:
+        tuned, base = self._rows()
+
+        _table, uninformative, informative, narrow, inverted = REPORT._noise_floor_table(
+            tuned, base
+        )
+
+        assert uninformative == []
+        assert informative == []
+        assert narrow == []
+        assert inverted == []
+
+    def test_the_table_says_it_was_not_measured(self) -> None:
+        tuned, base = self._rows()
+
+        table, *_ = REPORT._noise_floor_table(tuned, base)
+
+        assert "no control interval in these rows" in table
+        assert "a missing measurement, not a result" in table
+
+    def test_a_measured_interval_is_still_classified(self) -> None:
+        """The guard must not swallow the benchmarks that do carry evidence."""
+        tuned, base = self._rows()
+        base[0]["vs_reference_ci_low"] = -0.70
+        base[0]["vs_reference_ci_high"] = -0.50
+
+        _table, _uninformative, informative, _narrow, _inverted = REPORT._noise_floor_table(
+            tuned, base
+        )
+
+        assert informative == ["cleared_bm"]
+
+
+class TestTheCorrectionQuotesOnlyWhatItClaims:
+    """A benchmark enters ``narrow`` on its BEST arm's interval alone.
+
+    ``_control_intervals`` returned every arm, so a second arm spanning zero was
+    printed immediately before "all excluding zero" — the claim falsified by a
+    number on the same line.
+    """
+
+    @staticmethod
+    def _base() -> list[dict[str, Any]]:
+        return [
+            _row(
+                REPORT.CONTROL,
+                "bm",
+                prompt_arm="none",
+                candidate_recall=0.86,
+                vs_reference_ci_low=-0.03,
+                vs_reference_ci_high=-0.01,
+                reference_model=REPORT.BASE_BASELINE,
+            ),
+            _row(
+                REPORT.CONTROL,
+                "bm",
+                prompt_arm="instruct",
+                candidate_recall=0.80,
+                vs_reference_ci_low=-0.04,
+                vs_reference_ci_high=0.02,
+                reference_model=REPORT.BASE_BASELINE,
+            ),
+        ]
+
+    def test_the_two_groups_are_separated(self) -> None:
+        excluding, spanning = REPORT._control_intervals(self._base(), "bm")
+
+        assert excluding == ["`[-0.0300, -0.0100]`"]
+        assert spanning == ["`[-0.0400, +0.0200]`"]
+
+    def test_the_spanning_arm_is_disclosed_not_dropped(self) -> None:
+        """Filtering it out silently would make the claim true by hiding the counterexample."""
+        paragraph = "\n".join(REPORT._correction_paragraph(self._base(), [], ["bm"]))
+
+        assert "all excluding zero" in paragraph
+        assert "Not every arm clears zero" in paragraph
+        assert "`[-0.0400, +0.0200]`" in paragraph
+
+    def test_no_caveat_when_every_arm_clears_zero(self) -> None:
+        base = [row for row in self._base() if row["prompt_arm"] == "none"]
+
+        paragraph = "\n".join(REPORT._correction_paragraph(base, [], ["bm"]))
+
+        assert "all excluding zero" in paragraph
+        assert "Not every arm clears zero" not in paragraph
+
+
+class TestTheOneEnvironmentClaimIsProspective:
+    """The report warned the probe postdates the window, then said they match.
+
+    A generated document that argues with itself is worse than one that admits
+    the gap.
+    """
+
+    def test_the_claim_defers_to_the_loading_section(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "Run that way, the driver refreshes the load probe" in report
+        assert "is a separate question, answered by the loading section itself" in report
+
+    def test_the_committed_report_no_longer_contradicts_its_own_warning(self) -> None:
+        """Read off the real artifact, which is where the contradiction shipped."""
+        published = (REPORT.OUTPUT).read_text()
+
+        if "postdates the measurement window" in published:
+            assert "so the loading section and the scores describe one environment." in published
+            assert "Whether that holds for the artifacts committed here" in published
