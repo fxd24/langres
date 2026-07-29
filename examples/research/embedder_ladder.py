@@ -59,6 +59,7 @@ import argparse
 import json
 import logging
 import random
+import shlex
 import sys
 import time
 from collections.abc import Sequence
@@ -139,6 +140,62 @@ class ModelSpec:
     #: Apache-2.0, so a ladder that ranks checkpoints without stating whether the
     #: winner may be shipped as a default is ranking on the wrong axis.
     license: str = "unknown"
+    #: The ``transformers`` auto class that actually holds this checkpoint's
+    #: weights, when ``AutoModel`` — the class sentence-transformers uses — does
+    #: **not**. ``None`` means the normal path is correct, which is the case for
+    #: every checkpoint here except the LFM2.5 base encoders.
+    #:
+    #: This exists because of a measured silent failure, not a hypothetical one.
+    #: ``LiquidAI/LFM2.5-Encoder-350M`` stores its tensors under the MaskedLM
+    #: wrapper's ``lfm2.`` prefix, and its remote ``Lfm2BidirectionalModel``
+    #: expects them unprefixed, so ``AutoModel.from_pretrained`` matches **zero**
+    #: of the checkpoint's 148 tensors (``missing=148 unexpected=148``) and
+    #: randomly initialises the entire backbone. transformers logs that as a
+    #: warning, not an error: the model then loads, embeds, and returns finite,
+    #: unit-norm, prompt-responsive, *random* vectors. Measuring it would have
+    #: published a low score for a network that was never loaded.
+    #:
+    #: Naming the class here recovers the real weights via
+    #: ``base_model``, which strips the prefix using the wrapper's own
+    #: ``base_model_prefix`` — so this is one generic line, not a per-checkpoint
+    #: key-renaming table. ``_preflight_backbone`` verifies the result loaded
+    #: cleanly (``missing_keys == []``) rather than trusting it.
+    backbone_auto_class: str | None = None
+    #: Whether this checkpoint was **trained to produce sentence embeddings**.
+    #: ``False`` marks a base masked-LM encoder that ships no pooling
+    #: configuration, so sentence-transformers attaches an *untrained* mean
+    #: pooling head over it.
+    #:
+    #: Such a model is not comparable with a retrieval-tuned one, and this flag
+    #: exists so a reader cannot mistake its score for "this backbone is bad".
+    #: The ladder report refuses to rank across this boundary; the base encoders
+    #: are measured into their own artifact, against the tuned checkpoint that
+    #: shares their backbone, where the delta means "what retrieval tuning
+    #: bought" instead of "which model is better".
+    tuned_for_retrieval: bool = True
+    #: The Hugging Face id to LOAD, when it differs from the row's display
+    #: ``name``. Lets one checkpoint be measured under two configurations —
+    #: specifically the random-init control below, which must not collide with
+    #: the real checkpoint's rows.
+    checkpoint: str | None = None
+    #: Build the backbone from the checkpoint's **config only**, with weights
+    #: randomly initialised from a fixed seed — deliberately, as a **noise
+    #: floor**, not as an accident.
+    #:
+    #: This is a control arm, and it earns its place from a measurement. A
+    #: randomly initialised 350M backbone scored **0.9911 candidate recall and
+    #: 0.9971 separability AUC on ``fodors_zagat``**. A random transformer is a
+    #: random feature map, and on a benchmark of near-duplicate strings that is
+    #: enough — so a benchmark where the control scores near the tuned models
+    #: cannot distinguish a trained retriever from noise, and no embedder claim
+    #: may rest on it. Running the control on every benchmark turns that from an
+    #: anecdote into a per-benchmark statement about which ones carry signal.
+    random_init: bool = False
+
+    @property
+    def hf_id(self) -> str:
+        """The checkpoint to load. ``name`` is the identity of the ROW, not of the weights."""
+        return self.checkpoint or self.name
 
 
 #: Licences that are OSI-approved, so a langres default carrying one adds no
@@ -151,6 +208,91 @@ OSI_APPROVED_LICENSES: frozenset[str] = frozenset({"apache-2.0", "mit", "bsd-3-c
 def _is_osi(spec: ModelSpec) -> bool:
     """Whether ``spec``'s declared licence is on the OSI allow list."""
     return spec.license in OSI_APPROVED_LICENSES
+
+
+def _reference_role() -> str:
+    """How to describe the reference model, checked against the REAL default.
+
+    Two sentences asserted the reference "was ``DEFAULT_EMBEDDING_MODEL`` when
+    these rows were measured". That is true for the portfolio ladder and FALSE for
+    any study naming its own baseline — study B's reference is `lfm1.0`-licensed,
+    and the same report says four sections later that the actual default is
+    ``intfloat/e5-base-v2``. A standalone reader of that artifact was told a
+    non-OSI checkpoint had once shipped as the default. Read from the source of
+    truth instead of asserted. (Cross-model review.)
+    """
+    from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
+
+    if REFERENCE_MODEL == DEFAULT_EMBEDDING_MODEL:
+        return "this ladder's reference model, and langres's current `DEFAULT_EMBEDDING_MODEL`"
+    return (
+        f"this study's chosen baseline — **not** the shipped default, which is "
+        f"`{DEFAULT_EMBEDDING_MODEL}`"
+    )
+
+
+def _opt_in_snippet(spec: ModelSpec) -> str:
+    """The loader a reader should actually use for ``spec``.
+
+    The generic renderer published ``SentenceTransformerEmbedder(name)`` for every
+    restricted checkpoint. For the base masked-LM encoders that line is the *bug
+    this study documents*: they ship no pooling config and their weights live
+    under ``AutoModelForMaskedLM``, so the ordinary path silently random-initialises
+    the backbone and returns plausible-looking numbers from an untrained network.
+    Publishing it as the opt-in instruction hands the reader the failure mode the
+    report spends a section warning about. (Cross-model review.)
+    """
+    if spec.backbone_auto_class is None:
+        return (
+            "  # opt in explicitly, having read the licence\n"
+            f'  SentenceTransformerEmbedder("{spec.name}")\n'
+        )
+    return (
+        "  # opt in explicitly, having read the licence.\n"
+        "  # NOT SentenceTransformerEmbedder(...) on its own: this checkpoint ships no\n"
+        f"  # pooling config and its weights live under {spec.backbone_auto_class}, so the\n"
+        "  # ordinary path silently RANDOM-INITIALISES the backbone and still returns\n"
+        "  # plausible numbers. Load the backbone through the class that owns the weights\n"
+        "  # and attach pooling yourself -- and note that pooling head is untrained.\n"
+        f"  # See this report's load-probe section for what that costs.\n"
+        f"  transformers.{spec.backbone_auto_class}.from_pretrained(\n"
+        f'      "{spec.checkpoint or spec.name}", trust_remote_code={spec.trust_remote_code}\n'
+        f"  )\n"
+    )
+
+
+#: What each non-OSI licence actually restricts, keyed by the identifier the
+#: checkpoint itself declares. Hard-coded into the sentence, "in Gemma's case a
+#: prohibited-use policy" was rendered for every restricted model — so the
+#: LiquidAI `lfm1.0` rows described the wrong licence entirely, in the one
+#: paragraph a reader consults for a legal decision.
+#:
+#: Unknown identifiers get NO invented specifics: an unrecognised licence must
+#: send the reader to the text, not to a guess. That is the allow-list direction
+#: — this table can only ever be silent about a licence it does not know, never
+#: wrong about one.
+LICENCE_RESTRICTIONS: dict[str, str] = {
+    "gemma": (
+        "a prohibited-use policy that survives redistribution, which Apache-2.0 does not impose."
+    ),
+    "lfm1.0": (
+        "the LFM Open License v1.0, whose §5 conditions **Commercial Use** on the user's "
+        "legal entity staying under $10M annual revenue (§5(c) exempts a qualified "
+        "non-profit's non-commercial or research use). Apache-2.0 imposes no such "
+        "condition, so this cannot be a default — see the licence section of "
+        "`20260729_lfm25_encoders.md`, which quotes the clauses from the committed "
+        "LICENSE file."
+    ),
+}
+
+
+def _licence_restriction(license_id: str) -> str:
+    """The named restriction for ``license_id``, or a pointer to the text."""
+    return LICENCE_RESTRICTIONS.get(
+        license_id,
+        f"this report does not summarise `{license_id}`, so read the checkpoint's own "
+        "LICENSE before shipping it; Apache-2.0's terms do not carry over to it.",
+    )
 
 
 #: Listed in roughly ascending expected size so a truncated sweep still covers
@@ -206,7 +348,95 @@ MODELS: tuple[ModelSpec, ...] = (
     ModelSpec("Qwen/Qwen3-Embedding-8B", dtype="float16", batch_size=4, license="apache-2.0"),
 )
 
-MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in MODELS}
+#: Checkpoints this harness knows how to configure but that are **not** part of
+#: the standing ladder above. Kept separate on purpose: adding them to ``MODELS``
+#: would enlarge the 2026-07-27 ladder's coverage denominator and make its report
+#: enumerate three models that sweep never intended to measure. They are measured
+#: into their own artifacts (``--rows``/``--report``/``--reference``), and
+#: ``MODELS_BY_NAME`` carries their full spec so ``--models`` resolves the
+#: licence, prompts and loading path rather than falling back to a bare
+#: ``ModelSpec``.
+#:
+#: All three declare ``license: other`` / ``license_name: lfm1.0`` on their own
+#: model cards, verified on 2026-07-29 against each repo's ``LICENSE`` file (not
+#: the card summary): the LFM Open License v1.0 conditions Commercial Use on not
+#: exceeding a **$10,000,000 annual revenue Threshold** (§3 defines it, §5(a)–(b)
+#: condition the grant on it). That is a use restriction Apache-2.0 does not
+#: have, so ``lfm1.0`` is deliberately absent from ``OSI_APPROVED_LICENSES``.
+EXTRA_SPECS: tuple[ModelSpec, ...] = (
+    # The retrieval-tuned one, and the only like-for-like comparison here. Its
+    # prompts are read from its own `config_sentence_transformers.json`
+    # ("query: " / "document: "), not from the model card prose. Note the pooling
+    # is CLS (`1_Pooling/config.json`: pooling_mode_cls_token) with
+    # `include_prompt: true`, which is what makes `build_prompted_index`'s
+    # hand-prefixing equivalent to binding `prompt_name=`.
+    ModelSpec(
+        "LiquidAI/LFM2.5-Embedding-350M",
+        trust_remote_code=True,
+        documented_arm=("document: ", "query: "),
+        license="lfm1.0",
+    ),
+    # Base masked-LM encoders. NOT embedding models: they ship no pooling config,
+    # so sentence-transformers attaches an untrained mean-pooling head. Both need
+    # `backbone_auto_class` or `AutoModel` silently randomises every weight.
+    ModelSpec(
+        "LiquidAI/LFM2.5-Encoder-350M",
+        trust_remote_code=True,
+        backbone_auto_class="AutoModelForMaskedLM",
+        tuned_for_retrieval=False,
+        license="lfm1.0",
+    ),
+    ModelSpec(
+        "LiquidAI/LFM2.5-Encoder-230M",
+        trust_remote_code=True,
+        backbone_auto_class="AutoModelForMaskedLM",
+        tuned_for_retrieval=False,
+        license="lfm1.0",
+    ),
+    # The noise floor. Same architecture as the 350M pair, no trained weights at
+    # all. Its recall is what this benchmark hands to a model that knows nothing,
+    # so it is the only number that says whether a benchmark can separate signal
+    # from noise. Named for what it IS, so no reader mistakes the row for a
+    # LiquidAI checkpoint.
+    ModelSpec(
+        "random-init-control-350M",
+        checkpoint="LiquidAI/LFM2.5-Encoder-350M",
+        trust_remote_code=True,
+        random_init=True,
+        tuned_for_retrieval=False,
+        license="lfm1.0",
+    ),
+)
+
+MODELS_BY_NAME: dict[str, ModelSpec] = {spec.name: spec for spec in (*MODELS, *EXTRA_SPECS)}
+
+#: The ladder THIS run is accountable for — the denominator of "what did not
+#: run". Defaults to the standing :data:`MODELS`; ``main()`` rebinds it from
+#: ``--models`` so a run measuring a different set into its own artifact does not
+#: report the standing ladder's absent models as gaps in it.
+LADDER: tuple[ModelSpec, ...] = MODELS
+
+#: Artifact path prefix for the study being rendered, set from ``--report`` in
+#: :func:`main`. The report's own reproduce commands are built from it, so they
+#: name the artifacts of the file they appear in rather than the defaults.
+ARTIFACT_PREFIX: str = "docs/research/20260727_embedder_ladder"
+
+
+def _is_portfolio_ladder() -> bool:
+    """Is this render the standing 2026-07-27 ladder, or a study reusing the harness?
+
+    Two blocks in this generator are *history*, not measurement: the correction to
+    the merged #239 PR body, and the pilot claim that motivated the ladder. Both
+    are about one document. Emitted unconditionally they interpolated the current
+    study's headline into a sentence about a different PR — study B's report told
+    readers that #239 had described `LFM2.5-Encoder-350M`'s ``-0.0536`` as
+    query-only, and claimed to re-measure two models absent from its own rows.
+    (Cross-model review.)
+
+    Derived from the module defaults rather than a typed date, so the two cannot
+    drift apart.
+    """
+    return ARTIFACT_PREFIX == str(DEFAULT_REPORT_PATH.relative_to(REPO_ROOT)).removesuffix(".md")
 
 
 def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
@@ -227,8 +457,9 @@ def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
     badly must not shrink the ladder it was measured against. (Cross-model
     review.)
     """
-    extra = sorted({row.model for row in rows} - set(MODELS_BY_NAME))
-    return [*MODELS, *(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in extra)]
+    known = {spec.name for spec in LADDER}
+    extra = sorted({row.model for row in rows} - known)
+    return [*LADDER, *(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in extra)]
 
 
 #: ``fodors_zagat`` is the never-regress floor (small, long-solved); the other
@@ -279,10 +510,25 @@ METRIC_REVISION = 1
 #: file, and a CI at every `k` would quadruple it to answer the same question.
 CI_K = 20
 
-#: The baseline every model's delta is measured against: langres's current
-#: `DEFAULT_EMBEDDING_MODEL` (`core/model_ref.py`). A ladder's decision-relevant
-#: question is "is this better than what ships today?", so the default IS the
-#: baseline. This sweep does not change that default.
+#: The baseline every model's delta is measured against. A ladder's
+#: decision-relevant question is "is this better than what ships today?", so the
+#: shipped default is the natural baseline. This sweep does not change that
+#: default.
+#:
+#: **This constant is the 2026-07-27 ladder's baseline, and it is no longer the
+#: shipped default.** That sweep ran when `DEFAULT_EMBEDDING_MODEL` was
+#: `all-MiniLM-L6-v2`; the default is now `intfloat/e5-base-v2`
+#: (`core/model_ref.py`, set by the sweep itself). The value is deliberately NOT
+#: updated in place: every `vs_reference_*` number in
+#: `20260727_embedder_ladder_rows.jsonl` was computed against this model, and
+#: re-pointing the constant would relabel that column without recomputing it —
+#: two baselines in one column, which is the exact failure `METRIC_REVISION`
+#: exists to prevent.
+#:
+#: A run that wants a different baseline passes `--reference-model` and writes to
+#: its own `--rows`/`--reference` pair. `LadderRow.reference_model` records which
+#: baseline produced each delta, and `_assert_one_reference_model` refuses to
+#: render a file that mixes two.
 REFERENCE_MODEL = "all-MiniLM-L6-v2"
 
 
@@ -350,6 +596,15 @@ class LadderRow:
     #: The honest denominator: it is NOT the record count, because pair rows
     #: inside one entity are dependent.
     ci_clusters: int | None = None
+    #: Which baseline ``vs_reference_delta`` is measured against. Recorded per
+    #: row, not inferred from the module constant at render time, because
+    #: ``--reference-model`` makes that constant a property of the RUN while the
+    #: delta is a property of the ROW. Rendering a file whose rows were measured
+    #: against one baseline while the flag names another would silently relabel
+    #: the column; ``_assert_one_reference_model`` refuses instead. ``None`` on
+    #: rows carrying no reference delta, and on rows measured before this field
+    #: existed (they are all ``all-MiniLM-L6-v2``, which is the default).
+    reference_model: str | None = None
     #: Saturation is measured by a SEPARATE stream; never restate it as measured here.
     saturation: str = "not measured here"
     error: str | None = None
@@ -580,6 +835,47 @@ def paired_interval(baseline: RecallByRecord, candidate: RecallByRecord) -> Any 
     return paired_entity_bootstrap(observations, seed=SEED)
 
 
+def _assert_one_reference_model(rows: Sequence[LadderRow]) -> None:
+    """Refuse to render a file whose deltas are against more than one baseline.
+
+    ``--reference-model`` makes the baseline a property of the RUN, while
+    ``vs_reference_delta`` is a property of the ROW. Nothing else stops a rows
+    file measured against one baseline from being re-rendered under a flag naming
+    another — the numbers would not change, only the label above them, and the
+    report would read as a comparison nobody performed.
+
+    Rows written before ``reference_model`` existed carry ``None`` and are taken
+    at their word as :data:`REFERENCE_MODEL`'s default value, which is what they
+    were measured against.
+    """
+    # `is not None`, NOT truthiness: a delta of exactly 0.0 is falsy, and exact
+    # zeros are common -- every model ties on a saturated benchmark, where the
+    # committed rows carry +0.0000. Under truthiness a file whose only
+    # comparisons are those zeros yields an EMPTY `seen`, returns early, and
+    # renders happily under whatever --reference-model was passed, relabelling
+    # the delta column without recomputing it. That is this guard failing open
+    # on precisely the rows it exists to police. (Cross-model review.)
+    seen = {
+        row.reference_model or "all-MiniLM-L6-v2"
+        for row in rows
+        if row.vs_reference_delta is not None
+    }
+    if not seen:
+        return
+    if len(seen) > 1:
+        raise ValueError(
+            f"these rows carry deltas against {len(seen)} different baselines "
+            f"({sorted(seen)}). One report cannot label one column with two baselines; "
+            f"re-measure the odd ones out, or split them into separate --rows files."
+        )
+    if (only := seen.pop()) != REFERENCE_MODEL:
+        raise ValueError(
+            f"these rows were measured against {only!r}, but this run's reference model is "
+            f"{REFERENCE_MODEL!r}. Rendering would relabel the delta column without "
+            f"recomputing it. Pass --reference-model {only!r}, or re-measure."
+        )
+
+
 def _reference_key(benchmark: str, arm: str) -> str:
     """Sidecar key for one reference cell.
 
@@ -732,6 +1028,13 @@ _CANARY_TOLERANCE = 1e-4
 #: refusal must never take that path: nothing is wrong with the recorded rows, the
 #: cache is what is suspect. 3 because 1 is an uncaught exception and 2 is argparse.
 EXIT_CACHE_INTEGRITY = 3
+
+#: argparse's own code for a bad invocation, named here because the driver has to
+#: treat it as a REFUSAL rather than a death. The pre-flight baseline check exits
+#: this way *before touching disk* -- so recording a failure row for it would
+#: delete valid, expensive rows and commit the deletion in response to a mistyped
+#: flag. A refusal that costs data is worse than no refusal. (Cross-model review.)
+EXIT_CONFIG = 2
 
 #: Sentinel for "every partition", distinct from ``None`` -- which is itself a
 #: real prompt value (the unprompted partition) and cannot double as "all".
@@ -927,6 +1230,226 @@ def _assert_cache_matches_checkpoint(
                 )
 
 
+class SilentlyWrongCheckpointError(RuntimeError):
+    """A checkpoint loaded successfully but not as its own config declares.
+
+    Distinct from "it did not load": these are the cases that produce finite,
+    plausible, **wrong** vectors and no error. A low score from one of them reads
+    as a fact about the model, so the run must stop instead of publishing it.
+    """
+
+
+def _assert_declared_architecture(spec: ModelSpec, auto_model: Any) -> None:
+    """The class that got instantiated must be the one the config's ``auto_map`` names.
+
+    ``trust_remote_code`` plus a ``model_type`` that transformers *also*
+    implements natively is a silent-wrong-vectors trap, and it is live on every
+    LFM2.5 checkpoint measured here. All three declare
+    ``model_type: "lfm2"`` — natively implemented in transformers 4.57.6 as a
+    **causal decoder** — while pointing ``auto_map.AutoModel`` at their own
+    bidirectional class. Measured on 2026-07-29 with
+    ``LiquidAI/LFM2.5-Embedding-350M``:
+
+    - ``trust_remote_code=True``  → ``Lfm2BidirectionalModel`` (remote), and a
+      prefix's hidden states change when later tokens change, i.e. bidirectional.
+    - ``trust_remote_code=False`` → ``transformers.models.lfm2.Lfm2Model``, the
+      native **causal** class. No exception, no warning. Because this checkpoint
+      pools the CLS (first) token and causal attention makes that token a
+      function of itself alone, *every text in the corpus collapses to the same
+      vector*: two unrelated products scored ``cos = 1.0000`` and the prompt
+      arms differed by exactly ``0``.
+
+    So the failure is not "slightly degraded". It is a constant embedding,
+    reported as a blocking recall, attributed to the model.
+    """
+    declared = (getattr(auto_model.config, "auto_map", None) or {}).get("AutoModel")
+    if not declared:
+        return
+    expected = declared.rsplit(".", 1)[-1]
+    actual = type(auto_model)
+    if actual.__qualname__ != expected or "transformers_modules" not in actual.__module__:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name} declares auto_map.AutoModel={declared!r}, but the loaded class is "
+            f"{actual.__module__}.{actual.__qualname__}. transformers implements this "
+            f"model_type ({auto_model.config.model_type!r}) natively, so it silently used its "
+            f"own class instead of the checkpoint's — a different attention pattern producing "
+            f"finite, plausible, WRONG vectors. Set trust_remote_code=True for this spec."
+        )
+
+
+def _preflight_backbone(spec: ModelSpec) -> Any | None:
+    """Verify the checkpoint's weights actually load, and recover them if needed.
+
+    ``from_pretrained`` reports a checkpoint/architecture key mismatch as a log
+    **warning** and carries on with randomly initialised tensors, which is a
+    silent wrong answer wearing the shape of a result. Measured on 2026-07-29,
+    ``AutoModel.from_pretrained("LiquidAI/LFM2.5-Encoder-350M")`` matched **zero**
+    of the checkpoint's 148 tensors — ``missing=148, unexpected=148``, the whole
+    backbone randomised — because the tensors are stored under the MaskedLM
+    wrapper's ``lfm2.`` prefix. The resulting model is finite, unit-norm and
+    prompt-responsive; two independent loads simply disagree, which is the only
+    externally visible symptom.
+
+    ``missing_keys`` is checked exactly rather than against a tolerance: the two
+    ordinary control checkpoints (``all-MiniLM-L6-v2``, ``intfloat/e5-base-v2``)
+    both report ``missing=0 unexpected=0``, so any missing key is a real signal
+    and no threshold is needed.
+
+    Returns:
+        The correctly loaded backbone module when ``spec.backbone_auto_class``
+        names one to substitute, else ``None``. Runs only for
+        ``trust_remote_code`` checkpoints — custom loading code is what gets the
+        prefix wrong, and an extra load for every ordinary model would be a cost
+        with no risk to buy off.
+    """
+    if not spec.trust_remote_code:
+        return None
+
+    import transformers
+
+    if spec.random_init:
+        # Config only, no weights, seeded. `from_config` is the EXPLICIT random
+        # path -- as opposed to the accidental one this harness already refuses,
+        # where a key-prefix mismatch randomises a backbone that was supposed to
+        # load. Seeded so the noise floor is a reproducible number rather than a
+        # different draw each run.
+        import torch
+
+        torch.manual_seed(SEED)
+        config = transformers.AutoConfig.from_pretrained(spec.hf_id, trust_remote_code=True)
+        backbone = transformers.AutoModel.from_config(config, trust_remote_code=True)
+        backbone.eval()
+        logger.info(
+            "%s: built a RANDOMLY INITIALISED %s from config (seed=%d) — this is the "
+            "noise floor, not a checkpoint",
+            spec.name,
+            type(backbone).__name__,
+            SEED,
+        )
+        return backbone
+
+    auto_class = getattr(transformers, spec.backbone_auto_class or "AutoModel")
+    model, info = auto_class.from_pretrained(
+        spec.hf_id, trust_remote_code=True, output_loading_info=True
+    )
+    missing = sorted(info.get("missing_keys", []))
+    if missing:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name} loaded via {auto_class.__name__} with {len(missing)} randomly "
+            f"initialised tensor(s) — the checkpoint's weights were NOT used for them "
+            f"(e.g. {missing[:3]}). transformers reports this as a warning and returns a "
+            f"usable model, so measuring it would publish a score for a network that was "
+            f"never loaded. If the weights live under a wrapper, set "
+            f"ModelSpec.backbone_auto_class to the class that owns them."
+        )
+    if spec.backbone_auto_class is None:
+        return None
+    backbone = model.base_model
+    if backbone is model:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: {auto_class.__name__} exposes no distinct base_model "
+            f"(base_model_prefix={model.base_model_prefix!r}), so there is no backbone to "
+            f"substitute for the randomly initialised one."
+        )
+    return backbone
+
+
+def _assert_prompt_is_live(base: Any, prompts: Sequence[str | None]) -> None:
+    """A prompted encode must actually move the vector.
+
+    langres has already shipped a bug where ``query_prompt`` was silently
+    discarded, and a prompt sweep over it would have returned identical rows at
+    every setting while reading as a finding about instructions. The same
+    signature appears when a checkpoint loads under the wrong architecture: a
+    CLS-pooled model under causal attention ignores the prompt *exactly*, which
+    is how ``LFM2.5-Embedding-350M`` without ``trust_remote_code`` measured
+    ``max|prompted - bare| == 0``.
+
+    An exact ``0`` is the assertion, not a tolerance: two different token
+    sequences through a working encoder never produce bit-identical vectors, and
+    a tolerance here would have to guess how small a real shift may be.
+    """
+    named = [prompt for prompt in prompts if prompt]
+    if not named:
+        return
+    bare = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+    for prompt in named:
+        shifted = np.asarray(base.encode([_CANARY_TEXT], prompt=prompt)[0], dtype=np.float64)
+        if shifted.shape != bare.shape or float(np.abs(shifted - bare).max()) == 0.0:
+            raise SilentlyWrongCheckpointError(
+                f"encoding with prompt={prompt!r} produced a vector identical to the bare "
+                f"one, so the prompt reached nothing. Every prompt arm would report the "
+                f"bare arm's numbers under a different name."
+            )
+
+
+def _substitute_backbone(spec: ModelSpec, base: Any, st_model: Any, backbone: Any) -> None:
+    """Put the correctly loaded weights where sentence-transformers will actually call them.
+
+    **Assigning to ``transformer.auto_model`` does not work, and fails silently.**
+    In sentence-transformers 5.6.0 ``auto_model`` is a *property* over a
+    registered child module named ``model``. ``nn.Module.__setattr__`` therefore
+    does not replace that child: it registers a SECOND one under the name
+    ``auto_model``, which nothing calls. Measured — the first version of this
+    function did exactly that, and:
+
+    - the encoded vectors were **bit-identical** before and after the
+      substitution (``max|after - before| == 0``), i.e. the random weights were
+      still the ones running;
+    - the model's parameter count **doubled**, to 708,967,936 for a 354,483,968
+      checkpoint, because both backbones were registered;
+    - and the resulting rows looked *fine*: the randomly initialised network
+      scored ``0.9911`` candidate recall on ``fodors_zagat``. A random 350M
+      transformer is a random feature map, and on a saturated near-duplicate
+      benchmark that is enough. Nothing about the row said "this is noise".
+
+    So the substitution is done by locating the registered CHILD that is the
+    current backbone and replacing that, and it is then verified by encoding —
+    a guard that cannot observe the failure it exists to catch is not a guard.
+    """
+    transformer = st_model[0]
+    before = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+
+    current = transformer.auto_model
+    child_name = next(
+        (name for name, module in transformer.named_children() if module is current), None
+    )
+    if child_name is None:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: cannot find the registered child module holding the backbone, so "
+            f"there is nowhere to put the correctly loaded weights."
+        )
+
+    backbone.to(st_model.device)
+    backbone.eval()
+    setattr(transformer, child_name, backbone)
+
+    if transformer.auto_model is not backbone:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: assigning the backbone to {child_name!r} did not take effect."
+        )
+    after = np.asarray(base.encode([_CANARY_TEXT])[0], dtype=np.float64)
+    if after.shape == before.shape and float(np.abs(after - before).max()) == 0.0:
+        raise SilentlyWrongCheckpointError(
+            f"{spec.name}: substituting the backbone changed the encoded vector by exactly 0, "
+            f"so the replaced module is not the one being called. The randomly initialised "
+            f"weights would still be the ones measured."
+        )
+    logger.info(
+        "%s: substituted %s into child %r",
+        spec.name,
+        (
+            f"a SEEDED RANDOM backbone (seed={SEED}) — this row is the noise floor"
+            if spec.random_init
+            else (
+                f"the correctly loaded backbone from {spec.backbone_auto_class} "
+                f"(AutoModel randomises every weight for this checkpoint)"
+            )
+        ),
+        child_name,
+    )
+
+
 def _build_embedder(
     spec: ModelSpec,
     cache_dir: Path,
@@ -945,12 +1468,26 @@ def _build_embedder(
     from langres.core.embeddings import DiskCachedEmbedder, SentenceTransformerEmbedder
 
     base = SentenceTransformerEmbedder(
-        spec.name,
+        # `hf_id`, not `name`: the row's identity and the weights' identity are
+        # different things for a control arm measured off another checkpoint's
+        # architecture.
+        spec.hf_id,
         batch_size=spec.batch_size or batch_size,
         device=device,
         trust_remote_code=spec.trust_remote_code,
         dtype=spec.dtype,  # type: ignore[arg-type]
     )
+
+    # Everything below runs BEFORE the first encode, and the order is the point:
+    # a substituted backbone has to be in place before any vector — canary,
+    # prompt probe or corpus — is computed or cached, or the cache would be
+    # vouched for by the model that is about to be replaced.
+    backbone = _preflight_backbone(spec)
+    st_model = base._get_model()
+    if backbone is not None:
+        _substitute_backbone(spec, base, st_model, backbone)
+    _assert_declared_architecture(spec, st_model[0].auto_model)
+    _assert_prompt_is_live(base, prompts)
     # The cache namespace carries the dtype: half-precision vectors are DIFFERENT
     # vectors, and reusing a float32 cache entry for a float16 run would silently
     # publish a number the run never computed.
@@ -961,7 +1498,20 @@ def _build_embedder(
     # stops the run if the warm cache disagrees with the loaded model. That needs
     # no revision, costs one short encode, and catches drift a revision cannot
     # see (a pooling change, a tokenizer fix, a different dtype path).
-    namespace = f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
+    # The substituted backbone joins dtype in the namespace for the same reason:
+    # vectors from the randomly initialised `AutoModel` load and vectors from the
+    # recovered weights are DIFFERENT vectors for the same (model, dtype), and a
+    # run that adopted the former under `--trust-existing-cache` would publish
+    # numbers no checkpoint produced. The canary catches this unaided; the
+    # namespace makes it impossible to vouch for by mistake.
+    namespace = (
+        f"{spec.name.replace('/', '__')}__{spec.dtype or 'default'}"
+        + (f"__{spec.backbone_auto_class}" if spec.backbone_auto_class else "")
+        # The seed IS the control's identity: a different seed is a different
+        # random model, and reusing one seed's cached vectors under another would
+        # publish a noise floor nothing drew.
+        + (f"__randinit-seed{SEED}" if spec.random_init else "")
+    )
     cached = DiskCachedEmbedder(base, cache_dir=cache_dir, namespace=namespace)
     _assert_cache_matches_checkpoint(
         base, cached, namespace, cache_dir, adopt_legacy=adopt_legacy_cache, prompts=prompts
@@ -1307,6 +1857,7 @@ def _attach_intervals(
                 row.vs_reference_ci_low = interval.lower
                 row.vs_reference_ci_high = interval.upper
                 row.ci_clusters = interval.n_clusters
+                row.reference_model = REFERENCE_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -1561,13 +2112,35 @@ def _render_recommendation(
     )
 
     out.append("\n### The OSI-licensed field — the only candidates for a default\n")
+    # Conditional on the REFERENCE's own licence, because this renderer is shared
+    # by studies that pick their own baseline. It used to state unconditionally
+    # that the default candidates were the OSI-licensed models "including the
+    # reference model" -- so a study whose reference is use-restricted published
+    # a paragraph listing a NON-OSI model as a candidate for the shipped default,
+    # and called it the current default besides. That is the one error in this
+    # document with real downstream consequence: it points a reader at exactly
+    # the model the licence section forbids defaulting to. (Cross-model review.)
+    from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL
+
+    reference_spec = MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)
     out.append(
-        f"\nlangres ships under Apache-2.0. A default that carries a use-restricted "
-        f"licence pushes that restriction onto every user who never chose it, so the "
-        f"candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed "
-        f"models — including the reference model, `{REFERENCE_MODEL}` "
-        f"({(MODELS_BY_NAME.get(REFERENCE_MODEL) or ModelSpec(REFERENCE_MODEL)).license}).\n"
+        "\nlangres ships under Apache-2.0. A default that carries a use-restricted "
+        "licence pushes that restriction onto every user who never chose it, so the "
+        "candidates for `DEFAULT_EMBEDDING_MODEL` are exactly the OSI-licensed models.\n"
     )
+    if _is_osi(reference_spec):
+        out.append(
+            f"\nThis study's reference, `{REFERENCE_MODEL}` "
+            f"({reference_spec.license}), is one of them.\n"
+        )
+    else:
+        out.append(
+            f"\n**This study's reference is not one of them.** `{REFERENCE_MODEL}` is "
+            f"licensed `{reference_spec.license}`, which is not on the OSI allow list, so "
+            f"it is a measurement baseline here and **not** a candidate for the shipped "
+            f"default. The actual `DEFAULT_EMBEDDING_MODEL` is "
+            f"`{DEFAULT_EMBEDDING_MODEL}`.\n"
+        )
     if not osi:
         out.append(
             "\n**No OSI-licensed challenger has a row at this metric revision**, so "
@@ -1823,6 +2396,19 @@ def _render_recommendation(
     else:
         for name in restricted:
             spec = MODELS_BY_NAME.get(name) or ModelSpec(name)
+            # A synthetic control is not a checkpoint anyone can opt into: it has
+            # no trained weights, and a "use it like this" snippet for it is
+            # meaningless. It appeared here only because the section is keyed on
+            # the LICENCE of the checkpoint it borrows its architecture from.
+            if spec.random_init:
+                out.append(
+                    f"\n- **`{name}` is not a usable checkpoint.** It is this study's noise "
+                    f"floor — `{spec.checkpoint}`'s architecture with seeded RANDOM weights "
+                    "and no training. It is listed here only because it inherits that "
+                    "checkpoint's licence bucket; there is no opt-in snippet because there "
+                    "is nothing to opt into.\n"
+                )
+                continue
             # Licence decides the MECHANISM; measurement decides whether anything
             # is recommended. Fusing them emitted "Recommended as a documented
             # opt-in" off the licence bucket alone. (Cross-model review.)
@@ -1836,12 +2422,9 @@ def _render_recommendation(
                 f"\n- **`{name}` — licence `{spec.license}`, which is NOT OSI-approved.** "
                 f"{evidence_phrase(name)} {consequence}: a user who names it accepts its "
                 "terms; a user who names nothing must not be given them. Anyone shipping "
-                "it must read the checkpoint's own licence — in Gemma's case a "
-                "prohibited-use policy that survives redistribution, which Apache-2.0 "
-                "does not impose.\n"
+                f"it must read the checkpoint's own licence — {_licence_restriction(spec.license)}\n"
                 f"\n  ```python\n"
-                f"  # opt in explicitly, having read the licence\n"
-                f'  SentenceTransformerEmbedder("{name}")\n'
+                f"{_opt_in_snippet(spec)}"
                 f"  ```\n"
             )
 
@@ -1878,6 +2461,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     hurt separability for the base-size models" gets read off a table where half
     the rows carry a known one-directional scoring artefact.
     """
+    _assert_one_reference_model(rows)
     stale = [row for row in rows if row.metric_revision < METRIC_REVISION]
     current = [row for row in rows if row.metric_revision >= METRIC_REVISION]
     ok = [row for row in current if row.status == "ok"]
@@ -1898,11 +2482,17 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
     out: list[str] = []
     out.append("# Embedder ladder: which embedding model at which parameter count\n")
+    # Derived from ARTIFACT_PREFIX, not typed: the default rows filename was
+    # hard-coded here, so BOTH 20260729 study reports told the reader they
+    # regenerate from `20260727_embedder_ladder_rows.jsonl` -- a different
+    # experiment's artifact, and one their own reproduce command below does not
+    # touch. The reproduce commands were already derived; this sentence was the
+    # last hand-typed path in the header. (Cross-model review.)
     out.append(
         "Generated by `examples/research/embedder_ladder.py`. Every number here is "
         "measured by that script at metric revision "
         f"**{METRIC_REVISION}**; re-running it regenerates this file from "
-        "`20260727_embedder_ladder_rows.jsonl`.\n"
+        f"`{ARTIFACT_PREFIX}_rows.jsonl`.\n"
     )
 
     # Provenance, derived from the rows rather than typed. A number whose
@@ -1910,15 +2500,68 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # unsourceable number is one that eventually has to be retracted.
     measured_ks = sorted({row.k for row in ok})
     out.append("\n## How to reproduce these numbers\n")
+    # Every command carries THIS study's artifact prefix, reference model and
+    # ladder. Bare `run_ladder.sh` writes the harness defaults, so a study that
+    # printed the bare form was telling its reader to overwrite a different
+    # study's rows -- and neither report could be reproduced as documented.
+    # NOT `ladder_names`: that name is already bound above to the LIST the
+    # recommendation section consumes. Rebinding it to a joined string made the
+    # coverage denominator count CHARACTERS ("7 of the 336 models in the ladder")
+    # and made the licence table iterate them, emptying it. Renamed so the two
+    # cannot collide.
+    # `ladder_specs` for the same reason as the instruction block below: this
+    # string becomes LADDER_ALL_MODELS, which IS the report's coverage denominator.
+    # Built from LADDER it omitted any row-backed custom checkpoint, so the command
+    # a reader is told reproduces this document would reproduce it against a
+    # smaller denominator than the document reports -- and `run_ladder.sh` refuses
+    # (exit 2) on a custom artifact whose denominator is wrong. (Cross-model review.)
+    ladder_arg = " ".join(shlex.quote(spec.name) for spec in ladder_specs)
+    # LADDER_ALL_MODELS is the artifact's COVERAGE DENOMINATOR and run_ladder.sh
+    # refuses (exit 2) if a custom LADDER_ARTIFACT arrives without it -- so a
+    # command that omitted it did not merely mis-report coverage, it failed
+    # before measuring anything. It stays the full ladder in BOTH commands; only
+    # LADDER_MODELS narrows, which is exactly the distinction the guard exists to
+    # enforce. (Cross-model review: the guard and these commands were added in the
+    # same PR and the second was not re-checked against the first.)
+    env = (
+        f'LADDER_ARTIFACT="{ARTIFACT_PREFIX}" \\\n'
+        f'  LADDER_REFERENCE_MODEL="{REFERENCE_MODEL}" \\\n'
+        f'  LADDER_ALL_MODELS="{ladder_arg}" \\\n'
+        f'  LADDER_MODELS="{ladder_arg}" \\\n'
+    )
     out.append(
         "\n```bash\n"
-        "# every model, committing and pushing after each one\n"
-        "bash examples/research/run_ladder.sh\n"
-        "\n# or one model / a subset (space-separated)\n"
-        'LADDER_MODELS="intfloat/e5-base-v2" bash examples/research/run_ladder.sh\n'
+        "# every model in this study, committing and pushing after each one\n"
+        f"{env}  bash examples/research/run_ladder.sh\n"
+        "\n# or one model / a subset (space-separated) -- same artifact + baseline.\n"
+        "# LADDER_ALL_MODELS stays the FULL ladder: it is what the report is\n"
+        "# accountable for, so a subset run still reports the others as missing.\n"
+        f'LADDER_ARTIFACT="{ARTIFACT_PREFIX}" \\\n'
+        f'  LADDER_REFERENCE_MODEL="{REFERENCE_MODEL}" \\\n'
+        f'  LADDER_ALL_MODELS="{ladder_arg}" \\\n'
+        f'  LADDER_MODELS="{REFERENCE_MODEL}" \\\n'
+        "  bash examples/research/run_ladder.sh\n"
         "\n# render this file from the existing rows, measuring nothing\n"
-        "uv run python examples/research/embedder_ladder.py --render-only\n"
+        "uv run python examples/research/embedder_ladder.py --render-only \\\n"
+        # shlex-quoted, unlike the env-var lines above which carry their own
+        # quotes. A prefix containing a space -- which the CLI accepts and the
+        # shared-prefix check permits -- otherwise split into several arguments,
+        # so the one command whose whole job is "render this exact file" was the
+        # one that could not. Quoting is a no-op for every path in the committed
+        # studies, so this changes no artifact. (Cross-model review.)
+        f"  --rows {shlex.quote(f'{ARTIFACT_PREFIX}_rows.jsonl')} \\\n"
+        f"  --report {shlex.quote(f'{ARTIFACT_PREFIX}.md')} \\\n"
+        f"  --reference {shlex.quote(f'{ARTIFACT_PREFIX}_reference_recall.json')} \\\n"
+        f'  --reference-model "{REFERENCE_MODEL}" \\\n'
+        f"  --ladder-models {ladder_arg}\n"
         "```\n"
+    )
+    out.append(
+        "\n`run_ladder.sh` **refuses to start** (exit 2) when this study's rows, report or "
+        "reference sidecar hold uncommitted changes: a killed sweep leaves measured cells "
+        "there that no commit holds, and a new run rewrites and commits over them. Commit "
+        "them or copy them out of the worktree first; `LADDER_FORCE=1` discards them "
+        "deliberately.\n"
     )
     out.append(
         f"\n**$0 — no paid API and no key.** Not offline, though: the first run of a "
@@ -2022,8 +2665,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         out.append("\n## Headline: there is no single winner — the answer is per benchmark\n")
         out.append(
             f"\nThe widest disagreement measured here is `{model}` against "
-            f"`{REFERENCE_MODEL}` (this ladder's reference model, and langres's "
-            f"default when these rows were measured) at k={headline_k}: "
+            f"`{REFERENCE_MODEL}` ({_reference_role()}) at k={headline_k}: "
             f"**{high:+.4f}** per-record recall on `{high_row.benchmark}` "
             f"{_ci(high_row.vs_reference_ci_low, high_row.vs_reference_ci_high)} and "
             f"**{low:+.4f}** on `{low_row.benchmark}` "
@@ -2064,7 +2706,19 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "`prompt_name`. The headline is therefore a statement about the two models "
             "as they ship, not about a half-driven one.\n"
         )
-        if instruct_row is not None and instruct_row.prompt_delta is not None:
+        # Only for the artifact the correction is ABOUT. #239 concerns the
+        # 2026-07-27 portfolio ladder's EmbeddingGemma headline; emitted for every
+        # artifact, it interpolated whatever the current study's headline happened
+        # to be, so the study-B report told readers that a merged PR had described
+        # `LFM2.5-Encoder-350M`'s -0.0536 as query-only. That PR predates this
+        # study and says nothing about that model. A historical correction is a
+        # claim about a specific document, and it belongs only in it.
+        # (Cross-model review.)
+        if (
+            _is_portfolio_ladder()
+            and instruct_row is not None
+            and instruct_row.prompt_delta is not None
+        ):
             out.append(
                 "\n> **Correction — supersedes the merged #239 PR body.** That body "
                 "said: *'Every number below, including the "
@@ -2129,20 +2783,28 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "four are not. Do not average across benchmarks, and do not read this "
         "benchmark set as a finding — it is a documented prior this sweep "
         "inherited.\n"
-        "- **The claim that started this sweep was not strong enough to act on.** "
-        "A pilot reported `BAAI/bge-small-en-v1.5` at 0.8295 candidate recall "
-        "versus `all-MiniLM-L6-v2` at 0.8201 on `amazon_google` — **+0.9pp, one "
-        "benchmark, one seed, no interval** — alongside '2.5x fewer candidates at "
-        "equal recall'. Those are two different claims: the second is an "
-        "*operating-point* comparison over a `k` that `langres.optimize` already "
-        "searches, so it is a statement about where each model was sampled, not "
-        "about which model is better. This sweep re-measures both across "
-        "benchmarks and attaches a cluster-resampled interval to the first — see "
-        "'Is it better than what ships today?' below for whether the gap survives "
-        "it. (The pilot numbers above are quoted as the motivation, not "
-        "re-measured here — read this document's own tables for the "
-        "measurement.)\n"
-        "- **Reproducible from a git checkout only, not from `pip install langres`.** "
+        # Same scoping as the #239 correction: "this sweep re-measures both" names
+        # bge-small and MiniLM, and study B's rows contain neither. A provenance
+        # note that describes a different study's motivation is a false statement
+        # about the document it appears in. (Cross-model review.)
+        + (
+            "- **The claim that started this sweep was not strong enough to act on.** "
+            "A pilot reported `BAAI/bge-small-en-v1.5` at 0.8295 candidate recall "
+            "versus `all-MiniLM-L6-v2` at 0.8201 on `amazon_google` — **+0.9pp, one "
+            "benchmark, one seed, no interval** — alongside '2.5x fewer candidates at "
+            "equal recall'. Those are two different claims: the second is an "
+            "*operating-point* comparison over a `k` that `langres.optimize` already "
+            "searches, so it is a statement about where each model was sampled, not "
+            "about which model is better. This sweep re-measures both across "
+            "benchmarks and attaches a cluster-resampled interval to the first — see "
+            "'Is it better than what ships today?' below for whether the gap survives "
+            "it. (The pilot numbers above are quoted as the motivation, not "
+            "re-measured here — read this document's own tables for the "
+            "measurement.)\n"
+            if _is_portfolio_ladder()
+            else ""
+        )
+        + "- **Reproducible from a git checkout only, not from `pip install langres`.** "
         "The wheel deliberately excludes the `amazon_google`, `abt_buy`, "
         "`walmart_amazon` and `wdc_computers` corpora "
         "(`[tool.hatch.build] exclude` in `pyproject.toml`), so only `fodors_zagat` "
@@ -2273,37 +2935,120 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "\n**The `instruct` arm prefixes queries against BARE documents**, which is a "
         "structurally different configuration from the asymmetric recipe an "
         "instruction-trained checkpoint documents — not the same recipe with "
-        "different wording. `google/embeddinggemma-300m` prefixes documents with "
-        "`'title: none | text: '` and queries with `'task: search result | query: '`; "
-        "running only `instruct` measures half of that. Checkpoints that ship a "
+        "different wording. Checkpoints that ship a "
         "query-side instruction therefore carry a third `documented` arm, read from "
         "their own `config_sentence_transformers.json` rather than from a model card "
         "or from memory. Where that arm is missing from the tables it is listed under "
         "'What did not run'.\n"
-        "\n`Qwen/Qwen3-Embedding-*`'s documented instruction is about retrieving **web "
-        "search passages**, and its document side is empty. Applying it to entity "
-        "matching is out of its stated domain — which is precisely what a user "
-        "following the model card would do, so it is worth measuring, but a poor "
-        "result for that arm is a statement about a transplanted instruction, not "
-        "about the model's instruction-following.\n"
     )
+    # The worked examples are the SECOND site of the defect the blockquote below
+    # was flagged for, and they sat in the paragraph immediately above it: the
+    # base-encoder study contains neither `google/embeddinggemma-300m` nor
+    # `Qwen/Qwen3-Embedding-*`, so it explained its own `instruct` column with
+    # two models it never measured. Emitted only where the model has a row.
+    rendered = {spec.name for spec in LADDER}
+    if "google/embeddinggemma-300m" in rendered:
+        out.append(
+            "\n`google/embeddinggemma-300m` prefixes documents with "
+            "`'title: none | text: '` and queries with `'task: search result | query: '`; "
+            "running only `instruct` measures half of that.\n"
+        )
+    if any(name.startswith("Qwen/Qwen3-Embedding") for name in rendered):
+        out.append(
+            "\n`Qwen/Qwen3-Embedding-*`'s documented instruction is about retrieving **web "
+            "search passages**, and its document side is empty. Applying it to entity "
+            "matching is out of its stated domain — which is precisely what a user "
+            "following the model card would do, so it is worth measuring, but a poor "
+            "result for that arm is a statement about a transplanted instruction, not "
+            "about the model's instruction-following.\n"
+        )
+    # Derived from the ladder being rendered — but derived about the SWEEP, not
+    # about the checkpoints' training history.
+    #
+    # The first version of this partition read `documented_arm is None` as "was
+    # not trained with a query-side instruction". That field records only whether
+    # THIS HARNESS configured a checkpoint-owned arm, so the claim was false for
+    # `intfloat/e5-base-v2` (native `query:`/`passage:`) and for both
+    # `Qwen/Qwen3-Embedding-*` rows — which the paragraph above simultaneously
+    # described as HAVING a documented instruction, two paragraphs apart in one
+    # generated document. Deriving a claim is only safer than typing it when the
+    # field means what the sentence says; here nothing in this harness records
+    # training history, and `registered_prompts` does not either (e5 registers
+    # none). So the claim is dropped rather than re-derived, and what is said is
+    # what the sweep can actually observe. (Cross-model review.)
+    # Partitioned over models with a SUCCESSFUL ROW, not over configured specs.
+    # Keyed on LADDER, this said Qwen 0.6B's own recipe "did run" and that six
+    # other absent models had the generic arm run against them -- in a document
+    # whose next section says "7 of the 14 models in the ladder have a row" and
+    # lists all seven under "What did not run". A sentence about what a sweep ran
+    # has to read the rows, not the configuration. (Cross-model review.)
+    # Keyed on successful (model, ARM) pairs, because that is the granularity at
+    # which measurement succeeds or fails. Model presence was not enough:
+    # `measure_one` records failures per arm, so a model whose `documented` arm
+    # failed while another arm succeeded was still listed under "whose OWN recipe
+    # this sweep did run", and a model whose `instruct` arm failed was still
+    # described as having had the generic instruction run against it. Configuration
+    # decided nothing here any more. (Cross-model review.)
+    measured_arms = {(row.model, row.prompt_arm) for row in ok}
+    # `ladder_specs`, not LADDER: `--models` accepts a checkpoint outside the
+    # declared tuple, and `_ladder_specs(rows)` exists precisely so the coverage
+    # denominator and every enumeration drawn from it cannot disagree. This block
+    # read LADDER, so a custom checkpoint with a successful `documented` arm
+    # appeared in the tables while this paragraph said no model's own recipe was
+    # measured -- a document contradicting itself two sections apart, which is the
+    # exact failure `_ladder_specs` was written for. Third expression of one set.
+    # (Cross-model review.)
+    trainable = [spec for spec in ladder_specs if not spec.random_init]
+    own_recipe = [spec.name for spec in trainable if (spec.name, "documented") in measured_arms]
+    generic_only = [
+        spec.name
+        for spec in trainable
+        if spec.name not in own_recipe
+        and any((spec.name, arm) in measured_arms for arm in ("none", "instruct"))
+    ]
+    names = lambda group: ", ".join(f"`{n}`" for n in group)  # noqa: E731
     out.append(
         "\n> ### Do not read this table as 'instructions do not help retrieval'\n"
         ">\n"
-        "> **A negative result here is mostly a statement about the models in it.**\n"
-        "> `all-MiniLM-*`, `all-mpnet-base-v2` and the BGE v1.5 family were not\n"
-        "> trained with a task instruction on the query side. Prepending one to a\n"
-        "> model that never saw one in training does not give it an instruction to\n"
-        "> follow — it moves the query vector away from the document vectors it is\n"
-        "> supposed to match. Measuring that it hurts is a real, useful, and\n"
-        "> actionable finding: **do not switch these models on by default with a\n"
-        "> prompt.** It is not evidence about instruction-following embedders.\n"
-        ">\n"
-        "> The hypothesis this axis exists to test is about the models trained for\n"
-        "> it — `google/embeddinggemma-300m`, `Qwen/Qwen3-Embedding-*`, and E5's\n"
-        "> native `query:`/`passage:` scheme (which this sweep's single generic\n"
-        "> instruction is **not**; see `own prompt names`). Until those are in the\n"
-        "> table, the instruction-following question is **open**, not answered.\n"
+        "> **A negative result here is mostly a statement about what was measured.**\n"
+    )
+    if generic_only:
+        out.append(
+            f"> For {names(generic_only)} this sweep ran only the\n"
+            "> GENERIC instruction — none of them has a `documented` arm here, so its\n"
+            "> own recipe, if it has one, was never tested. Prefixing a query with an\n"
+            "> instruction a model was not aligned to moves the query vector away from\n"
+            "> the document vectors it is supposed to match, which is a real and\n"
+            "> actionable finding: **do not switch a generic prompt on by default.**\n"
+            "> It is not evidence about instruction-following embedders.\n"
+            ">\n"
+            "> **This list is about what this sweep configured, not about how a\n"
+            "> checkpoint was trained.** A model can have been trained with its own\n"
+            "> query/document scheme and still register no prompt in its\n"
+            "> sentence-transformers config, in which case it appears above. So a poor\n"
+            "> `instruct` result for any of them is evidence about a *transplanted\n"
+            "> generic* instruction — never evidence that the checkpoint cannot follow\n"
+            "> its own.\n"
+            ">\n"
+        )
+    if own_recipe:
+        out.append(
+            "> The models whose OWN recipe this sweep did run are\n"
+            f"> {names(own_recipe)}, "
+            f"{'which carry' if len(own_recipe) > 1 else 'which carries'} a\n"
+            f"> `documented` arm read from {'their' if len(own_recipe) > 1 else 'its'} own "
+            "configuration — the generic\n"
+            "> `instruct` arm is **not** that recipe (see `own prompt names`), so read\n"
+            "> the two separately.\n"
+        )
+    else:
+        out.append(
+            "> **No model here had its own recipe measured** — nothing in this table\n"
+            "> carries a `documented` arm. For this study the instruction-following\n"
+            "> question is therefore **open, not answered**; the `instruct` column is a\n"
+            "> generic prefix throughout.\n"
+        )
+    out.append(
         ">\n"
         "> This distinction is the whole reason the axis was worth fixing. Before\n"
         "> the `query_prompt` no-op was repaired every cell here read exactly\n"
@@ -2433,8 +3178,7 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
     out.append(f"\n## Is it better than what ships today? (k={headline_k}, no instruction)\n")
     out.append(
-        f"\nEvery model against `{REFERENCE_MODEL}` — this ladder's reference model, "
-        "which was `DEFAULT_EMBEDDING_MODEL` when these rows were measured — on the "
+        f"\nEvery model against `{REFERENCE_MODEL}` — {_reference_role()} — on the "
         "same records, paired per record and "
         "resampled by gold cluster. **Δ is the mean per-record recall difference**, "
         "not the difference of the two aggregate recalls above: the bootstrap "
@@ -2612,6 +3356,13 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the sweep for the requested models and regenerate the report."""
+    # Rebound rather than threaded through: `REFERENCE_MODEL` and the ladder set
+    # are read at ~30 sites, almost all inside the report's prose, and a
+    # half-threaded parameter would print one baseline in the tables and another
+    # in the sentences above them. Declared here because `--reference-model`
+    # reads the current value as its default.
+    global REFERENCE_MODEL, LADDER, ARTIFACT_PREFIX
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", nargs="*", default=[m.name for m in MODELS])
     parser.add_argument("--benchmarks", nargs="*", default=list(BENCHMARKS))
@@ -2635,6 +3386,27 @@ def main(argv: Sequence[str] | None = None) -> None:
             "the canary it pins is checked normally on every later run."
         ),
     )
+    parser.add_argument(
+        "--ladder-models",
+        nargs="*",
+        default=[m.name for m in MODELS],
+        help=(
+            "The models this ARTIFACT is accountable for — the denominator of 'what did "
+            "not run'. Distinct from --models, which is what this one invocation measures: "
+            "the driver sweeps one model per process, and a coverage denominator taken "
+            "from that would read as a complete ladder of one."
+        ),
+    )
+    parser.add_argument(
+        "--reference-model",
+        default=REFERENCE_MODEL,
+        help=(
+            "The baseline every model's delta is measured against. Defaults to the "
+            "2026-07-27 ladder's baseline. A run using a different one MUST also use its "
+            "own --rows and --reference paths: the sidecar and the recorded deltas are "
+            "both keyed to it, and mixing two baselines in one file is refused at render."
+        ),
+    )
     parser.add_argument("--device", default=None, help="torch device, e.g. mps / cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--headline-k", type=int, default=20)
@@ -2646,6 +3418,49 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    REFERENCE_MODEL = args.reference_model
+    LADDER = tuple(MODELS_BY_NAME.get(name) or ModelSpec(name) for name in args.ladder_models)
+    # The report prints its own reproduce commands. Without knowing which study it
+    # belongs to it printed the DEFAULTS, which write the 20260727 artifacts --
+    # so a reader following the instructions in the 20260729 reports would
+    # overwrite a different study's rows and never reproduce the table they were
+    # reading. Derived from --report so it cannot disagree with the file it is
+    # written into. (Cross-model review.)
+    # Relative to the repo root, never absolute: the defaults are absolute Paths,
+    # and interpolating them would bake this machine's checkout location into a
+    # committed document -- unreproducible anywhere else, and a different string
+    # on every clone.
+    report_path = Path(args.report).resolve()
+    # ...and refused when the three paths do not agree, rather than derived from
+    # --report and quietly wrong about the other two. `run_ladder.sh` builds ALL
+    # THREE from one `LADDER_ARTIFACT` prefix, so the reproduce block has no way
+    # to express a study whose rows and report live at unrelated paths: printing
+    # `--rows <report-prefix>_rows.jsonl` would cite a file this run never read,
+    # and the two `run_ladder.sh` commands beside it could not be made correct at
+    # all. A report that mis-states which file it came from is exactly the defect
+    # every other guard in this harness exists to prevent, so this is a refusal
+    # and not a footnote. (Cross-model review.)
+    stem = str(report_path).removesuffix(".md")
+    expected = {
+        "--rows": Path(f"{stem}_rows.jsonl"),
+        "--reference": Path(f"{stem}_reference_recall.json"),
+    }
+    supplied = {"--rows": Path(args.rows).resolve(), "--reference": Path(args.reference).resolve()}
+    if mismatched := [flag for flag in expected if supplied[flag] != expected[flag]]:
+        parser.error(
+            "--rows, --report and --reference must share one artifact prefix: the report "
+            "prints reproduce commands that derive all three from it, and `run_ladder.sh` "
+            "takes a single LADDER_ARTIFACT. "
+            + "; ".join(
+                f"{flag} is {supplied[flag]}, expected {expected[flag]}" for flag in mismatched
+            )
+        )
+    try:
+        prefix = report_path.relative_to(REPO_ROOT)
+    except ValueError:
+        prefix = report_path
+    ARTIFACT_PREFIX = str(prefix).removesuffix(".md")
 
     if args.render_only:
         rows = read_rows(args.rows)
@@ -2667,6 +3482,29 @@ def main(argv: Sequence[str] | None = None) -> None:
             "its vectors came from the checkpoint loaded now; that is a claim about a "
             "specific model, and it is not one you can make for the whole ladder at once."
         )
+
+    # Checked HERE -- before a single embedding is computed or a single file is
+    # written -- and not only from render_report().
+    #
+    # The baseline is a property of the RUN (--reference-model) while
+    # `vs_reference_delta` is a property of the ROW, so pairing a flag with
+    # another baseline's artifact is a live mistake. Validating it at render time
+    # meant the refusal arrived AFTER the reference sidecar had been refreshed and
+    # the merged JSONL rewritten: the exception left costly, valid rows already
+    # mutated on disk, and the shell driver then read the non-zero exit as a model
+    # failure and replaced the affected cell with a failure row. A guard that only
+    # fires after the damage is a report of the damage. Rendering keeps its own
+    # copy of the check -- --render-only never reaches this path.
+    # (Cross-model review.)
+    if args.rows.exists():
+        try:
+            _assert_one_reference_model(read_rows(args.rows))
+        except ValueError as exc:
+            parser.error(
+                f"{exc}\n\nRefused before measuring, so nothing on disk was touched. "
+                f"The existing rows in {args.rows} were measured against a different "
+                f"baseline than --reference-model names."
+            )
 
     arms = {name: PROMPT_ARMS[name] for name in args.prompts}
 

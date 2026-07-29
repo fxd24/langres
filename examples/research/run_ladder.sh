@@ -33,7 +33,29 @@
 #   bash examples/research/run_ladder.sh [PID_TO_WAIT_FOR]
 #
 # Environment:
-#   LADDER_MODELS                 space-separated subset to sweep
+#   LADDER_MODELS                 space-separated subset to sweep (the WORK list)
+#   LADDER_ALL_MODELS             space-separated set the ARTIFACT is accountable
+#                                 for -- the report's coverage denominator, i.e.
+#                                 the models whose absence counts as "did not
+#                                 run". NOT the same as LADDER_MODELS: a
+#                                 single-model resume measures one model while
+#                                 remaining accountable for the whole study.
+#                                 Defaults to the portfolio ladder below;
+#                                 REQUIRED when LADDER_ARTIFACT names a different
+#                                 study, which is enforced rather than assumed.
+#   LADDER_ARTIFACT               path PREFIX for this study's three tracked
+#                                 artifacts (default:
+#                                 docs/research/20260727_embedder_ladder), which
+#                                 become <prefix>_rows.jsonl, <prefix>.md and
+#                                 <prefix>_reference_recall.json. Set it together
+#                                 with LADDER_MODELS and LADDER_REFERENCE_MODEL
+#                                 to run a separate study without touching the
+#                                 standing ladder's files.
+#   LADDER_REFERENCE_MODEL        baseline every delta is measured against
+#                                 (default: the harness's own, all-MiniLM-L6-v2).
+#                                 Changing it REQUIRES a fresh LADDER_ARTIFACT:
+#                                 the sidecar is keyed by it and the harness
+#                                 refuses to render a file mixing two baselines.
 #   LADDER_DEVICE                 pin a torch device (default: let ST choose)
 #   LADDER_TRUST_EXISTING_CACHE   set to exactly 1 to forward
 #                                 --trust-existing-cache to the harness, vouching
@@ -53,11 +75,48 @@ set -u -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT" || exit 1
 
-ROWS="docs/research/20260727_embedder_ladder_rows.jsonl"
-REPORT="docs/research/20260727_embedder_ladder.md"
-REFERENCE="docs/research/20260727_embedder_ladder_reference_recall.json"
+# Shared publication rule. Sourced by BASH_SOURCE so it resolves beside this
+# script, not against the repo root a caller happens to be in.
+# shellcheck source=examples/research/publish_lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/publish_lib.sh"
+
+
+# One artifact set per (model list, reference model). Overridable together so a
+# study with a different baseline gets its own rows/report/sidecar: the sidecar
+# is keyed by the reference model and the recorded deltas are labelled with it,
+# so pointing LADDER_REFERENCE_MODEL at a new baseline while writing the default
+# files would produce a rows file the harness then refuses to render. Defaults
+# reproduce the 2026-07-27 ladder exactly.
+ARTIFACT="${LADDER_ARTIFACT:-docs/research/20260727_embedder_ladder}"
+ROWS="${ARTIFACT}_rows.jsonl"
+REPORT="${ARTIFACT}.md"
+REFERENCE="${ARTIFACT}_reference_recall.json"
 LOG_DIR="tmp/ladder_logs"
-BENCHMARKS="fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon"
+# Overridable so a RESUME can go through this driver -- with its dirty-artifact
+# refusal, its provenance --verify and its per-model commit -- instead of calling
+# the mutating harness directly, which is how the one resume script in this
+# directory used to bypass all three and leave an expensive re-measured cell
+# uncommitted. Not the report's denominator: that is LADDER_ALL_MODELS, and the
+# harness keeps its own benchmark list for coverage. (Cross-model review.)
+BENCHMARKS="${LADDER_BENCHMARKS:-fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon}"
+
+# Empty = the harness's own default (the 2026-07-27 baseline, all-MiniLM-L6-v2).
+REFERENCE_MODEL_ARG=()
+if [ -n "${LADDER_REFERENCE_MODEL:-}" ]; then
+  # Caught here rather than 40 minutes later at the first render: a new baseline
+  # written into the standing ladder's rows file mixes two baselines in one
+  # column, which the harness refuses -- AFTER the sweep has already spent the
+  # compute and committed the rows.
+  if [ -z "${LADDER_ARTIFACT:-}" ]; then
+    log() { echo "[$(date '+%H:%M:%S')] $*"; }
+    log "LADDER_REFERENCE_MODEL is set but LADDER_ARTIFACT is not."
+    log "  Every vs-reference delta is labelled with the baseline that produced it, and"
+    log "  the sidecar is keyed by it, so a new baseline needs its own artifact set."
+    log "  Re-run with e.g. LADDER_ARTIFACT=docs/research/<date>_<study>"
+    exit 2
+  fi
+  REFERENCE_MODEL_ARG=(--reference-model "$LADDER_REFERENCE_MODEL")
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -82,12 +141,110 @@ MODELS=(
   "Qwen/Qwen3-Embedding-4B"
   "Qwen/Qwen3-Embedding-8B"
 )
+
+# What this ARTIFACT is accountable for -- the denominator of "what did not run",
+# which is NOT the same as what this invocation measures. Captured before
+# LADDER_MODELS narrows the work list, because the two were the same array and
+# the subset was passed as `--ladder-models`: a single-model resume (which is a
+# documented recovery path, and this study used one) shrank the coverage
+# denominator to that model, so every model still missing rows vanished from the
+# missing-grid check and the report could call a one-model ladder complete.
+# embedder_ladder.py's own --ladder-models help warns about exactly this.
+# Override only to declare a DIFFERENT study's full set. (Cross-model review.)
+if [ -n "${LADDER_ALL_MODELS:-}" ]; then
+  # shellcheck disable=SC2206  # word splitting is the interface here
+  LADDER_ACCOUNTABLE=(${LADDER_ALL_MODELS})
+elif [ -n "${LADDER_ARTIFACT:-}" ]; then
+  # A separate artifact means a separate study, whose accountable set is NOT the
+  # portfolio ladder defined above. Defaulting silently would put 14 portfolio
+  # models in a four-model study's missing-grid. Refused up front, in the same
+  # shape as the LADDER_REFERENCE_MODEL guard below and for the same reason:
+  # cheaper here than after the sweep has spent the compute.
+  echo "LADDER_ARTIFACT is set but LADDER_ALL_MODELS is not."
+  echo "  --ladder-models is the report's coverage DENOMINATOR -- every model the"
+  echo "  artifact is accountable for -- not the work list. A study with its own"
+  echo "  artifact must name its own full set, or the missing-grid is measured"
+  echo "  against the portfolio ladder this script defines."
+  echo "  Re-run with e.g. LADDER_ALL_MODELS=\"\$LADDER_MODELS\""
+  exit 2
+else
+  LADDER_ACCOUNTABLE=("${MODELS[@]}")
+fi
+
 if [ -n "${LADDER_MODELS:-}" ]; then
   # shellcheck disable=SC2206  # word splitting is the interface here
   MODELS=(${LADDER_MODELS})
 fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# Push the just-committed results -- but NEVER onto the default branch.
+#
+# `git push origin HEAD` resolves to whatever branch is checked out. Run from
+# `main` (which is where someone reaching for a sweep script most plausibly is),
+# that publishes generated results straight to the default branch, bypassing the
+# PR-only rule this repo treats as an irreversible-action guardrail. The commits
+# are still made -- the durability the sweep depends on is untouched -- only the
+# publish step is withheld, with the branch to create printed. (Cross-model
+# review.)
+# `block_publication` and the check that honours it live in publish_lib.sh.
+#
+# `git push origin HEAD` publishes the whole BRANCH, not the one commit that just
+# landed, so withholding a single push withholds nothing durable: the next model
+# whose check passes republishes everything held back before it. Two ways in here:
+#
+#   - provenance --verify failed for one model, the tracked .py was restored, and
+#     the next model verified clean. The endpoint-only `--finish` compares start
+#     against end and also passes, so nothing downstream can see that one row was
+#     measured under code the window does not describe.
+#   - the rows were re-rendered into a report that FAILED, so the commit
+#     deliberately excludes the report. Pushing then leaves origin holding new
+#     rows beside the previous report -- the contradiction the exclusion existed
+#     to prevent, published.
+#
+# A shell variable would have latched only THIS process. Both wrappers call this
+# driver and then publish for themselves, so the verdict has to outlive it.
+# (Cross-model review, twice: the same "publishing HEAD republishes what was
+# withheld" shape as run_lfm25.sh's abort path, one driver down.)
+push_results() {
+  # Provenance is verified per PUBLICATION, not once at the end. --finish runs
+  # after every model has run, but this function publishes after EACH one, so a
+  # mid-sweep edit to a tracked .py could already be pushed by the time --finish
+  # rejects the run. Deliberately blocks the PUSH and not the COMMIT: the rows
+  # stay durable (this repo has lost a paid run to an uncommitted result), while
+  # artifacts produced by code the open window does not describe are not
+  # published. A no-op when no provenance sidecar exists, which is how the
+  # standing portfolio ladder runs. (Cross-model review.)
+  #
+  # ...but only for a run that never opened one. LADDER_PROVENANCE_REQUIRED is
+  # how the LFM driver says it did, so a sidecar that DISAPPEARS mid-sweep stops
+  # publication instead of reading as "not participating". The two states were
+  # the same empty test, and the second one published every later model against
+  # nothing. (Cross-model review.)
+  local required_arg=()
+  [ "${LADDER_PROVENANCE_REQUIRED:-0}" = "1" ] && required_arg=(--required)
+  if ! uv run python examples/research/write_provenance.py --verify "${required_arg[@]}" 2>&1; then
+    block_publication "provenance verification failed (see above). Rows are COMMITTED and safe; re-measure on a stable tree before publishing."
+    return 0
+  fi
+  # LADDER_NO_PUSH: commit as usual, publish nothing. For a WRAPPER that cannot
+  # know whether the run succeeded until after this driver returns. The study-A
+  # resume is one: this function pushed the row the moment it was committed, so a
+  # later --finish rejection or render failure left origin holding that row and an
+  # OPEN provenance window while the wrapper withheld the closing evidence and
+  # printed "everything is committed locally". The wrapper suppresses this push and
+  # performs the only one after its own success. Durability is unaffected -- the
+  # commit above already happened. (Cross-model review.)
+  if [ "${LADDER_NO_PUSH:-0}" = "1" ]; then
+    log "not pushing: the caller owns publication for this run."
+    return 0
+  fi
+  # The branch rule lives in publish_lib.sh, shared with the other two drivers.
+  # Three copies is what let rows reach origin while the provenance window
+  # describing them stayed local. Failure is not fatal here: the rows are already
+  # committed, and this loop retries on the next model. (Cross-model review.)
+  publish_branch "ladder" || true
+}
 
 # `${VAR:+...}` tests only that the variable is NON-EMPTY, so
 # LADDER_TRUST_EXISTING_CACHE=0 / false / a typo would all have forwarded
@@ -164,13 +321,86 @@ if [ -n "$WAIT_PID" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1b. Refuse to overwrite artifacts that hold uncommitted work.
+#
+# This guard lived only in run_lfm25.sh, while the destruction happens HERE: this
+# script merges, renders, stages and commits all three artifacts. Every generated
+# study document advertises `run_ladder.sh` directly as its reproduce command, so
+# an operator following the published instructions after a granular process left
+# uncommitted rows got no refusal at all -- the guard sitting one caller upstream
+# of the thing it guards. It belongs where the write is.
+#
+# Deliberately no `-e` existence test as the FIRST question: git already tells a
+# never-created path (silence) from an uncommitted DELETION (" D"/"D "), and
+# testing for existence skipped exactly the second one.
+#
+# But git's silence is not one answer, it is three: "tracked and clean", "ignored"
+# and "outside the repository". Only the first is safe. LADDER_ARTIFACT takes any
+# prefix -- `tmp/my_study` is a supported and obvious thing to try -- and for an
+# ignored or external path `git status` prints nothing at all, so an existing
+# artifact read as CLEAN and the harness rewrote it before the later `git add`
+# could fail. That is the guard handing a free pass to precisely the artifacts
+# git cannot protect, which is the same hole `_uncommitted()` in
+# write_provenance.py was fixed for. Same three-way distinction here.
+# (Cross-model review.)
+# ---------------------------------------------------------------------------
+artifact_is_dirty() {
+  local artifact="$1" status
+  if ! status=$(git status --porcelain --untracked-files=all -- "$artifact" 2>/dev/null); then
+    # git refused to describe it -- outside the repository. Unknowable is not clean.
+    [ -e "$artifact" ]
+    return
+  fi
+  [ -n "$status" ] && return 0
+  # Silent AND untracked AND present == ignored by git: its contents exist in no
+  # commit, so nothing can be recovered after this run overwrites them.
+  [ -e "$artifact" ] && [ -z "$(git ls-files -- "$artifact")" ]
+}
+
+DIRTY_ARTIFACTS=""
+for artifact in "$ROWS" "$REPORT" "$REFERENCE"; do
+  if artifact_is_dirty "$artifact"; then
+    DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
+  fi
+done
+if [ -n "${DIRTY_ARTIFACTS// /}" ] && [ "${LADDER_FORCE:-0}" != "1" ]; then
+  log "REFUSING to start: these artifacts have uncommitted changes:"
+  for artifact in $DIRTY_ARTIFACTS; do log "    $artifact"; done
+  log "  A killed sweep leaves measured cells here that no commit holds, and this run"
+  log "  would rewrite and commit over them. Commit them, or copy them outside this"
+  log "  worktree, then re-run. To discard them deliberately, set LADDER_FORCE=1."
+  exit 2
+fi
+
+# LADDER_PREFLIGHT_ONLY: answer "would this refuse?" and stop, measuring nothing.
+#
+# It exists so a WRAPPER can ask the question before doing something it cannot
+# undo. The study-A resume replaced and committed the shared provenance sidecar
+# BEFORE this refusal ran, so a resume over dirty rows published a no-op window
+# in place of the one describing every committed row. The wrapper needs the
+# answer earlier than this point in the script, and the only alternatives were to
+# copy the check into it -- two implementations of one safety rule, which is the
+# drift disease this repo keeps paying for -- or to ask the owner. This asks the
+# owner. (Cross-model review.)
+if [ "${LADDER_PREFLIGHT_ONLY:-0}" = "1" ]; then
+  log "preflight only: artifacts are clean, nothing measured."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Record a process-level death as a real result row.
 #    Stdlib python only, and explicitly NOT the venv interpreter -- this runs
 #    right after a `uv run` and must not become the second one.
 # ---------------------------------------------------------------------------
+#: $3 (optional) restricts the failure to specific benchmarks. In granular mode a
+#: single failed cell used to condemn the whole model: the loop keeps going, later
+#: benchmarks write GOOD rows, and this function then deleted every row for the
+#: model and committed five failure rows over them. One OOM destroyed four valid
+#: measurements and pushed the deletion. Now only the benchmarks that actually
+#: failed are replaced. (Cross-model review; data-safety rule.)
 record_process_failure() {
-  local model="$1" code="$2"
-  ROWS="$ROWS" FAILED_MODEL="$model" EXIT_CODE="$code" BENCHMARKS="$BENCHMARKS" \
+  local model="$1" code="$2" benchmarks="${3:-$BENCHMARKS}"
+  ROWS="$ROWS" FAILED_MODEL="$model" EXIT_CODE="$code" BENCHMARKS="$benchmarks" \
     /usr/bin/python3 <<'PY'
 import json
 import os
@@ -178,13 +408,35 @@ import os
 rows_path = os.environ["ROWS"]
 model = os.environ["FAILED_MODEL"]
 code = os.environ["EXIT_CODE"]
+# Entries are either "benchmark" or "benchmark:code". The per-cell form exists
+# because `code` is a SCALAR that the terminal stop overwrites: a cell exiting
+# 137 (OOM-killed) followed by a memory-guard stop was persisted for every
+# earlier failure as "process exited 9", so the diagnostic artifact recorded the
+# stop reason instead of the death. Falls back to the caller's scalar for the
+# non-granular path, where one process really does own every benchmark.
+# (Cross-model review.)
+failed_spec = os.environ["BENCHMARKS"].split()
+failed_codes: dict[str, str] = {}
+for entry in failed_spec:
+    name, _, own = entry.partition(":")
+    failed_codes[name] = own or code
+failed = list(failed_codes)
 
-with open(rows_path, encoding="utf-8") as handle:
-    rows = [json.loads(line) for line in handle if line.strip()]
+# A missing rows file is an EMPTY row set, not a crash. When LADDER_ARTIFACT
+# names a fresh prefix and the very first model dies before Python creates the
+# file, reading it unconditionally made this function -- the last-resort recorder
+# of process-level death -- die too, so the failure it exists to preserve went
+# unrecorded. (Cross-model review.)
+try:
+    with open(rows_path, encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle if line.strip()]
+except FileNotFoundError:
+    rows = []
 
-# Replace, never append: a re-run must reproduce the table, not grow it.
-rows = [r for r in rows if r["model"] != model]
-for benchmark in os.environ["BENCHMARKS"].split():
+# Replace, never append: a re-run must reproduce the table, not grow it. Scoped
+# to the FAILED benchmarks so a model's other cells survive.
+rows = [r for r in rows if not (r["model"] == model and r["benchmark"] in failed)]
+for benchmark in failed:
     rows.append(
         {
             "model": model,
@@ -194,7 +446,7 @@ for benchmark in os.environ["BENCHMARKS"].split():
             "status": "failed",
             "metric_revision": 1,
             "error": (
-                f"process exited {code} without writing rows "
+                f"process exited {failed_codes[benchmark]} without writing rows "
                 "(killed, OOM, or segfault -- the harness never got to catch it)"
             ),
         }
@@ -210,8 +462,85 @@ PY
 # ---------------------------------------------------------------------------
 # 3. One model at a time: measure, render, commit, push.
 # ---------------------------------------------------------------------------
+# Used swap in MiB, or empty when it cannot be read. The MPS allocator caches
+# across encodes and never releases, so a long sweep can accumulate tens of GiB
+# of allocations for a sub-1B model while RSS stays under a gigabyte -- RSS is
+# useless here, swap is the observable. Sampled per cell so a monotonic climb is
+# caught while there is still a machine to catch it on.
+swap_used_mib() {
+  sysctl vm.swapusage 2>/dev/null | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p'
+}
+
+#: Reclaimable physical memory. This is the observable that actually predicts a
+#: kill, and it is here because the rise-counter below did NOT catch the failure
+#: it was written for: on 2026-07-29 the sweep was killed by the OS mid-cell with
+#: swap at 19892/20480M, while the counter sat at 0-2 rises the whole way up. Used
+#: swap dipped between samples often enough to reset the counter, so a guard that
+#: watches the *derivative* stayed silent through the exhaustion it existed to
+#: prevent -- the repo's recurring "gate decoupled from what it checks" shape.
+#: Free swap alone is not enough either: macOS grows the swap file on demand, so
+#: `total` moves under you (an earlier sample read used=22903M against total
+#: 20480M). Available physical memory does not have that problem.
+mem_available_mib() {
+  vm_stat 2>/dev/null | awk '
+    /page size of/ {ps=$8}
+    /Pages free/ {f=$3} /Pages inactive/ {i=$3} /Pages speculative/ {s=$3}
+    END {gsub(/\./,"",f); gsub(/\./,"",i); gsub(/\./,"",s);
+         if (ps=="") exit; printf "%.0f", (f+i+s)*ps/1048576}'
+}
+
+SWAP_BASELINE="$(swap_used_mib)"
+SWAP_PREV="$SWAP_BASELINE"
+SWAP_RISES=0
+#: Consecutive per-cell rises before the sweep stops. Three, not one: swap
+#: fluctuates with everything else on the machine, and a single sample is noise.
+SWAP_RISE_LIMIT=3
+#: Hard floor on reclaimable memory, checked BEFORE each cell as well as after.
+#: Below this the next encode is what tips the machine over.
+MEM_FLOOR_MIB="${MEM_FLOOR_MIB:-1500}"
+
+check_memory() {
+  local now avail
+  avail="$(mem_available_mib)"
+  if [ -n "$avail" ] && [ "$avail" -lt "$MEM_FLOOR_MIB" ] 2>/dev/null; then
+    log "ABORT: only ${avail}MiB reclaimable memory left (floor ${MEM_FLOOR_MIB}MiB)."
+    log "  Continuing would get this process killed mid-cell, as happened on 2026-07-29."
+    log "  Everything measured so far is committed. Re-run to resume from it."
+    return 1
+  fi
+  now="$(swap_used_mib)"
+  [ -z "$now" ] || [ -z "$SWAP_PREV" ] && { SWAP_PREV="$now"; return 0; }
+  if awk "BEGIN{exit !($now > $SWAP_PREV)}"; then
+    SWAP_RISES=$((SWAP_RISES + 1))
+  else
+    SWAP_RISES=0
+  fi
+  log "  swap used ${now}M (baseline ${SWAP_BASELINE}M, rises ${SWAP_RISES}, avail ${avail}MiB)"
+  SWAP_PREV="$now"
+  if [ "$SWAP_RISES" -ge "$SWAP_RISE_LIMIT" ]; then
+    log "ABORT: used swap rose on $SWAP_RISES consecutive cells (${SWAP_BASELINE}M -> ${now}M)."
+    log "  That is the allocator-accumulation signature, and continuing risks taking the"
+    log "  machine down. Everything measured so far is committed. Re-run to resume."
+    return 1
+  fi
+  return 0
+}
+
+#: Back-compat alias -- the call sites below read as "check swap" historically.
+check_swap() { check_memory; }
+
+# Position in the sweep, so the POST-cell memory guard can tell "stop before the
+# next cell" from "nothing left to stop". Aborting after the final cell of the
+# final model commits every row and still exits 9, which makes run_lfm25.sh stop
+# before closing provenance and rendering the write-up -- discarding the report
+# for a sweep that actually finished. (Cross-model review.)
+MODEL_INDEX=0
+N_MODELS=${#MODELS[@]}
+N_BENCHMARKS=$(echo "$BENCHMARKS" | wc -w | tr -d ' ')
+
 for model in "${MODELS[@]}"; do
   safe="${model//\//__}"
+  MODEL_INDEX=$((MODEL_INDEX + 1))
   log "=== $model ==="
 
   # No --device: the harness passes None to sentence-transformers, whose
@@ -220,18 +549,138 @@ for model in "${MODELS[@]}"; do
   # host without it exit non-zero -- and the failure path below then DELETES
   # that model's previously measured rows and commits the deletion. Set
   # LADDER_DEVICE only to override deliberately.
-  uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
-    --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
-    ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
-    > "$LOG_DIR/$safe.log" 2>&1
-  code=$?
+  measure_cell() {  # $1 = space-separated benchmark list, $2 = log mode (> or >>)
+    if [ "$2" = "truncate" ]; then : > "$LOG_DIR/$safe.log"; fi
+    # shellcheck disable=SC2086  # word splitting is the interface here
+    uv run ${ENV_FILE_ARG[@]+"${ENV_FILE_ARG[@]}"} python examples/research/embedder_ladder.py \
+      --models "$model" ${LADDER_DEVICE:+--device "$LADDER_DEVICE"} \
+      --benchmarks $1 \
+      --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
+      --ladder-models "${LADDER_ACCOUNTABLE[@]}" \
+      ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
+      ${TRUST_ARG[@]+"${TRUST_ARG[@]}"} \
+      >> "$LOG_DIR/$safe.log" 2>&1
+  }
+
+  code=0
+  # Initialised HERE, before the mode branch, for two reasons. (1) `set -u` is on:
+  # the non-granular SUCCESS path never assigned it, so the expansion below exited
+  # the script with "unbound variable" *before* the commit block -- turning a clean
+  # sweep into lost, uncommitted measurements. Reproduced, not theorised. (2) It
+  # must reset per model, or one model's failures would be attributed to the next.
+  FAILED_BENCHMARKS=""
+  # Set by any path that mutates the rows file. Exactly one re-render is driven
+  # off it, so a stale report can never be committed beside edited rows.
+  ROWS_EDITED=0
+  if [ "${LADDER_BENCHMARK_GRANULAR:-}" = "1" ]; then
+    # One BENCHMARK per process, not just one model. The model reload costs ~10s
+    # per cell; against a multi-hour sweep that is trivial insurance against the
+    # MPS allocator accumulating across benchmarks inside one process, which has
+    # already OOM'd this machine once (42.44 GiB of allocations for a 0.6B model
+    # at 0.8 GB RSS).
+    first=truncate
+    BENCH_INDEX=0
+    for benchmark in $BENCHMARKS; do
+      BENCH_INDEX=$((BENCH_INDEX + 1))
+      # Checked BEFORE the encode, not only after it. The 2026-07-29 kill landed
+      # *inside* a cell, so a purely post-cell guard never got its turn to run.
+      check_memory || { code=9; break; }
+      log "  -- $model on $benchmark"
+      measure_cell "$benchmark" "$first"
+      cell_code=$?
+      first=append
+      if [ $cell_code -ne 0 ]; then
+        code=$cell_code
+        # Name the cell that died. Without this the failure path condemns every
+        # benchmark for this model, including the ones that measured fine.
+        # Exit 3 is excluded on purpose: a cache-integrity refusal means the
+        # ROWS are fine and the cache is suspect, so recording it as a death
+        # would delete good rows -- the trap the exit-3 branch below exists to
+        # avoid.
+        # 3 (cache integrity) and 2 (configuration refusal) are REFUSALS, not
+        # deaths: the harness stopped before producing anything, and the recorded
+        # rows are fine. Condemning the cell would delete them.
+        # "benchmark:code", so each cell keeps ITS OWN exit status. `code` is a
+        # scalar the terminal stop overwrites, and recording that for every
+        # earlier failure logged the stop reason instead of the death.
+        [ $cell_code -ne 3 ] && [ $cell_code -ne 2 ] &&
+          FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark:$cell_code"
+      fi
+      # A cache-integrity refusal must stop immediately, not after the remaining
+      # benchmarks have each recorded their own failure row.
+      { [ $cell_code -eq 3 ] || [ $cell_code -eq 2 ]; } && break
+      # Only guard if something still has to run. After the final cell of the
+      # final model there is nothing left to protect, and exiting 9 there costs
+      # the write-up for a sweep that completed.
+      if [ $BENCH_INDEX -lt "$N_BENCHMARKS" ] || [ $MODEL_INDEX -lt "$N_MODELS" ]; then
+        check_swap || { code=9; break; }
+      fi
+    done
+  else
+    measure_cell "$BENCHMARKS" truncate
+    code=$?
+    # Non-granular: one process covers every benchmark, so all of them are lost.
+    # SAME exclusion as the granular branch, and it was missing here: 2
+    # (configuration refused) and 3 (cache integrity) are REFUSALS -- the harness
+    # stopped before writing anything and the recorded rows are fine. Listing
+    # every benchmark for them made the flush below call record_process_failure,
+    # which DELETES the model's valid cells and commits the deletion, while the
+    # refusal branches further down still printed "NOT recording a failure row".
+    # The guard existed on one path only, so LADDER_BENCHMARK_GRANULAR -- a
+    # performance knob -- silently decided whether a mistyped flag destroyed
+    # rows. (Cross-model review.)
+    #
+    # Recorded as "benchmark:code", exactly like the granular path. `code` is a
+    # SCALAR that the memory guard below overwrites with 9, so bare names made
+    # record_process_failure stamp "process exited 9" over a model that actually
+    # died 137 -- the diagnostic artifact recording the stop reason instead of
+    # the death, and only on this branch. (Cross-model review.)
+    if [ $code -ne 0 ] && [ $code -ne 2 ] && [ $code -ne 3 ]; then
+      for failed_benchmark in $BENCHMARKS; do
+        FAILED_BENCHMARKS="$FAILED_BENCHMARKS $failed_benchmark:$code"
+      done
+    fi
+    # Same rule as the granular branch: only abort if another model still runs.
+    if [ $MODEL_INDEX -lt "$N_MODELS" ]; then
+      check_swap || code=9
+    fi
+  fi
+
+  # Flush cell deaths BEFORE the terminal branches below, both of which return
+  # without reaching the ordinary failure path. `code` gets overwritten by the
+  # terminal 9 (memory) or 3 (cache refusal), so a cell that genuinely died
+  # earlier in the loop left no trace -- and the next re-run then saw stale
+  # SUCCESSFUL rows for a cell that never re-ran. Scoped to the benchmarks that
+  # actually failed, and code-3 refusals are already excluded from that list, so
+  # this cannot delete a good row. (Cross-model review.)
+  if [ -n "${FAILED_BENCHMARKS// /}" ] &&
+    { [ $code -eq 9 ] || [ $code -eq 3 ] || [ $code -eq 2 ]; }; then
+    log "$model: recording cell failures that preceded the stop:$FAILED_BENCHMARKS"
+    record_process_failure "$model" "$code" "$FAILED_BENCHMARKS"
+    # This EDITED the rows file, so the report beside it is now stale and both
+    # terminal branches below must go through the ordinary render+commit path
+    # instead of exiting past it. Before this flag, exit 3 returned without
+    # staging anything -- the one failure record it had just written died with
+    # the worktree -- and exit 9 committed the edited rows under a report
+    # rendered before the edit. (Cross-model review.)
+    ROWS_EDITED=1
+  fi
+
+  if [ $code -eq 9 ]; then
+    log "$model: stopping the sweep on memory pressure. Rows measured so far are committed below."
+  fi
 
   # A cache-integrity refusal is NOT a model failure, and must not be recorded as
   # one: record_process_failure deletes every existing row for the model and the
   # commit below ships the deletion. Nothing is wrong with those rows -- the cache
-  # is what is suspect -- so stop the sweep and leave the tracked artifacts
-  # untouched. The harness reserves this code for exactly that
-  # (embedder_ladder.py::EXIT_CACHE_INTEGRITY). (Cross-model review.)
+  # is what is suspect -- so this branch records nothing of its own. The harness
+  # reserves this code for exactly that (embedder_ladder.py::EXIT_CACHE_INTEGRITY).
+  #
+  # It does NOT exit here. Earlier granular cells may have died for unrelated
+  # reasons and been flushed above, and exiting before the commit block threw that
+  # record away -- the refusal branch's own "leave the artifacts untouched"
+  # promise had already been broken by the flush that runs before it. The exit
+  # moved next to the code-9 exit, after the commit. (Cross-model review.)
   if [ $code -eq 3 ]; then
     log "$model: cache-integrity refusal (exit 3). NOT recording a failure row --"
     log "  the recorded rows are fine; the embedding cache is not. See $LOG_DIR/$safe.log."
@@ -245,21 +694,89 @@ for model in "${MODELS[@]}"; do
     log "  -- if you know the cache matches the loaded checkpoint. (The driver takes"
     log "  no such flag: its only positional argument is a wait PID, so"
     log "  --trust-existing-cache would be read as one.)"
-    exit 3
   fi
 
-  if [ $code -ne 0 ]; then
-    log "$model exited $code -- recording a failure row and continuing"
-    record_process_failure "$model" "$code"
-    # Re-render so the failure is visible in the report too.
-    uv run python examples/research/embedder_ladder.py --render-only \
-      >> "$LOG_DIR/$safe.log" 2>&1
+  # A CONFIGURATION refusal (argparse's exit 2 -- e.g. the pre-flight baseline
+  # check, which runs before anything is written) is not a model that died. The
+  # generic branch below would call record_process_failure, which DELETES every
+  # previously measured row for the affected benchmarks, and the commit block
+  # would then ship that deletion -- destroying expensive valid rows in response
+  # to a mistyped flag. The refusal already printed what is wrong.
+  # (Cross-model review.)
+  if [ $code -eq 2 ]; then
+    log "$model: configuration refused (exit 2). NOT recording a failure row --"
+    log "  nothing was measured and nothing was written. See $LOG_DIR/$safe.log."
   fi
 
-  git add "$ROWS" "$REPORT" "$REFERENCE" 2>/dev/null
+  if [ $code -ne 0 ] && [ $code -ne 9 ] && [ $code -ne 3 ] && [ $code -ne 2 ]; then
+    log "$model exited $code -- recording a failure row for:${FAILED_BENCHMARKS:- $BENCHMARKS}"
+    record_process_failure "$model" "$code" "${FAILED_BENCHMARKS:-$BENCHMARKS}"
+    ROWS_EDITED=1
+  fi
+
+  # ONE re-render, driven by "were the rows edited", not by which code path
+  # edited them. Previously only the ordinary failure path rendered, so the
+  # terminal paths committed edited rows under a report generated before the
+  # edit. The paths and the ladder set must match the measuring call above:
+  # rendering the DEFAULT artifact here would rewrite the 2026-07-27 ladder's
+  # report from a different study's rows.
+  #
+  # The exit status is CHECKED. There is no `set -e` here, so a failed render --
+  # cohort validation, a full disk, any renderer guard -- used to fall straight
+  # through to the staging block, which committed the edited rows beside the
+  # PREVIOUS report: two artifacts published together that disagree, on the one
+  # path where something has already gone wrong. The rows are still committed
+  # (they are the durable record of a real failure, and dropping them is the
+  # larger loss), but the stale report is left out of the commit and the sweep
+  # stops. (Cross-model review.)
+  RENDER_FAILED=0
+  if [ $ROWS_EDITED -eq 1 ]; then
+    if ! uv run python examples/research/embedder_ladder.py --render-only \
+      --rows "$ROWS" --report "$REPORT" --reference "$REFERENCE" \
+      --ladder-models "${LADDER_ACCOUNTABLE[@]}" \
+      ${REFERENCE_MODEL_ARG[@]+"${REFERENCE_MODEL_ARG[@]}"} \
+      >> "$LOG_DIR/$safe.log" 2>&1; then
+      RENDER_FAILED=1
+      log "$model: the report FAILED to render over the edited rows. See $LOG_DIR/$safe.log."
+      log "  Committing the rows without it: a report generated before the edit would"
+      log "  contradict them. Re-render once the cause is fixed."
+    fi
+  fi
+
+  # Stage only the artifacts that EXIST. `git add` fails atomically on a
+  # pathspec matching nothing, so naming an absent sidecar staged NONE of the
+  # three -- and with its status discarded, the next check read "no change" and
+  # the run was never committed. On a fresh LADDER_ARTIFACT whose first model
+  # dies before Python writes the reference sidecar, that silently threw away
+  # the very failure record this path exists to preserve. (Cross-model review.)
+  # Excluding the stale report from the COMMIT is only half the fix. The commit
+  # then holds new rows and no report, and `git push origin HEAD` publishes that
+  # against the report already on the remote -- which was generated from the
+  # PREVIOUS rows. The remote ends up holding exactly the contradiction the
+  # exclusion below exists to prevent, while the log says the rows are merely
+  # being made durable. Commit, do not publish. (Cross-model review.)
+  if [ $RENDER_FAILED -eq 1 ]; then
+    block_publication "the report could not be re-rendered over these rows, so the commit carries rows WITHOUT it. Publishing would leave the remote holding new rows beside a report generated from the previous ones."
+  fi
+  ARTIFACT_PATHS=()
+  for artifact_path in "$ROWS" "$REPORT" "$REFERENCE"; do
+    # The report is excluded when it could not be re-rendered over the edited
+    # rows: staging it would publish a document that contradicts the file beside
+    # it. Everything else still goes, so the failure record stays durable.
+    [ $RENDER_FAILED -eq 1 ] && [ "$artifact_path" = "$REPORT" ] && continue
+    [ -e "$artifact_path" ] && ARTIFACT_PATHS+=("$artifact_path")
+  done
+  if [ ${#ARTIFACT_PATHS[@]} -eq 0 ]; then
+    log "FATAL: $model produced none of the tracked artifacts -- nothing to commit; stopping."
+    exit 1
+  fi
+  if ! git add "${ARTIFACT_PATHS[@]}"; then
+    log "FATAL: could not stage ${ARTIFACT_PATHS[*]}; stopping rather than losing the result."
+    exit 1
+  fi
   # Path-scoped, like the commit below: an operator's unrelated staged work
   # would otherwise read as "this model produced results".
-  if git diff --cached --quiet -- "$ROWS" "$REPORT" "$REFERENCE"; then
+  if git diff --cached --quiet -- "${ARTIFACT_PATHS[@]}"; then
     log "$model produced no change to the tracked artifacts"
   else
     # --only: commit EXACTLY these three paths. A plain `git commit` takes the
@@ -271,15 +788,38 @@ for model in "${MODELS[@]}"; do
     # identity, disk), the results are merely staged, and carrying on would let
     # the NEXT model's --only commit bundle them under the wrong message. A
     # bare `&& log` would swallow exactly that.
-    if ! git commit -q --only "$ROWS" "$REPORT" "$REFERENCE" \
-      -m "results(embedder-ladder): $model" \
+    if ! git commit -q --only "${ARTIFACT_PATHS[@]}" \
+      -m "results($(basename "$ARTIFACT")): $model" \
       -m "Measured by examples/research/run_ladder.sh, committed as soon as the rows existed. Exit code $code."
     then
       log "FATAL: commit failed for $model. Results are staged but NOT durable; stopping."
       exit 1
     fi
     log "committed $model"
-    git push -q origin HEAD 2>/dev/null && log "pushed" || log "push failed (will retry next model)"
+    push_results
+  fi
+
+  # Committed first, THEN stop: the whole point of aborting on memory pressure or
+  # a cache refusal is to keep what was measured, and exiting before the commit
+  # above would throw away exactly the rows the abort was protecting.
+  if [ $code -eq 9 ]; then
+    log "stopping: memory pressure. Re-run this driver to resume from the committed rows."
+    exit 9
+  fi
+  if [ $code -eq 3 ]; then
+    log "stopping: cache-integrity refusal (recovery command logged above)."
+    exit 3
+  fi
+  if [ $code -eq 2 ]; then
+    log "stopping: configuration refused. Fix the invocation and re-run; the rows are intact."
+    exit 2
+  fi
+  # Same order for the same reason: the failure rows are committed above, then
+  # the sweep stops. Carrying on would keep editing rows whose report cannot be
+  # regenerated, widening the disagreement one model at a time.
+  if [ $RENDER_FAILED -eq 1 ]; then
+    log "stopping: the report could not be re-rendered. The rows are committed WITHOUT it."
+    exit 4
   fi
 done
 
