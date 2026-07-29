@@ -143,6 +143,29 @@ esac
 # shellcheck disable=SC2086  # word splitting is the interface here
 uv run python examples/research/write_provenance.py --start --studies $PROVENANCE_STUDIES || exit 1
 
+# Committed BEFORE the first measurement, not only at the end.
+#
+# --start overwrites a TRACKED file. run_ladder.sh then commits, and may push,
+# each model's rows as they are produced. If the outer process is killed before
+# the graceful finish/abort path -- an OS kill is exactly how this study lost a
+# sweep once -- those rows are durable and published while the only snapshot
+# describing their measurement window is an uncommitted working file that dies
+# with the worktree, leaving the rows paired with the PREVIOUS study's
+# provenance. Opening the window durably costs one commit. (Cross-model review.)
+git add "$PROVENANCE_JSON" || {
+  say "FATAL: could not stage the opened provenance window"
+  exit 1
+}
+if ! git diff --cached --quiet -- "$PROVENANCE_JSON"; then
+  git commit -q --only "$PROVENANCE_JSON" \
+    -m "results(lfm25): open the provenance window (studies: $STUDY)" \
+    -m "Committed before the first measurement so rows published mid-sweep are never paired with a previous window." ||
+    {
+      say "FATAL: could not commit the opened provenance window"
+      exit 1
+    }
+fi
+
 # ---------------------------------------------------------------------------
 # Study A -- the like-for-like comparison.
 #
@@ -190,7 +213,15 @@ fi
 # file changed mid-sweep, in which case no single blob describes all the rows and
 # the report must not claim one.
 say "closing the provenance window"
-uv run python examples/research/write_provenance.py --finish || exit 1
+# NOT `|| exit 1`. --finish writes the finished timestamp and the
+# `changed_during_run` evidence and THEN exits non-zero, so bailing out here
+# discarded the very record explaining that already-committed rows came from
+# mixed code -- the one warning a reader of those rows would need. Routed through
+# the close-and-commit path, which persists it. (Cross-model review.)
+uv run python examples/research/write_provenance.py --finish || {
+  say "provenance --finish rejected this sweep; committing its evidence before stopping"
+  abort_with_provenance 1
+}
 
 say "rendering the write-up"
 uv run python examples/research/lfm25_report.py || exit 1

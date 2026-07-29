@@ -977,6 +977,13 @@ _CANARY_TOLERANCE = 1e-4
 #: cache is what is suspect. 3 because 1 is an uncaught exception and 2 is argparse.
 EXIT_CACHE_INTEGRITY = 3
 
+#: argparse's own code for a bad invocation, named here because the driver has to
+#: treat it as a REFUSAL rather than a death. The pre-flight baseline check exits
+#: this way *before touching disk* -- so recording a failure row for it would
+#: delete valid, expensive rows and commit the deletion in response to a mistyped
+#: flag. A refusal that costs data is worse than no refusal. (Cross-model review.)
+EXIT_CONFIG = 2
+
 #: Sentinel for "every partition", distinct from ``None`` -- which is itself a
 #: real prompt value (the unprompted partition) and cannot double as "all".
 _ANY_PROMPT: Any = object()

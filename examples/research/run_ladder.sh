@@ -478,11 +478,15 @@ for model in "${MODELS[@]}"; do
         # ROWS are fine and the cache is suspect, so recording it as a death
         # would delete good rows -- the trap the exit-3 branch below exists to
         # avoid.
-        [ $cell_code -ne 3 ] && FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark"
+        # 3 (cache integrity) and 2 (configuration refusal) are REFUSALS, not
+        # deaths: the harness stopped before producing anything, and the recorded
+        # rows are fine. Condemning the cell would delete them.
+        [ $cell_code -ne 3 ] && [ $cell_code -ne 2 ] &&
+          FAILED_BENCHMARKS="$FAILED_BENCHMARKS $benchmark"
       fi
       # A cache-integrity refusal must stop immediately, not after the remaining
       # benchmarks have each recorded their own failure row.
-      [ $cell_code -eq 3 ] && break
+      { [ $cell_code -eq 3 ] || [ $cell_code -eq 2 ]; } && break
       # Only guard if something still has to run. After the final cell of the
       # final model there is nothing left to protect, and exiting 9 there costs
       # the write-up for a sweep that completed.
@@ -508,7 +512,8 @@ for model in "${MODELS[@]}"; do
   # SUCCESSFUL rows for a cell that never re-ran. Scoped to the benchmarks that
   # actually failed, and code-3 refusals are already excluded from that list, so
   # this cannot delete a good row. (Cross-model review.)
-  if [ -n "${FAILED_BENCHMARKS// /}" ] && { [ $code -eq 9 ] || [ $code -eq 3 ]; }; then
+  if [ -n "${FAILED_BENCHMARKS// /}" ] &&
+    { [ $code -eq 9 ] || [ $code -eq 3 ] || [ $code -eq 2 ]; }; then
     log "$model: recording cell failures that preceded the stop:$FAILED_BENCHMARKS"
     record_process_failure "$model" "$code" "$FAILED_BENCHMARKS"
     # This EDITED the rows file, so the report beside it is now stale and both
@@ -550,7 +555,19 @@ for model in "${MODELS[@]}"; do
     log "  --trust-existing-cache would be read as one.)"
   fi
 
-  if [ $code -ne 0 ] && [ $code -ne 9 ] && [ $code -ne 3 ]; then
+  # A CONFIGURATION refusal (argparse's exit 2 -- e.g. the pre-flight baseline
+  # check, which runs before anything is written) is not a model that died. The
+  # generic branch below would call record_process_failure, which DELETES every
+  # previously measured row for the affected benchmarks, and the commit block
+  # would then ship that deletion -- destroying expensive valid rows in response
+  # to a mistyped flag. The refusal already printed what is wrong.
+  # (Cross-model review.)
+  if [ $code -eq 2 ]; then
+    log "$model: configuration refused (exit 2). NOT recording a failure row --"
+    log "  nothing was measured and nothing was written. See $LOG_DIR/$safe.log."
+  fi
+
+  if [ $code -ne 0 ] && [ $code -ne 9 ] && [ $code -ne 3 ] && [ $code -ne 2 ]; then
     log "$model exited $code -- recording a failure row for:${FAILED_BENCHMARKS:- $BENCHMARKS}"
     record_process_failure "$model" "$code" "${FAILED_BENCHMARKS:-$BENCHMARKS}"
     ROWS_EDITED=1
@@ -623,6 +640,10 @@ for model in "${MODELS[@]}"; do
   if [ $code -eq 3 ]; then
     log "stopping: cache-integrity refusal (recovery command logged above)."
     exit 3
+  fi
+  if [ $code -eq 2 ]; then
+    log "stopping: configuration refused. Fix the invocation and re-run; the rows are intact."
+    exit 2
   fi
 done
 
