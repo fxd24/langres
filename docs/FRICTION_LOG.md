@@ -10,6 +10,73 @@ This document tracks technical issues encountered during development, their root
 
 **Remedy:** Set environment variables in `.env` to force single-threaded OpenMP mode: `OMP_NUM_THREADS=1` and `KMP_DUPLICATE_LIB_OK=1`. The prek pre-push hook automatically loads these via `uv run --env-file .env pytest`. Minimal performance impact at POC scale (<10K entities).
 
+### The same conflict also presents as a silent **deadlock**, not only a segfault (2026-07-28)
+
+**Problem:** `examples/research/prompt_axis.py` hung for 3h16m at 0% CPU with no
+error, no traceback and no network activity, immediately after logging
+`Loading SentenceTransformer model from …/embeddinggemma-300m`. Three earlier
+models (MiniLM, bge, e5) had already completed 208 rows, so it looked like "a
+problem with Gemma" rather than an environment problem — which is what made it
+expensive to find.
+
+**Measured, not inferred:**
+
+| condition | Gemma load |
+|---|---|
+| no faiss imported (repo id *or* local snapshot path) | **1.3 s** |
+| faiss imported + index built, `KMP_DUPLICATE_LIB_OK=TRUE` only | **never returns** (killed at 180 s) |
+| same, plus `OMP_NUM_THREADS=1` | **1.6 s** |
+
+**Two traps worth naming:**
+
+1. **`KMP_DUPLICATE_LIB_OK` alone is not sufficient.** It suppresses the *abort*
+   (`OMP: Error #15`), not the *deadlock*. A run can therefore have the variable
+   set, produce no error whatsoever, and hang forever. `OMP_NUM_THREADS=1` is the
+   one that actually fixes it.
+2. **Dropping `--env-file .env` is not a cosmetic deviation.** A fresh git
+   worktree has **no `.env`** (it is gitignored), so `uv run --env-file .env`
+   fails outright there and the tempting move is to drop the flag and set
+   `KMP_DUPLICATE_LIB_OK` by hand — which is exactly the state above. In a
+   worktree, set the variables explicitly instead:
+   `KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false uv run python …`
+
+---
+
+## MPS memory is not reclaimed between models, so a long sweep OOMs (2026-07-28)
+
+**Problem:** the same `prompt_axis.py` sweep died at row 324 of 400 with a torch
+MPS out-of-memory asking for **42.44 GiB** — while loading
+`Qwen/Qwen3-Embedding-0.6B`, a 0.6B model in fp16 whose weights are ~1.2 GiB. The
+number is absurd on its face, which is the useful clue: it is not one model's
+footprint, it is four models' worth of cached allocations plus the corpus vectors
+the sweep had accumulated over the preceding three checkpoints.
+
+**Cause:** the MPS allocator caches freed blocks rather than returning them, and
+Python objects that outlive their loop iteration keep the model graph alive. One
+of these was a real leak — the `blocker` bound in the inner loop pinned the
+embedder after the `del` list had already been extended once — but fixing it only
+moved the ceiling, it did not remove it. A sweep long enough will still hit it.
+
+**Remedy: one benchmark per process.** The harness resumes at cell granularity
+(`--resume` reads the rows file), so a driver loop that invokes it once per
+`(model, benchmark)` and lets the process exit is both the fix and free — the
+embedding cache is on disk, so nothing is recomputed:
+
+```sh
+for b in fodors_zagat abt_buy amazon_google wdc_computers; do
+  KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 TOKENIZERS_PARALLELISM=false \
+    uv run python examples/research/prompt_axis.py \
+      --models Qwen/Qwen3-Embedding-0.6B --benchmarks "$b" --resume
+done
+```
+
+**The trap:** it fails **late** and **partially**. Three models and 324 rows had
+already been written, so the failure looks like "Qwen3 is too big for this
+machine" rather than "this process has been alive too long". Running Qwen3
+*first* would have succeeded and hidden the ceiling entirely. Treat "a model that
+loads fine alone but OOMs in a sweep" as an allocator-lifetime problem, not a
+model-size one.
+
 ---
 
 ## Wave 3 run-as-user DX numbers (2026-07-03)

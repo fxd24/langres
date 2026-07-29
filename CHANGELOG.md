@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### `paired_entity_bootstrap` now reports a p-value, so results can be corrected for multiplicity
+
+A study that publishes many intervals needs a multiplicity correction, and every
+correction (Holm, Bonferroni, Šidák) tests at levels *other* than the one the
+interval was cut at. A 95% interval cannot answer "does this exclude zero at
+1.25%", so callers were left recovering a tail from an interval endpoint under an
+assumed normal shape — an extrapolation that is pinned to agree at 0.95 and is
+uncalibrated at exactly the levels a correction reads.
+
+- **`BootstrapInterval.p_value`** — the two-sided *achieved significance level*,
+  computed from the **same replicates** as the interval:
+  `2 * min(P(diff* <= 0), P(diff* >= 0))` with the standard `(count + 1) / (B + 1)`
+  correction. This is the percentile interval inverted, so `p_value <= t`
+  **implies** "the `1 - t` percentile interval over this draw excludes zero",
+  exactly and at *every* `t` — the coherence property, tested at six levels on a
+  fixture calibrated so the check changes its answer across them. The converse
+  holds only up to the draw's order-statistic granularity, within a band of
+  `4 / (samples + 1)`, and the p-value is always the conservative side of it.
+  `None` when `status="insufficient"`.
+- **`BootstrapInterval.p_value_standard_error`** — `sqrt(p (2 - p) / samples)`.
+  Note `2 - p`, not the `1 - p` of an ordinary proportion: the p-value is a tail
+  proportion *doubled* for two-sidedness, and doubling a statistic doubles its
+  standard error. At `p ≈ 0.02` — where correction thresholds sit — the correct
+  value is **~42% larger** than the naive `sqrt(p (1 - p) / samples)`
+  (equivalently, the naive form sits ~30% below the truth); it would be least
+  accurate exactly where it is relied on most.
+  The p-value is an estimate from a finite draw; a decision taken within a few of
+  these of a threshold is resolution-limited, not settled, and raising `samples`
+  is the lever. Nothing below `2 / (B + 1)` is observable, so the estimator floors
+  there rather than reporting `0` and asserting a precision the draw lacks.
+- Both fields are additive with defaults; existing callers and stored intervals
+  are unaffected, and no existing number changes.
+
 ### `threshold=None` now means the score family's default, not a hard-coded `0.5`
 
 `MethodSpec.default_threshold` has existed since the v0.3 registry unification,
@@ -1703,7 +1736,6 @@ The one entry doc for the closed flywheel (fail-fast `auto`, `select_for_review`
   here" (+ a quickstart pointer); `docs/TUTORIAL_YOUR_OWN_CSV.md` gains it as
   the big-picture rung and in the calibration tease; `examples/README.md`
   Start-here tier gains `flywheel_closed_loop.py`.
-
 
 ---
 
