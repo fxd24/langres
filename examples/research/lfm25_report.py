@@ -420,7 +420,7 @@ def _wins(rows: list[dict[str, Any]], model: str, baseline: str) -> tuple[list[s
 
 def _unpaired_arms(
     rows: list[dict[str, Any]], model: str, baseline: str
-) -> list[tuple[str, str, float, float]]:
+) -> list[tuple[str, str, float, float, bool]]:
     """Arms of ``model`` with NO paired interval, and how they compare on raw recall.
 
     An arm the baseline does not run cannot be bootstrapped against it — the
@@ -430,17 +430,31 @@ def _unpaired_arms(
     the baseline's best while every paired arm scores below it. Left unsaid, the
     headline would read as a checkpoint-level verdict the data cannot support.
 
-    Returns ``(benchmark, arm, model_recall, baseline_best_recall)``.
+    **A missing interval is not proof that the baseline lacks the arm**, which is
+    what this returned before and what the prose then asserted.
+    ``merge_rows()`` deliberately clears every retained challenger's
+    ``vs_reference_*`` when the reference is re-measured — the deltas were
+    computed against per-record scores that no longer exist — while keeping the
+    reference's own rows; an interval is also unavailable when there are too few
+    gold clusters to resample. After either, an ordinary ``none``/``instruct``
+    cell landed here and was explained as an arm the baseline never ran. The
+    baseline's own rows are now consulted, and the two causes are reported as the
+    different things they are. (Cross-model review.)
+
+    Returns ``(benchmark, arm, model_recall, baseline_best_recall,
+    baseline_ran_this_arm)``.
     """
-    out: list[tuple[str, str, float, float]] = []
+    out: list[tuple[str, str, float, float, bool]] = []
     for benchmark in _benchmarks(rows):
         base_cells = _cells(rows, model=baseline, benchmark=benchmark, k=HEADLINE_K, status="ok")
         if not base_cells:
             continue
         base_best = max(c["candidate_recall"] for c in base_cells)
+        base_arms = {c["prompt_arm"] for c in base_cells}
         for row in _cells(rows, model=model, benchmark=benchmark, k=HEADLINE_K, status="ok"):
             if row.get("vs_reference_ci_low") is None:
-                out.append((benchmark, row["prompt_arm"], row["candidate_recall"], base_best))
+                arm = row["prompt_arm"]
+                out.append((benchmark, arm, row["candidate_recall"], base_best, arm in base_arms))
     return out
 
 
@@ -1371,6 +1385,22 @@ def _term_used(term: str, section: list[str]) -> bool:
     return any(re.search(rf"\b{re.escape(form)}\b", clause) for form in forms for clause in section)
 
 
+def _untrusted(probe: dict[str, Any], field: str) -> str:
+    """A value from the ``trust_remote_code=False`` probe cell, formatted for prose.
+
+    The prose beside the probe table asserted ``1.000000`` and "exactly 0" as
+    literals while the table was read from the JSON. The driver refreshes that
+    JSON before every render, so a checkpoint or dependency change would have
+    moved the table and left the paragraph restating a measurement nobody took
+    — in the one file whose stated premise is that no measured quantity is typed
+    into prose. (Cross-model review.)
+    """
+    cell = probe["remote_code"]["trust_remote_code=False"]
+    return (
+        f"{cell[field]:.6f}" if field == "cosine_between_unrelated_records" else f"{cell[field]:g}"
+    )
+
+
 def _load_probe_section(probe: dict[str, Any]) -> str:
     remote = probe["remote_code"]
     table = "| `trust_remote_code` | class actually instantiated | from checkpoint's code | cos(two unrelated records) | max prompt shift |\n"
@@ -1473,8 +1503,8 @@ def render() -> str:
         "",
         "**These are per-ARM verdicts, not a checkpoint-level one**, and the distinction "
         "changes the reading. A paired interval needs both models' per-record vectors on "
-        "the same records, so an arm the baseline never runs cannot be tested at all — it "
-        "is silently absent from the two lines above rather than counted as a loss:",
+        "the same records, so an arm without one cannot be tested at all — it is silently "
+        "absent from the two lines above rather than counted as a loss:",
         "",
         *(
             [
@@ -1487,16 +1517,29 @@ def render() -> str:
                     if recall == base
                     else "below the baseline, and untested."
                 )
-                for benchmark, arm, recall, base in unpaired
+                # Two different reasons an interval is missing, and only one of
+                # them is "the baseline never ran this arm". Saying that of a
+                # cleared interval would be a fabricated explanation for a cell
+                # the baseline demonstrably did measure. (Cross-model review.)
+                + (
+                    " The baseline **did** run this arm, so the interval is missing rather "
+                    "than impossible: `merge_rows()` clears a challenger's `vs_reference_*` "
+                    "when the reference is re-measured, and a bootstrap needs enough gold "
+                    "clusters. Re-run this cell against the current reference to restore it."
+                    if baseline_ran
+                    else " The baseline has no `" + arm + "` arm here, so no paired test "
+                    "exists to run."
+                )
+                for benchmark, arm, recall, base, baseline_ran in unpaired
             ]
             or ["- None — every arm has a counterpart in the baseline."]
         ),
         "",
         'So on any benchmark listed above, the honest statement is *"behind on the arms '
-        'that could be tested"*, not *"behind"*. The untested arms are the checkpoint\'s '
-        "own documented prompts, which is where a vendor would expect it to look best; "
-        "closing that gap needs the baseline re-run under the same prompts, which this "
-        "study did not do.",
+        'that could be tested"*, not *"behind"*. Where the cause is a missing counterpart, '
+        "the untested arm is the checkpoint's own documented prompt — which is where a "
+        "vendor would expect it to look best; closing that gap needs the baseline re-run "
+        "under the same prompts, which this study did not do.",
         "",
         "**It cannot become langres's default regardless of how it scores** — see the "
         "licence section. That is a legal constraint, not a measurement.",
@@ -1514,12 +1557,18 @@ def render() -> str:
         "",
         remote_table,
         "",
+        # Interpolated from the same JSON the table above reads, not typed. The
+        # driver refreshes the probe before every render, so a hard-coded
+        # "1.000000" and "exactly 0" would keep asserting last month's numbers
+        # under a table showing this run's -- in the one file whose whole premise
+        # is that no measured quantity is typed into prose. (Cross-model review.)
         'The untrusted load is not "slightly degraded". This checkpoint pools the **CLS** '
         "token (`1_Pooling/config.json`), and under causal attention the first token is a "
         "function of itself alone — so every text in the corpus collapses onto one vector "
-        "(cosine between two unrelated products = 1.000000) and the prompt changes nothing "
-        "at all (shift exactly 0). A sweep would have published that as a blocking recall "
-        "and attributed it to the model.",
+        f"(cosine between two unrelated products = {_untrusted(probe, 'cosine_between_unrelated_records')}) "
+        f"and the prompt changes nothing at all (shift {_untrusted(probe, 'max_abs_prompt_shift')}). "
+        "A sweep would have published that as a blocking recall and attributed it to the "
+        "model.",
         "",
         "Each row above was measured in its **own subprocess**, which is load-bearing: "
         "probing both configurations in one process makes the second load report the "
@@ -1660,15 +1709,28 @@ def render() -> str:
         ),
         "",
         # The OTHER way a benchmark becomes unusable, and the one the sentence
-        # above cannot describe: here the interval DOES exclude zero — in the
-        # wrong direction. Filed under the same "no ranking" heading, justified
-        # separately. (Cross-model review.)
+        # above cannot describe: the interval excludes zero and the CROSS-STUDY
+        # GAP still runs the wrong way. Filed under the same "no ranking" heading,
+        # justified separately. (Cross-model review.)
+        #
+        # The two facts stay apart. `inverted` is selected by `margin <= 0` — a
+        # cross-study POINT gap — while `separates` accepts either interval
+        # direction, so the earlier "the interval excludes zero on the wrong side"
+        # welded a claim about the point gap onto the paired interval. After a
+        # study-A-only rerun the best tuned score can drop below the older control
+        # while that control's own interval still runs significantly BELOW its
+        # study-B baseline, and the sentence would have called that interval
+        # wrong-sided. The direction is read per benchmark now. (Cross-model
+        # review.)
         *(
             [
-                f"**Benchmarks where the untrained control BEATS every tuned model: "
-                f"{', '.join(f'`{b}`' for b in inverted)}.** Not the same failure: the "
-                f"control's interval there *does* exclude zero, on the wrong side. That is "
-                f"a result about the benchmark, not about any embedder — a ranking read off "
+                f"**Benchmarks where the untrained control outscores every tuned model: "
+                f"{', '.join(f'`{b}` (its paired interval runs {_control_direction(base, b) or "either side of zero"} the paired baseline)' for b in inverted)}.** "
+                f"Not the same failure, and two separate facts: the *cross-study point gap* "
+                f"to the best tuned model is negative — that is what puts a benchmark here — "
+                f"while the control's own interval is a different comparison against a "
+                f"different model, with the direction noted beside each. Either way it is a "
+                f"result about the benchmark, not about any embedder: a ranking read off "
                 f"{'it' if len(inverted) == 1 else 'them'} is inverted, not merely noisy.",
                 "",
             ]

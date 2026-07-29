@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -420,3 +421,68 @@ class TestThePreflightCoversWhatTheRendererReads:
 
         assert "PROVENANCE_STUDIES" in driver
         assert "--studies $PROVENANCE_STUDIES" in driver or "$PROVENANCE_STUDIES" in driver
+
+
+class TestAClosedWindowIsNotAPassForAnActiveRun:
+    """The escape hatch and the guard were the same branch.
+
+    A closed window is a legitimate no-op for a caller that never opened one. For
+    a run still measuring, an accidental or concurrent ``--finish`` closed the
+    record early, and returning here made every later per-model check skip the
+    snapshot comparison -- so rows measured after that timestamp, under code that
+    may have moved, were pushed as though the closed window described them.
+    """
+
+    def test_a_closed_window_still_no_ops_for_a_non_participating_ladder(
+        self, tmp_path: Path
+    ) -> None:
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
+
+        PROV.verify(path)  # must NOT raise
+
+    def test_a_closed_window_refuses_when_the_run_opened_one(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
+
+        with pytest.raises(SystemExit, match="already CLOSED"):
+            PROV.verify(path, required=True)
+
+    def test_the_refusal_names_the_finish_time(self, tmp_path: Path) -> None:
+        """Which is the one fact that lets an operator work out what happened."""
+        path = _sidecar(tmp_path, finished=CLOSED, window_complete=True)
+
+        # re.escape: the offset's `+` is a regex quantifier, and `match=` is a regex.
+        with pytest.raises(SystemExit, match=re.escape(CLOSED)):
+            PROV.verify(path, required=True)
+
+
+class TestThePreflightCoversWhatTheDriverOverwrites:
+    """The per-study loop never named the two files this driver writes directly.
+
+    The load probe is refreshed and committed before the render; the combined
+    write-up is rendered and committed after it. A hand-edited write-up or an
+    uncommitted probe was replaced with no refusal, by the script whose guard
+    exists to prevent exactly that.
+    """
+
+    @staticmethod
+    def _driver() -> str:
+        return (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_lfm25.sh").read_text()
+
+    def test_both_direct_outputs_are_in_the_guarded_list(self) -> None:
+        driver = self._driver()
+
+        assert 'GUARDED_ARTIFACTS="$LOAD_PROBE_JSON $REPORT_MD"' in driver
+
+    def test_the_paths_are_declared_once(self) -> None:
+        """Two declarations is how the preflight and the writer drift apart."""
+        driver = self._driver()
+
+        assert driver.count('LOAD_PROBE_JSON="docs/research/') == 1
+        assert driver.count('REPORT_MD="docs/research/') == 1
+
+    def test_the_guarded_list_is_declared_before_the_preflight_uses_it(self) -> None:
+        driver = self._driver()
+
+        assert driver.index('LOAD_PROBE_JSON="docs/research/') < driver.index(
+            'GUARDED_ARTIFACTS="$LOAD_PROBE_JSON'
+        )

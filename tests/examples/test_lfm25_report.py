@@ -292,13 +292,46 @@ class TestHeadlineScope:
         )
 
         assert unpaired, "an arm with no paired interval must be reported, not skipped"
-        assert all(len(entry) == 4 for entry in unpaired)
+        assert all(len(entry) == 5 for entry in unpaired)
 
     def test_the_write_up_qualifies_the_verdict_by_arm(self, artifacts: Path) -> None:
         report = REPORT.render()
 
         assert "per-ARM verdicts, not a checkpoint-level one" in report
         assert "cannot be tested at all" in report
+
+    def test_a_missing_interval_is_not_read_as_a_missing_arm(self) -> None:
+        """``merge_rows()`` CLEARS a challenger's interval when the reference is re-measured.
+
+        The baseline's rows survive that, so a cleared ``none``/``instruct`` cell
+        landed in this list and was explained as an arm the baseline never ran —
+        a fabricated reason for a cell the baseline demonstrably did measure.
+        A bootstrap over too few gold clusters produces the same shape.
+        """
+        rows = [
+            _row("base", "bm", prompt_arm="none"),
+            _row("cand", "bm", prompt_arm="none", candidate_recall=0.7),
+        ]
+
+        unpaired = REPORT._unpaired_arms(rows, "cand", "base")
+
+        assert unpaired == [("bm", "none", 0.7, 0.80, True)]
+
+    def test_an_arm_the_baseline_really_lacks_is_flagged_as_such(self) -> None:
+        rows = [
+            _row("base", "bm", prompt_arm="none"),
+            _row("cand", "bm", prompt_arm="documented", candidate_recall=0.7),
+        ]
+
+        unpaired = REPORT._unpaired_arms(rows, "cand", "base")
+
+        assert unpaired == [("bm", "documented", 0.7, 0.80, False)]
+
+    def test_the_two_causes_read_differently_in_the_report(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "The baseline has no `documented` arm here" in report
+        assert "so no paired test exists to run" in report
 
 
 class TestMultiplicity:
@@ -1247,3 +1280,70 @@ class TestDirtyTreeDisclosure:
         assert "Measured on a MODIFIED tree" in section
         assert "exists in no commit" in section
         assert "`src/langres/core/blockers/vector.py`" in section
+
+
+class TestProbeProseIsReadFromTheProbe:
+    """The one file whose stated premise is that no measured quantity is typed.
+
+    The paragraph beside the untrusted-load table asserted ``1.000000`` and
+    "exactly 0" as literals. The driver refreshes that JSON before every render,
+    so a checkpoint or dependency change would move the table and leave the
+    prose restating a measurement nobody took.
+    """
+
+    def test_the_prose_follows_the_sidecar(
+        self, artifacts: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probe = json.loads(REPORT.LOAD_PROBE.read_text())
+        probe["remote_code"]["trust_remote_code=False"]["cosine_between_unrelated_records"] = 0.4242
+        probe["remote_code"]["trust_remote_code=False"]["max_abs_prompt_shift"] = 0.125
+        path = REPORT.LOAD_PROBE.parent / "probe_override.json"
+        path.write_text(json.dumps(probe))
+        monkeypatch.setattr(REPORT, "LOAD_PROBE", path)
+
+        report = REPORT.render()
+
+        assert "unrelated products = 0.424200)" in report
+        assert "(shift 0.125)" in report
+        assert "1.000000)" not in report
+
+    def test_the_committed_probe_still_reads_as_a_full_collapse(self, artifacts: Path) -> None:
+        report = REPORT.render()
+
+        assert "unrelated products = 1.000000)" in report
+
+
+class TestInvertedDirectionIsNotAssumed:
+    """``inverted`` is a cross-study POINT gap; the interval is a different comparison.
+
+    ``separates`` accepts exclusion of zero in either direction, so "the
+    interval excludes zero on the wrong side" welded a claim about the point gap
+    onto the paired interval. After a study-A-only rerun the best tuned score can
+    fall below the older control while that control's interval still runs
+    significantly *below* its own study-B baseline.
+    """
+
+    def test_the_two_facts_are_reported_separately(self) -> None:
+        tuned = [_row("intfloat/e5-base-v2", "inv_bm", candidate_recall=0.85)]
+        base = [
+            _row(
+                REPORT.CONTROL,
+                "inv_bm",
+                candidate_recall=0.90,
+                vs_reference_delta=-0.05,
+                vs_reference_ci_low=-0.08,
+                vs_reference_ci_high=-0.02,
+                reference_model=REPORT.BASE_BASELINE,
+            )
+        ]
+
+        table, uninformative, _informative, narrow, inverted = REPORT._noise_floor_table(
+            tuned, base
+        )
+
+        assert inverted == ["inv_bm"]
+        assert "inv_bm" not in narrow
+        # The interval runs BELOW its paired baseline -- the expected side -- while
+        # the cross-study gap is inverted. Calling that interval wrong-sided is
+        # the claim this test exists to block.
+        assert REPORT._control_direction(base, "inv_bm") == "below"

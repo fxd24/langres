@@ -2250,3 +2250,105 @@ class TestTheArtifactGuardDoesNotTrustGitSilence:
         assert 'if ! status=$(git status --porcelain --untracked-files=all -- "$artifact"' in (
             self._driver()
         )
+
+
+class TestHistoryStaysWithItsOwnDocument:
+    """Two blocks in this generator are history, not measurement.
+
+    The correction to the merged #239 PR body and the pilot claim that motivated
+    the ladder are both about the 2026-07-27 portfolio ladder. Emitted for every
+    artifact they interpolated the CURRENT study's headline into a sentence about
+    a different PR -- the study-B report told readers that #239 had described
+    ``LFM2.5-Encoder-350M``'s ``-0.0536`` as query-only, and claimed to re-measure
+    two models absent from its own rows.
+    """
+
+    STUDIES = (
+        "docs/research/20260729_lfm25_tuned.md",
+        "docs/research/20260729_lfm25_base_encoders.md",
+    )
+    PORTFOLIO = "docs/research/20260727_embedder_ladder.md"
+
+    def test_the_gate_is_derived_from_the_module_defaults(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not a typed date string, which would drift from the paths it names.
+
+        ``ARTIFACT_PREFIX`` is a module global that ``main()`` rebinds, so this
+        sets it explicitly rather than relying on whatever an earlier test in the
+        session left behind.
+        """
+        default = str(LADDER.DEFAULT_REPORT_PATH.relative_to(LADDER.REPO_ROOT)).removesuffix(".md")
+        monkeypatch.setattr(LADDER, "ARTIFACT_PREFIX", default)
+
+        assert LADDER._is_portfolio_ladder() is True
+
+        monkeypatch.setattr(LADDER, "ARTIFACT_PREFIX", "docs/research/20260729_lfm25_tuned")
+
+        assert LADDER._is_portfolio_ladder() is False
+
+    def test_no_study_report_carries_the_239_correction(self) -> None:
+        for name in self.STUDIES:
+            path = ROOT / name
+            if not path.exists():  # pragma: no cover - artifact not generated yet
+                continue
+            assert "supersedes the merged #239" not in path.read_text(), name
+
+    def test_no_study_report_claims_to_remeasure_the_pilot_models(self) -> None:
+        for name in self.STUDIES:
+            path = ROOT / name
+            if not path.exists():  # pragma: no cover - artifact not generated yet
+                continue
+            assert "The claim that started this sweep" not in path.read_text(), name
+
+    def test_the_portfolio_ladder_keeps_both(self) -> None:
+        """Scoping must not silently delete the correction from the document it corrects."""
+        path = ROOT / self.PORTFOLIO
+        if not path.exists():  # pragma: no cover - artifact not generated yet
+            pytest.skip("portfolio ladder report not generated")
+        text = path.read_text()
+
+        assert "supersedes the merged #239" in text
+        assert "The claim that started this sweep" in text
+
+
+class TestTheResumeGoesThroughTheGuardedDriver:
+    """A resume writes into rows a killed sweep may have left uncommitted.
+
+    Calling ``embedder_ladder.py`` directly skipped the dirty-artifact refusal,
+    the provenance ``--verify`` and -- worst -- the COMMIT, leaving an expensive
+    re-measured cell to die with the worktree.
+    """
+
+    @staticmethod
+    def _resume() -> str:
+        return (ROOT / "examples" / "research" / "resume_lfm25_study_a.sh").read_text()
+
+    def test_it_does_not_invoke_the_harness_directly(self) -> None:
+        """The COMMAND, not the prose: the comment explains why it no longer does."""
+        commands = [
+            line
+            for line in self._resume().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+
+        assert not any("embedder_ladder.py" in line for line in commands)
+
+    def test_it_calls_the_driver(self) -> None:
+        resume = self._resume()
+
+        assert "bash examples/research/run_ladder.sh" in resume
+        assert 'LADDER_BENCHMARKS="walmart_amazon"' in resume
+
+    def test_the_driver_honours_the_benchmark_override(self) -> None:
+        """A flag the driver ignores would silently re-run the whole study."""
+        driver = (ROOT / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert 'BENCHMARKS="${LADDER_BENCHMARKS:-' in driver
+
+    def test_the_coverage_denominator_is_still_the_whole_study(self) -> None:
+        """Collapsing it to the measured model is a regression this harness shipped once."""
+        resume = self._resume()
+
+        assert 'LADDER_ALL_MODELS="$STUDY_A_MODELS"' in resume
+        assert "BAAI/bge-base-en-v1.5" in resume

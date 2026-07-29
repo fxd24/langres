@@ -388,6 +388,23 @@ LADDER: tuple[ModelSpec, ...] = MODELS
 ARTIFACT_PREFIX: str = "docs/research/20260727_embedder_ladder"
 
 
+def _is_portfolio_ladder() -> bool:
+    """Is this render the standing 2026-07-27 ladder, or a study reusing the harness?
+
+    Two blocks in this generator are *history*, not measurement: the correction to
+    the merged #239 PR body, and the pilot claim that motivated the ladder. Both
+    are about one document. Emitted unconditionally they interpolated the current
+    study's headline into a sentence about a different PR — study B's report told
+    readers that #239 had described `LFM2.5-Encoder-350M`'s ``-0.0536`` as
+    query-only, and claimed to re-measure two models absent from its own rows.
+    (Cross-model review.)
+
+    Derived from the module defaults rather than a typed date, so the two cannot
+    drift apart.
+    """
+    return ARTIFACT_PREFIX == str(DEFAULT_REPORT_PATH.relative_to(REPO_ROOT)).removesuffix(".md")
+
+
 def _ladder_specs(rows: Sequence[LadderRow]) -> list[ModelSpec]:
     """Every model this document is accountable for: :data:`MODELS` plus whatever ran.
 
@@ -2651,7 +2668,19 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
             "`prompt_name`. The headline is therefore a statement about the two models "
             "as they ship, not about a half-driven one.\n"
         )
-        if instruct_row is not None and instruct_row.prompt_delta is not None:
+        # Only for the artifact the correction is ABOUT. #239 concerns the
+        # 2026-07-27 portfolio ladder's EmbeddingGemma headline; emitted for every
+        # artifact, it interpolated whatever the current study's headline happened
+        # to be, so the study-B report told readers that a merged PR had described
+        # `LFM2.5-Encoder-350M`'s -0.0536 as query-only. That PR predates this
+        # study and says nothing about that model. A historical correction is a
+        # claim about a specific document, and it belongs only in it.
+        # (Cross-model review.)
+        if (
+            _is_portfolio_ladder()
+            and instruct_row is not None
+            and instruct_row.prompt_delta is not None
+        ):
             out.append(
                 "\n> **Correction — supersedes the merged #239 PR body.** That body "
                 "said: *'Every number below, including the "
@@ -2716,20 +2745,28 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
         "four are not. Do not average across benchmarks, and do not read this "
         "benchmark set as a finding — it is a documented prior this sweep "
         "inherited.\n"
-        "- **The claim that started this sweep was not strong enough to act on.** "
-        "A pilot reported `BAAI/bge-small-en-v1.5` at 0.8295 candidate recall "
-        "versus `all-MiniLM-L6-v2` at 0.8201 on `amazon_google` — **+0.9pp, one "
-        "benchmark, one seed, no interval** — alongside '2.5x fewer candidates at "
-        "equal recall'. Those are two different claims: the second is an "
-        "*operating-point* comparison over a `k` that `langres.optimize` already "
-        "searches, so it is a statement about where each model was sampled, not "
-        "about which model is better. This sweep re-measures both across "
-        "benchmarks and attaches a cluster-resampled interval to the first — see "
-        "'Is it better than what ships today?' below for whether the gap survives "
-        "it. (The pilot numbers above are quoted as the motivation, not "
-        "re-measured here — read this document's own tables for the "
-        "measurement.)\n"
-        "- **Reproducible from a git checkout only, not from `pip install langres`.** "
+        # Same scoping as the #239 correction: "this sweep re-measures both" names
+        # bge-small and MiniLM, and study B's rows contain neither. A provenance
+        # note that describes a different study's motivation is a false statement
+        # about the document it appears in. (Cross-model review.)
+        + (
+            "- **The claim that started this sweep was not strong enough to act on.** "
+            "A pilot reported `BAAI/bge-small-en-v1.5` at 0.8295 candidate recall "
+            "versus `all-MiniLM-L6-v2` at 0.8201 on `amazon_google` — **+0.9pp, one "
+            "benchmark, one seed, no interval** — alongside '2.5x fewer candidates at "
+            "equal recall'. Those are two different claims: the second is an "
+            "*operating-point* comparison over a `k` that `langres.optimize` already "
+            "searches, so it is a statement about where each model was sampled, not "
+            "about which model is better. This sweep re-measures both across "
+            "benchmarks and attaches a cluster-resampled interval to the first — see "
+            "'Is it better than what ships today?' below for whether the gap survives "
+            "it. (The pilot numbers above are quoted as the motivation, not "
+            "re-measured here — read this document's own tables for the "
+            "measurement.)\n"
+            if _is_portfolio_ladder()
+            else ""
+        )
+        + "- **Reproducible from a git checkout only, not from `pip install langres`.** "
         "The wheel deliberately excludes the `amazon_google`, `abt_buy`, "
         "`walmart_amazon` and `wdc_computers` corpora "
         "(`[tool.hatch.build] exclude` in `pyproject.toml`), so only `fodors_zagat` "

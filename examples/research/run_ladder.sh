@@ -86,7 +86,13 @@ ROWS="${ARTIFACT}_rows.jsonl"
 REPORT="${ARTIFACT}.md"
 REFERENCE="${ARTIFACT}_reference_recall.json"
 LOG_DIR="tmp/ladder_logs"
-BENCHMARKS="fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon"
+# Overridable so a RESUME can go through this driver -- with its dirty-artifact
+# refusal, its provenance --verify and its per-model commit -- instead of calling
+# the mutating harness directly, which is how the one resume script in this
+# directory used to bypass all three and leave an expensive re-measured cell
+# uncommitted. Not the report's denominator: that is LADDER_ALL_MODELS, and the
+# harness keeps its own benchmark list for coverage. (Cross-model review.)
+BENCHMARKS="${LADDER_BENCHMARKS:-fodors_zagat abt_buy amazon_google wdc_computers walmart_amazon}"
 
 # Empty = the harness's own default (the 2026-07-27 baseline, all-MiniLM-L6-v2).
 REFERENCE_MODEL_ARG=()

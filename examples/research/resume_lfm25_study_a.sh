@@ -9,7 +9,20 @@
 # scores that no longer exist. Re-running the whole study would therefore churn
 # results that are already correct.
 #
-# --ladder-models still names all four study-A models even though only one is
+# Why it goes through run_ladder.sh rather than calling embedder_ladder.py
+# directly, which is what it used to do: that driver owns three things a resume
+# cannot afford to skip, and this script skipped all three.
+#   1. The dirty-artifact refusal. A resume writes into rows that a killed sweep
+#      may have left holding uncommitted measured cells -- overwriting them is
+#      exactly the loss the guard exists for, and this script is reached in
+#      precisely that situation.
+#   2. The provenance --verify before anything is published.
+#   3. The COMMIT. A resume measures an expensive cell; leaving it uncommitted in
+#      a worktree is the failure this repo has already paid for once.
+# The benchmark narrowing that made a direct call look necessary is now an env
+# var on the driver. (Cross-model review.)
+#
+# LADDER_ALL_MODELS still names all four study-A models even though only one is
 # measured: that argument is the report's coverage DENOMINATOR, not the work
 # list. Collapsing it to the single measured model is a regression this harness
 # has already shipped once.
@@ -18,14 +31,11 @@ set -u
 export OMP_NUM_THREADS=1
 export KMP_DUPLICATE_LIB_OK=TRUE
 
-ARTIFACT="docs/research/20260729_lfm25_tuned"
+STUDY_A_MODELS="intfloat/e5-base-v2 all-MiniLM-L6-v2 BAAI/bge-base-en-v1.5 LiquidAI/LFM2.5-Embedding-350M"
 
-uv run python examples/research/embedder_ladder.py \
-  --models "LiquidAI/LFM2.5-Embedding-350M" \
-  --benchmarks walmart_amazon \
-  --rows "${ARTIFACT}_rows.jsonl" \
-  --report "${ARTIFACT}.md" \
-  --reference "${ARTIFACT}_reference_recall.json" \
-  --ladder-models "intfloat/e5-base-v2" "all-MiniLM-L6-v2" \
-    "BAAI/bge-base-en-v1.5" "LiquidAI/LFM2.5-Embedding-350M" \
-  --reference-model "intfloat/e5-base-v2"
+LADDER_ARTIFACT="docs/research/20260729_lfm25_tuned" \
+LADDER_REFERENCE_MODEL="intfloat/e5-base-v2" \
+LADDER_ALL_MODELS="$STUDY_A_MODELS" \
+LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M" \
+LADDER_BENCHMARKS="walmart_amazon" \
+  bash examples/research/run_ladder.sh

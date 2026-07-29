@@ -510,7 +510,21 @@ def verify(output: Path, required: bool = False) -> None:
             )
         return
     doc = json.loads(output.read_text())
-    if doc.get("measurement_window", {}).get("finished") is not None:
+    if (finished := doc.get("measurement_window", {}).get("finished")) is not None:
+        # A CLOSED window is a no-op only for a caller that did not open one. For a
+        # run still measuring, an accidental or concurrent `--finish` closed the
+        # record early, and returning here made every later per-model check skip
+        # the snapshot comparison entirely -- so rows measured after that timestamp,
+        # under code that may have moved since, were pushed as though the closed
+        # window described them. The escape hatch and the guard were the same
+        # branch. (Cross-model review.)
+        if required:
+            raise SystemExit(
+                f"Provenance window in {output} is already CLOSED (finished {finished}), "
+                "but this run is still measuring. Rows produced after that timestamp are "
+                "not described by it and their code stability was never checked. "
+                "Not publishing."
+            )
         return
     after = _snapshot()
     # Defaulted, like `finish()`. This line had the same KeyError -- an abort

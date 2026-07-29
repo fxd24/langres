@@ -11,15 +11,15 @@ Measured with the standing embedder-ladder harness (`examples/research/embedder_
 - Ahead with an interval excluding zero on: **no benchmark/arm**.
 - Behind with an interval excluding zero on: `abt_buy` (instruct), `abt_buy` (none), `amazon_google` (instruct), `amazon_google` (none), `wdc_computers` (instruct), `wdc_computers` (none).
 
-**These are per-ARM verdicts, not a checkpoint-level one**, and the distinction changes the reading. A paired interval needs both models' per-record vectors on the same records, so an arm the baseline never runs cannot be tested at all — it is silently absent from the two lines above rather than counted as a loss:
+**These are per-ARM verdicts, not a checkpoint-level one**, and the distinction changes the reading. A paired interval needs both models' per-record vectors on the same records, so an arm without one cannot be tested at all — it is silently absent from the two lines above rather than counted as a loss:
 
-- `abt_buy` arm `documented`: **0.9741** vs the baseline's best **0.9703** — **above the baseline**, and untested.
-- `amazon_google` arm `documented`: **0.8187** vs the baseline's best **0.8338** — below the baseline, and untested.
-- `fodors_zagat` arm `documented`: **1.0000** vs the baseline's best **1.0000** — level with the baseline, and untested.
-- `walmart_amazon` arm `documented`: **0.8764** vs the baseline's best **0.8810** — below the baseline, and untested.
-- `wdc_computers` arm `documented`: **0.7084** vs the baseline's best **0.7363** — below the baseline, and untested.
+- `abt_buy` arm `documented`: **0.9741** vs the baseline's best **0.9703** — **above the baseline**, and untested. The baseline has no `documented` arm here, so no paired test exists to run.
+- `amazon_google` arm `documented`: **0.8187** vs the baseline's best **0.8338** — below the baseline, and untested. The baseline has no `documented` arm here, so no paired test exists to run.
+- `fodors_zagat` arm `documented`: **1.0000** vs the baseline's best **1.0000** — level with the baseline, and untested. The baseline has no `documented` arm here, so no paired test exists to run.
+- `walmart_amazon` arm `documented`: **0.8764** vs the baseline's best **0.8810** — below the baseline, and untested. The baseline has no `documented` arm here, so no paired test exists to run.
+- `wdc_computers` arm `documented`: **0.7084** vs the baseline's best **0.7363** — below the baseline, and untested. The baseline has no `documented` arm here, so no paired test exists to run.
 
-So on any benchmark listed above, the honest statement is *"behind on the arms that could be tested"*, not *"behind"*. The untested arms are the checkpoint's own documented prompts, which is where a vendor would expect it to look best; closing that gap needs the baseline re-run under the same prompts, which this study did not do.
+So on any benchmark listed above, the honest statement is *"behind on the arms that could be tested"*, not *"behind"*. Where the cause is a missing counterpart, the untested arm is the checkpoint's own documented prompt — which is where a vendor would expect it to look best; closing that gap needs the baseline re-run under the same prompts, which this study did not do.
 
 **It cannot become langres's default regardless of how it scores** — see the licence section. That is a legal constraint, not a measurement.
 
@@ -37,7 +37,7 @@ This has to come before any score. All three checkpoints declare `model_type: "l
 | `False` | `transformers….Lfm2Model` | False | 1.000000 | 0 |
 
 
-The untrusted load is not "slightly degraded". This checkpoint pools the **CLS** token (`1_Pooling/config.json`), and under causal attention the first token is a function of itself alone — so every text in the corpus collapses onto one vector (cosine between two unrelated products = 1.000000) and the prompt changes nothing at all (shift exactly 0). A sweep would have published that as a blocking recall and attributed it to the model.
+The untrusted load is not "slightly degraded". This checkpoint pools the **CLS** token (`1_Pooling/config.json`), and under causal attention the first token is a function of itself alone — so every text in the corpus collapses onto one vector (cosine between two unrelated products = 1.000000) and the prompt changes nothing at all (shift 0). A sweep would have published that as a blocking recall and attributed it to the model.
 
 Each row above was measured in its **own subprocess**, which is load-bearing: probing both configurations in one process makes the second load report the native class while producing the remote class's vectors, and the first version of this probe recorded them as bit-identical.
 

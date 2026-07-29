@@ -86,6 +86,11 @@ export LADDER_PROVENANCE_REQUIRED=1
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
 PROVENANCE_JSON="docs/research/20260729_lfm25_provenance.json"
+# Declared HERE, not at their point of use two hundred lines down, because the
+# preflight below has to name every file this driver OVERWRITES and one
+# definition is the only way the two lists cannot disagree.
+LOAD_PROBE_JSON="docs/research/20260729_lfm25_load_probe.json"
+REPORT_MD="docs/research/20260729_lfm25_encoders.md"
 
 # Close and COMMIT the provenance window before bailing out.
 #
@@ -202,7 +207,6 @@ study_artifacts() {
     b) echo "docs/research/20260729_lfm25_base_encoders" ;;
   esac
 }
-DIRTY_ARTIFACTS=""
 # BOTH studies, always -- not just the ones this run re-measures. `LFM25_STUDY=a`
 # still ends by rendering lfm25_report.py, which reads BOTH rows files, and then
 # COMMITS the combined write-up. So an unselected study holding uncommitted
@@ -210,18 +214,28 @@ DIRTY_ARTIFACTS=""
 # report whose own header says every figure is read from the committed
 # artifacts -- unreproducible from the commit it ships in. The preflight covers
 # what the renderer consumes, not what the sweep rewrites. (Cross-model review.)
+#
+# ...and the two files this driver overwrites DIRECTLY, which the per-study loop
+# never named: the load probe (refreshed and committed before the render) and the
+# combined write-up (rendered and committed after it). A hand-edited write-up or
+# a probe from a run whose results were not yet committed was replaced with no
+# refusal, by the very script whose guard exists to prevent exactly that.
+# (Cross-model review.)
+GUARDED_ARTIFACTS="$LOAD_PROBE_JSON $REPORT_MD"
 for study in a b; do
   prefix="$(study_artifacts "$study")"
-  for artifact in "${prefix}_rows.jsonl" "${prefix}.md" "${prefix}_reference_recall.json"; do
-    # No `-e` guard: git already distinguishes a never-created path (silence)
-    # from an uncommitted DELETION (" D"/"D "), and the existence test skipped
-    # exactly the second one. A pending deletion of the rows file let a new
-    # sweep recreate it from empty and commit a partial replacement over every
-    # other expensive result, with no refusal. (Cross-model review.)
-    if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
-      DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
-    fi
-  done
+  GUARDED_ARTIFACTS="$GUARDED_ARTIFACTS ${prefix}_rows.jsonl ${prefix}.md ${prefix}_reference_recall.json"
+done
+DIRTY_ARTIFACTS=""
+for artifact in $GUARDED_ARTIFACTS; do
+  # No `-e` guard: git already distinguishes a never-created path (silence)
+  # from an uncommitted DELETION (" D"/"D "), and the existence test skipped
+  # exactly the second one. A pending deletion of the rows file let a new
+  # sweep recreate it from empty and commit a partial replacement over every
+  # other expensive result, with no refusal. (Cross-model review.)
+  if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
+    DIRTY_ARTIFACTS="$DIRTY_ARTIFACTS $artifact"
+  fi
 done
 if [ -n "${DIRTY_ARTIFACTS// /}" ] && [ "${LFM25_FORCE:-0}" != "1" ]; then
   say "REFUSING to start: these study artifacts have uncommitted changes:"
@@ -343,7 +357,6 @@ fi
 # (Cross-model review.)
 # ---------------------------------------------------------------------------
 say "refreshing the load probe"
-LOAD_PROBE_JSON="docs/research/20260729_lfm25_load_probe.json"
 if uv run python examples/research/lfm25_load_probe.py; then
   # Committed the moment it exists, not bundled into the final commit: an abort
   # between here and the render would otherwise leave the refreshed probe as
@@ -405,7 +418,6 @@ uv run python examples/research/lfm25_report.py || {
   commit_provenance 1 "results(lfm25): provenance for a sweep whose write-up failed to render"
 }
 
-REPORT_MD="docs/research/20260729_lfm25_encoders.md"
 git add "$REPORT_MD" "$PROVENANCE_JSON" || {
   say "FATAL: could not stage the write-up or its provenance"
   exit 1
