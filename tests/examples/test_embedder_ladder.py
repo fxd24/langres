@@ -2479,3 +2479,45 @@ class TestTheLicenceSentenceDescribesTheActualLicence:
         assert "read the checkpoint's own LICENSE" in sentence
         assert "$10M" not in sentence
         assert "prohibited-use policy" not in sentence
+
+
+class TestTheArmClaimReadsRowsNotConfiguration:
+    """ "What this sweep ran" has to be read off the rows.
+
+    Keyed on the configured LADDER, it said Qwen 0.6B's own recipe "did run" and
+    that six absent models had the generic arm run against them -- in a document
+    whose next section says "7 of the 14 models in the ladder have a row" and
+    lists all seven under "What did not run". One document, two answers.
+    """
+
+    def test_a_configured_but_unmeasured_model_is_not_described_as_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        configured = tuple(
+            LADDER.MODELS_BY_NAME[name]
+            for name in ("all-MiniLM-L6-v2", "google/embeddinggemma-300m")
+        )
+        monkeypatch.setattr(LADDER, "LADDER", configured)
+        # Only the first model has rows; embeddinggemma was configured, never run.
+        measured = configured[:1]
+        rows = [
+            _cell(spec.name, arm)
+            for spec in measured
+            for arm in LADDER.arms_for(spec, LADDER.PROMPT_ARMS)
+        ]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "all-MiniLM-L6-v2" in caveat
+        assert "google/embeddinggemma-300m" not in caveat
+        assert "No model here had its own recipe measured" in caveat
+
+    def test_a_failed_row_does_not_count_as_measured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`ok`, not `current`: a failure row is a record of NOT measuring."""
+        configured = (LADDER.MODELS_BY_NAME["all-MiniLM-L6-v2"],)
+        monkeypatch.setattr(LADDER, "LADDER", configured)
+        rows = [_cell("all-MiniLM-L6-v2", "none", status="failed", error="boom")]
+
+        caveat = _caveat(LADDER.render_report(rows))
+
+        assert "all-MiniLM-L6-v2" not in caveat

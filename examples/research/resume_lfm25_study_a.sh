@@ -72,6 +72,30 @@ commit_only() {
   }
 }
 
+# Ask the DRIVER whether it would refuse, BEFORE replacing the shared sidecar.
+#
+# Opening the window first looked harmless -- the driver refuses a moment later
+# and nothing is measured. It is not: `--start` REPLACES the sidecar, and the
+# window it replaces is the one describing every row already committed. So a
+# resume run in exactly the situation this script exists for (a killed sweep,
+# dirty rows) swapped real provenance for a no-op window and committed and
+# PUBLISHED it, having measured nothing.
+#
+# LADDER_PREFLIGHT_ONLY runs the driver's own check and stops. Not a copy of it:
+# a second implementation of one safety rule is the drift this repo keeps paying
+# for. (Cross-model review.)
+LADDER_ARTIFACT="docs/research/20260729_lfm25_tuned" \
+LADDER_REFERENCE_MODEL="intfloat/e5-base-v2" \
+LADDER_ALL_MODELS="$STUDY_A_MODELS" \
+LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M" \
+LADDER_BENCHMARKS="walmart_amazon" \
+LADDER_PREFLIGHT_ONLY=1 \
+  bash examples/research/run_ladder.sh || {
+  say "FATAL: the study artifacts are not in a state this resume may overwrite."
+  say "  Nothing was measured and the provenance sidecar is UNTOUCHED."
+  exit 2
+}
+
 # --start refuses when the sidecar holds uncommitted work, which is the state a
 # killed sweep leaves behind and exactly what must not be overwritten silently.
 uv run python examples/research/write_provenance.py --start --studies a || {
@@ -96,8 +120,17 @@ code=$?
 # --partial ALWAYS: this window covers one cell of one study, never the rest.
 # Closed even on failure -- an open window committed beside durable rows is the
 # state this whole mechanism exists to avoid.
-uv run python examples/research/write_provenance.py --finish --partial || \
-  say "the provenance window could not be closed cleanly; committing it as it stands"
+#
+# The status is KEPT, not swallowed. --finish exits non-zero when measurement
+# code moved mid-cell, which is the same condition that makes run_ladder.sh
+# withhold its push. Discarding it here re-enabled at the end exactly what the
+# child had deliberately refused: the final `git push` published commits that
+# provenance verification had rejected. The evidence is still committed -- that
+# is why this does not exit immediately. (Cross-model review.)
+uv run python examples/research/write_provenance.py --finish --partial || {
+  say "provenance --finish REJECTED this run; its evidence will be committed, nothing published"
+  [ "$code" -eq 0 ] && code=1
+}
 
 # Re-render the COMBINED write-up. run_ladder.sh regenerates only the tuned
 # study's own report; 20260729_lfm25_encoders.md states on its face that it is
@@ -106,12 +139,22 @@ uv run python examples/research/write_provenance.py --finish --partial || \
 # the noise-floor table subtracts across the two studies, so a changed study-A
 # cell can move it. Rendered AFTER --finish, matching run_lfm25.sh: the report
 # quotes the window, so it must read the closed one. (Cross-model review.)
+#
+# COMMIT_PATHS is why the render result is tracked separately: the writer guard
+# refuses to overwrite a hand-edited write-up, and passing REPORT_MD to
+# `git commit --only` regardless would have committed that very hand edit under a
+# message claiming it was re-rendered -- publishing the bytes the guard had just
+# refused to touch. The report is committed only if this process wrote it.
+# (Cross-model review.)
+COMMIT_PATHS=("$PROVENANCE_JSON")
 if [ "$code" -eq 0 ]; then
   say "re-rendering the combined write-up"
-  uv run python examples/research/lfm25_report.py || {
-    say "the write-up did not re-render; committing the closed window before stopping"
+  if uv run python examples/research/lfm25_report.py; then
+    COMMIT_PATHS+=("$REPORT_MD")
+  else
+    say "the write-up did not re-render; committing the closed window WITHOUT it"
     code=4
-  }
+  fi
 fi
 
 # The closed window is the only record of what produced the re-measured row. If
@@ -119,9 +162,9 @@ fi
 # automation the resume completed while the evidence dies with the worktree.
 # Previously this only warned and then exited with the child's zero status.
 # (Cross-model review.)
-commit_only "results(lfm25): close the study-A resume's window and re-render" \
-  "Marked partial: the window describes the re-measured cell only; every other row in both studies predates it. The combined write-up is re-rendered from the committed rows so it does not disagree with the row this resume just changed." \
-  "$PROVENANCE_JSON" "$REPORT_MD" || {
+commit_only "results(lfm25): close the study-A resume's window" \
+  "Marked partial: the window describes the re-measured cell only; every other row in both studies predates it. The combined write-up is included only when this run actually re-rendered it." \
+  "${COMMIT_PATHS[@]}" || {
   say "FATAL: the closed window is not durable; failing rather than reporting success."
   exit 1
 }
@@ -145,6 +188,16 @@ publish() {
   git push -q origin HEAD 2>/dev/null && say "pushed" || \
     say "WARNING: push failed. The remote still shows the new row under an OPEN window; push manually."
 }
-publish
+
+# Publish only a run that fully succeeded. run_ladder.sh already withholds its own
+# push when --verify fails; pushing unconditionally here re-published exactly what
+# the child had refused. Everything is COMMITTED either way -- durability is never
+# the thing withheld, only publication. (Cross-model review.)
+if [ "$code" -eq 0 ]; then
+  publish
+else
+  say "NOT publishing: this resume exited $code. Everything is committed locally."
+  say "  Inspect the closed provenance window and the rows, then push deliberately."
+fi
 
 exit $code

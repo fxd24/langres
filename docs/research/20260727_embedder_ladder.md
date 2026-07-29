@@ -161,7 +161,7 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 > ### Do not read this table as 'instructions do not help retrieval'
 >
 > **A negative result here is mostly a statement about what was measured.**
-> For `all-MiniLM-L6-v2`, `all-MiniLM-L12-v2`, `BAAI/bge-small-en-v1.5`, `all-mpnet-base-v2`, `BAAI/bge-base-en-v1.5`, `intfloat/e5-base-v2`, `Alibaba-NLP/gte-base-en-v1.5`, `nomic-ai/nomic-embed-text-v1.5`, `BAAI/bge-large-en-v1.5`, `mixedbread-ai/mxbai-embed-large-v1`, `Qwen/Qwen3-Embedding-4B`, `Qwen/Qwen3-Embedding-8B` this sweep ran only the
+> For `all-MiniLM-L6-v2`, `all-MiniLM-L12-v2`, `BAAI/bge-small-en-v1.5`, `all-mpnet-base-v2`, `BAAI/bge-base-en-v1.5`, `intfloat/e5-base-v2` this sweep ran only the
 > GENERIC instruction — none of them has a `documented` arm here, so its
 > own recipe, if it has one, was never tested. Prefixing a query with an
 > instruction a model was not aligned to moves the query vector away from
@@ -178,8 +178,8 @@ The unprompted operating point, one column per benchmark. `cands/recall` is the 
 > its own.
 >
 > The models whose OWN recipe this sweep did run are
-> `google/embeddinggemma-300m`, `Qwen/Qwen3-Embedding-0.6B`, which carry a
-> `documented` arm read from their own configuration — the generic
+> `google/embeddinggemma-300m`, which carries a
+> `documented` arm read from its own configuration — the generic
 > `instruct` arm is **not** that recipe (see `own prompt names`), so read
 > the two separately.
 >

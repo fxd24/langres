@@ -783,14 +783,23 @@ def _cross_study_caveat() -> list[str]:
     doc = json.loads(PROVENANCE.read_text())
     studies = doc.get("studies_measured")
     if doc.get("window_complete") is False:
+        # CAUSE-NEUTRAL. `--partial` has meant two different things since the
+        # study-A resume started using it deliberately: "the sweep aborted" and
+        # "this run re-measured a subset on purpose". Reading it as an abort made
+        # every report generated after a SUCCESSFUL one-cell resume announce that
+        # the last sweep had failed. The consequence for this gap is identical
+        # either way -- the window does not cover every row -- so the warning
+        # states that and stops guessing why. (Cross-model review.)
         return [
             "",
             "⚠️ **This gap may span two measurement windows.** The provenance sidecar "
-            "records that the last sweep **aborted before finishing every planned study**, "
-            "so rows it never reached predate the window described here and the tuned score "
+            "records that the last window **did not cover every stored row** — either the "
+            "sweep stopped early or it deliberately re-measured only part of one study — "
+            "so rows outside it predate the window described here, and the tuned score "
             "and the control below can come from rows captured at different times. Both "
             "cohorts share a metric revision — that is checked, and rendering is refused "
-            "otherwise — but an aborted sweep is weaker evidence than one that completed.",
+            "otherwise — but a window covering only some of these rows is weaker evidence "
+            "than one covering all of them.",
         ]
     if studies is None or sorted(studies) == ["a", "b"]:
         return []

@@ -816,3 +816,132 @@ class TestTheResumePublishesWhatItCloses:
         assert "symbolic-ref" in resume
         assert "default=${default:-main}" in resume
         assert "NOT pushing: on" in resume
+
+
+class TestTheResumeOrdersItsIrreversibleStepsLast:
+    """Four P1s landed on this script across two rounds; ordering was the cause.
+
+    `--start` REPLACES the shared sidecar -- the one describing every row already
+    committed -- so doing it before the driver's dirty-artifact refusal meant a
+    resume run in exactly the situation it exists for swapped real provenance for
+    a no-op window, committed it and pushed it, having measured nothing.
+    """
+
+    @staticmethod
+    def _resume() -> str:
+        return (
+            Path(PROV.REPO_ROOT) / "examples" / "research" / "resume_lfm25_study_a.sh"
+        ).read_text()
+
+    def test_the_preflight_runs_before_the_window_is_replaced(self) -> None:
+        resume = self._resume()
+
+        assert resume.index("LADDER_PREFLIGHT_ONLY=1") < resume.index("--start --studies a")
+
+    def test_the_preflight_is_the_driver_s_own_check_not_a_copy(self) -> None:
+        """A second implementation of one safety rule is the drift disease."""
+        resume = self._resume()
+        driver = (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_ladder.sh").read_text()
+
+        assert "LADDER_PREFLIGHT_ONLY" in driver
+        assert "artifact_is_dirty" not in resume
+
+    def test_the_report_is_committed_only_when_this_run_rendered_it(self) -> None:
+        """The writer guard refuses a hand-edited write-up.
+
+        Passing REPORT_MD to `git commit --only` regardless would commit that very
+        hand edit under a message claiming it was re-rendered -- publishing the
+        bytes the guard had just refused to touch.
+        """
+        resume = self._resume()
+
+        assert 'COMMIT_PATHS=("$PROVENANCE_JSON")' in resume
+        assert 'COMMIT_PATHS+=("$REPORT_MD")' in resume
+        # ...and the append is on the SUCCESS branch of the render.
+        render = resume.index("lfm25_report.py; then")
+        assert render < resume.index('COMMIT_PATHS+=("$REPORT_MD")')
+
+    def test_a_rejected_finish_stops_publication(self) -> None:
+        """run_ladder.sh withholds its push when --verify fails.
+
+        Swallowing --finish's status re-enabled at the end exactly what the child
+        had deliberately refused.
+        """
+        resume = self._resume()
+
+        assert "REJECTED this run" in resume
+        assert '[ "$code" -eq 0 ] && code=1' in resume
+        assert "NOT publishing: this resume exited" in resume
+
+    def test_publication_is_conditional_but_committing_is_not(self) -> None:
+        """Durability is never what gets withheld -- only publication."""
+        resume = self._resume()
+
+        publish_guard = resume.index('if [ "$code" -eq 0 ]; then\n  publish')
+        assert resume.index('commit_only "results(lfm25): close') < publish_guard
+
+
+class TestThePartialWindowWordingDoesNotGuessACause:
+    """`--partial` has meant two things since the resume started using it.
+
+    Read as "the sweep aborted", every report generated after a SUCCESSFUL
+    one-cell resume announced that the last sweep had failed.
+    """
+
+    def test_it_does_not_assert_an_abort(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        name = "example_lfm25_report_partial"
+        path = ROOT / "examples" / "research" / "lfm25_report.py"
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        report = importlib.util.module_from_spec(spec)
+        sys.modules[name] = report
+        spec.loader.exec_module(report)
+
+        sidecar = tmp_path / "prov.json"
+        sidecar.write_text(json.dumps({"window_complete": False, "studies_measured": ["a"]}))
+        monkeypatch.setattr(report, "PROVENANCE", sidecar)
+
+        warning = "\n".join(report._cross_study_caveat())
+
+        assert "did not cover every stored row" in warning
+        assert "aborted before finishing" not in warning
+
+
+class TestTheRendererInputsAreRecheckedAtRenderTime:
+    """Startup cannot answer a question about now.
+
+    The two studies are checked once, potentially hours before the render. Under
+    `LFM25_STUDY=a` the study-B rows are inputs this run never touches, so nothing
+    would notice them changing -- and the final commit covers only the write-up and
+    its provenance, so the published document would be unreproducible from the
+    commit that carries it.
+    """
+
+    @staticmethod
+    def _driver() -> str:
+        return (Path(PROV.REPO_ROOT) / "examples" / "research" / "run_lfm25.sh").read_text()
+
+    def test_both_studies_rows_are_rechecked_before_rendering(self) -> None:
+        driver = self._driver()
+
+        recheck = driver.index("RENDER_INPUTS=")
+        assert recheck < driver.index("uv run python examples/research/lfm25_report.py")
+        # Both studies, not just the one this run measured.
+        block = driver[recheck : driver.index("MOVED_INPUTS=")]
+        assert "for study in a b" in block
+
+    def test_a_moved_input_stops_the_render_and_keeps_the_window(self) -> None:
+        """Refusing without committing the closed window would lose the provenance."""
+        driver = self._driver()
+
+        block = driver[driver.index("REFUSING to render") :]
+        assert "commit_provenance 1" in block[:800]
+
+    def test_the_recheck_shares_the_driver_s_force_flag(self) -> None:
+        """A separate escape hatch would be one more thing to remember."""
+        driver = self._driver()
+        block = driver[driver.index("MOVED_INPUTS=") : driver.index("REFUSING to render")]
+
+        assert "LFM25_FORCE:-0" in block

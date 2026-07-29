@@ -2970,7 +2970,14 @@ def render_report(rows: Sequence[LadderRow], headline_k: int = 20) -> str:
     # training history, and `registered_prompts` does not either (e5 registers
     # none). So the claim is dropped rather than re-derived, and what is said is
     # what the sweep can actually observe. (Cross-model review.)
-    trainable = [spec for spec in LADDER if not spec.random_init]
+    # Partitioned over models with a SUCCESSFUL ROW, not over configured specs.
+    # Keyed on LADDER, this said Qwen 0.6B's own recipe "did run" and that six
+    # other absent models had the generic arm run against them -- in a document
+    # whose next section says "7 of the 14 models in the ladder have a row" and
+    # lists all seven under "What did not run". A sentence about what a sweep ran
+    # has to read the rows, not the configuration. (Cross-model review.)
+    measured = {row.model for row in ok}
+    trainable = [spec for spec in LADDER if not spec.random_init and spec.name in measured]
     generic_only = [spec.name for spec in trainable if spec.documented_arm is None]
     own_recipe = [spec.name for spec in trainable if spec.documented_arm is not None]
     names = lambda group: ", ".join(f"`{n}`" for n in group)  # noqa: E731

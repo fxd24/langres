@@ -1248,14 +1248,19 @@ class TestTheRetractedRangeReadingStaysRetracted:
 class TestPartialWindowCaveat:
     """`studies_measured` is intent; `window_complete` is what was reached."""
 
-    def test_an_aborted_both_study_run_still_warns(
+    def test_an_incomplete_both_study_run_still_warns(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The caveat went silent in the one case it exists for.
 
-        An aborted `LFM25_STUDY=both` sweep leaves `studies_measured == ['a',
+        An incomplete `LFM25_STUDY=both` sweep leaves `studies_measured == ['a',
         'b']`, so keying only on that list returned no warning beside the
         cross-study subtraction — over rows the window never touched.
+
+        This asserts that it WARNS, not how it explains itself: `--partial` has
+        two causes (an abort, and a deliberate one-cell resume) and the wording
+        that named only the first was itself a review finding. Pinning the exact
+        sentence is what made this test agree with the defect.
         """
         sidecar = json.loads(REPORT.PROVENANCE.read_text())
         sidecar["studies_measured"] = ["a", "b"]
@@ -1266,7 +1271,9 @@ class TestPartialWindowCaveat:
 
         caveat = "\n".join(REPORT._cross_study_caveat())
 
-        assert "aborted before finishing every planned study" in caveat
+        assert "may span two measurement windows" in caveat
+        assert "did not cover every stored row" in caveat
+        assert "aborted before finishing" not in caveat
 
     def test_a_completed_both_study_run_stays_quiet(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

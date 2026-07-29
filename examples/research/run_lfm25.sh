@@ -414,6 +414,31 @@ uv run python examples/research/write_provenance.py --finish || {
 }
 
 say "rendering the write-up"
+# Re-check the RENDERER's inputs here, not only at startup hours ago. Under
+# LFM25_STUDY=a the study-B rows are inputs this run never touches, so nothing
+# between the preflight and this line would notice them changing -- and the final
+# commit covers only the write-up and its provenance, so the published document
+# would be unreproducible from the commit that carries it. Startup cannot answer a
+# question about now. (Cross-model review.)
+RENDER_INPUTS=""
+for study in a b; do
+  prefix="$(study_artifacts "$study")"
+  RENDER_INPUTS="$RENDER_INPUTS ${prefix}_rows.jsonl"
+done
+MOVED_INPUTS=""
+for artifact in $RENDER_INPUTS $LOAD_PROBE_JSON; do
+  if [ -n "$(git status --porcelain --untracked-files=all -- "$artifact")" ]; then
+    MOVED_INPUTS="$MOVED_INPUTS $artifact"
+  fi
+done
+if [ -n "${MOVED_INPUTS// /}" ] && [ "${LFM25_FORCE:-0}" != "1" ]; then
+  say "REFUSING to render: these inputs are uncommitted right now:"
+  for artifact in $MOVED_INPUTS; do say "    $artifact"; done
+  say "  The write-up would quote bytes that no commit holds, so the document could not"
+  say "  be regenerated from the commit that carries it. Commit them, then re-render:"
+  say "    uv run python examples/research/lfm25_report.py"
+  commit_provenance 1 "results(lfm25): provenance for a sweep whose inputs moved before the render"
+fi
 # Not a bare exit: --finish has already CLOSED the window and written the
 # finished timestamp and stability verdict, and the model rows are committed. A
 # render failure here (cohort validation rejecting the artifacts, say) would

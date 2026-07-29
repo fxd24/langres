@@ -346,6 +346,21 @@ if [ -n "${DIRTY_ARTIFACTS// /}" ] && [ "${LADDER_FORCE:-0}" != "1" ]; then
   exit 2
 fi
 
+# LADDER_PREFLIGHT_ONLY: answer "would this refuse?" and stop, measuring nothing.
+#
+# It exists so a WRAPPER can ask the question before doing something it cannot
+# undo. The study-A resume replaced and committed the shared provenance sidecar
+# BEFORE this refusal ran, so a resume over dirty rows published a no-op window
+# in place of the one describing every committed row. The wrapper needs the
+# answer earlier than this point in the script, and the only alternatives were to
+# copy the check into it -- two implementations of one safety rule, which is the
+# drift disease this repo keeps paying for -- or to ask the owner. This asks the
+# owner. (Cross-model review.)
+if [ "${LADDER_PREFLIGHT_ONLY:-0}" = "1" ]; then
+  log "preflight only: artifacts are clean, nothing measured."
+  exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # 2. Record a process-level death as a real result row.
 #    Stdlib python only, and explicitly NOT the venv interpreter -- this runs
