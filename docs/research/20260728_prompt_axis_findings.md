@@ -342,8 +342,9 @@ are stated in: a row of the results table.
 with no prompt at all, so it can only ever detect *harm*, never benefit. The
 usual move is to drop such a benchmark from a portfolio as signal-free.
 
-That would have been a mistake here. Of the 25 arms measured against it, exactly
-one moved it — Gemma's documented `clustering` template, `1.0000 → 0.9375`
+That would have been a mistake here. Of the **20** prompted arms measured against
+its five no-prompt baselines (25 rows in all, of which 5 *are* the baselines),
+exactly one moved it — Gemma's documented `clustering` template, `1.0000 → 0.9375`
 [−0.1071, −0.0179] — and that is the same arm that turned out to be catastrophic
 (**−0.3183**) on `wdc_computers`. The saturated benchmark acted as a clean
 **harm detector**: silence from it means "this arm is not catastrophic", and its
@@ -361,7 +362,7 @@ the cleanest result in the sweep. Its documented Retrieval pair
 is the **only documented arm positive and clear of zero on all three unsaturated
 benchmarks**, and it is never negative anywhere. (One non-documented arm also
 manages it — Qwen3 running *our* ER text inside its own template, §4.1 below —
-so the uniqueness is among the published recipes, not among all 25 arms.)
+so the uniqueness is among the published recipes, not among all 20 prompted arms.)
 
 | arm | kind | abt_buy | amazon_google | wdc_computers |
 |---|---|---|---|---|
