@@ -1276,7 +1276,12 @@ def select_benchmarks(*, fast: bool, only: list[str] | None) -> list[str]:
                 f"not loadable benchmark(s): {', '.join(unknown)}. "
                 f"Choose from: {', '.join(sorted(loadable))}."
             )
-        return sorted(only)
+        # De-duplicated: `--only abt_buy abt_buy` would otherwise measure an
+        # expensive benchmark twice, keep one copy of its cells (slice
+        # replacement is per benchmark), and still count both toward
+        # `expected_cells` -- so the run would refuse to publish at the very end,
+        # after paying for the duplicate work (raised in review).
+        return sorted(set(only))
     if fast:
         return sorted(loadable & FAST_SUBSET)
     return sorted(loadable)
@@ -1412,7 +1417,16 @@ def run_benchmark_isolated(
         # it here and then failing to re-measure loses an hour of compute for
         # nothing (raised in review). Move it aside instead -- it stays visible to
         # `git status -uall`, so an operator decides rather than a crash deciding.
+        # A COLLISION-FREE name. `replace()` onto a fixed `.rejected` silently
+        # overwrites an artifact rescued by an earlier invocation -- which may
+        # itself be the only durable copy of an hour-long measurement, so the
+        # rescue would become the second data loss (raised in review). Find the
+        # first free slot instead; nothing here is ever overwritten.
         rejected = worker_out.with_name(worker_out.name + ".rejected")
+        serial = 1
+        while rejected.exists():
+            rejected = worker_out.with_name(f"{worker_out.name}.rejected.{serial}")
+            serial += 1
         worker_out.replace(rejected)
         print(
             f"[stale] {name}: worker artifact rejected ({'; '.join(reasons)}) -- "
@@ -1569,6 +1583,22 @@ def main() -> None:
     scratch = out.with_name(out.name + ".partial")
     fingerprint = _source_fingerprint()
     cells: list[CellResult] = []
+    # A surviving `.writing` means a checkpoint was fully staged but crashed
+    # before `os.replace()` committed it, so it holds MORE completed cells than
+    # `.partial` does. Resuming past it loads the older file and the next
+    # checkpoint overwrites the staging one, silently discarding that extra work
+    # (raised in review). Refuse and let an operator compare -- picking
+    # automatically would mean guessing which file is authoritative, and the
+    # wrong guess is the data loss.
+    staging = scratch.with_name(scratch.name + ".writing")
+    if args.resume and staging.exists():
+        parser.error(
+            f"{staging} exists alongside {scratch}: a checkpoint was staged but never "
+            "committed, so the staging file likely holds MORE cells than the "
+            "checkpoint. Refusing to resume past it. Compare the two "
+            "(`cells` length and identities), keep the one you want as "
+            f"{scratch.name}, and delete the other."
+        )
     if args.resume and scratch.exists():
         partial = read_report(scratch)
         # A resumed cell is REUSED, not recomputed, but the published report's

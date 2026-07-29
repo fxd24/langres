@@ -46,6 +46,7 @@ from examples.research.threshold_constant_sweep import (
     main,
     read_report,
     run_benchmark_isolated,
+    select_benchmarks,
     to_transfer_markdown,
     to_verdict_markdown,
     write_report,
@@ -772,3 +773,83 @@ class TestARejectedWorkerArtifactIsPreservedNotDeleted:
         assert worker_out.with_name(worker_out.name + ".rejected").exists(), (
             "the rejected artifact is durable data and must be preserved"
         )
+
+
+class TestRescuedArtifactsAreNeverOverwritten:
+    """The rescue must not become the second data loss.
+
+    ``replace()`` onto a fixed ``.rejected`` silently overwrites an artifact
+    rescued by an earlier invocation, which may itself be the only durable copy
+    of an hour-long measurement. Found in review, refining the rescue added one
+    round earlier.
+    """
+
+    def test_a_second_rejection_does_not_clobber_the_first(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scratch = tmp_path / "sweep.json.partial"
+        worker_out = scratch.with_name(f"{scratch.name}.abt_buy.json")
+        already = worker_out.with_name(worker_out.name + ".rejected")
+        already.write_text("an earlier rescue -- irreplaceable\n")
+
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=250,  # mismatch -> rejected
+                source_fingerprint=_source_fingerprint(),
+                cells=[_cell("abt_buy").model_copy(update={"method": "rapidfuzz", "seed": 0})],
+            ),
+            worker_out,
+        )
+        fingerprint = _source_fingerprint()
+        monkeypatch.setattr(
+            "examples.research.threshold_constant_sweep.subprocess.run",
+            lambda *_a, **_k: subprocess.CompletedProcess([], 1),
+        )
+        args = argparse.Namespace(methods=["rapidfuzz"], seeds=[0], resamples=1000, embedder=None)
+        with pytest.raises(RuntimeError):
+            run_benchmark_isolated("abt_buy", args, scratch, fingerprint)
+
+        assert already.read_text() == "an earlier rescue -- irreplaceable\n"
+        assert worker_out.with_name(worker_out.name + ".rejected.1").exists()
+
+
+class TestResumeRefusesToStepPastAnUncommittedCheckpoint:
+    """`.writing` holds MORE cells than `.partial`, not fewer.
+
+    It exists only when a checkpoint was fully staged and crashed before
+    ``os.replace()``. Loading the older file and letting the next checkpoint
+    overwrite the staging one silently discards completed work. Found in review.
+    """
+
+    def test_a_surviving_staging_file_blocks_resume(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, capsys: Any
+    ) -> None:
+        out = tmp_path / "sweep.json"
+        scratch = out.with_name(out.name + ".partial")
+        write_report(
+            SweepReport(
+                grid=list(GRID),
+                shipped_threshold=0.5,
+                bootstrap_resamples=1000,
+                source_fingerprint=_source_fingerprint(),
+                cells=[_cell("abt_buy")],
+            ),
+            scratch,
+        )
+        scratch.with_name(scratch.name + ".writing").write_text("{}")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["threshold_constant_sweep.py", "--out", str(out), "--resume", "--resamples", "1000"],
+        )
+        with pytest.raises(SystemExit):
+            main()
+        assert ".writing" in capsys.readouterr().err
+
+
+class TestDuplicateBenchmarkNamesAreCollapsed:
+    """`--only x x` measured an expensive benchmark twice, then refused to publish."""
+
+    def test_only_deduplicates(self) -> None:
+        assert select_benchmarks(fast=False, only=["abt_buy", "abt_buy"]) == ["abt_buy"]
