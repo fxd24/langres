@@ -39,6 +39,14 @@
 #
 # Usage:
 #   bash examples/research/run_lfm25.sh [PID_TO_WAIT_FOR]
+#
+#   LFM25_STUDY=a|b|both   which study to run (default: both)
+#
+# The selector exists because the harness has NO skip-completed logic:
+# merge_rows() REPLACES a re-measured cell, and re-measuring the reference model
+# clears every other model's vs_reference_* on the benchmarks it touches. So
+# after a partial run, "just run it again" is not a resume -- it is a re-do that
+# churns correct results. Naming the unfinished study is.
 
 set -u -o pipefail
 
@@ -64,6 +72,15 @@ export LADDER_BENCHMARK_GRANULAR=1
 
 say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 
+STUDY="${LFM25_STUDY:-both}"
+case "$STUDY" in
+  a | b | both) ;;
+  *)
+    say "LFM25_STUDY must be one of: a, b, both (got '$STUDY')"
+    exit 2
+    ;;
+esac
+
 # ---------------------------------------------------------------------------
 # Study A -- the like-for-like comparison.
 #
@@ -71,29 +88,33 @@ say() { echo "[$(date '+%H:%M:%S')] lfm25: $*"; }
 # every later model's interval is computed against, and run_ladder.sh orders the
 # list as given.
 # ---------------------------------------------------------------------------
-say "study A (retrieval-tuned) -- baseline intfloat/e5-base-v2"
-LADDER_ARTIFACT="docs/research/20260729_lfm25_tuned" \
-LADDER_REFERENCE_MODEL="intfloat/e5-base-v2" \
-LADDER_MODELS="intfloat/e5-base-v2 all-MiniLM-L6-v2 BAAI/bge-base-en-v1.5 LiquidAI/LFM2.5-Embedding-350M" \
-  bash examples/research/run_ladder.sh "${1:-}"
-code=$?
-if [ $code -ne 0 ]; then
-  say "study A exited $code -- stopping before study B (its baseline comes from A's checkpoint)"
-  exit $code
+if [ "$STUDY" = "a" ] || [ "$STUDY" = "both" ]; then
+  say "study A (retrieval-tuned) -- baseline intfloat/e5-base-v2"
+  LADDER_ARTIFACT="docs/research/20260729_lfm25_tuned" \
+  LADDER_REFERENCE_MODEL="intfloat/e5-base-v2" \
+  LADDER_MODELS="intfloat/e5-base-v2 all-MiniLM-L6-v2 BAAI/bge-base-en-v1.5 LiquidAI/LFM2.5-Embedding-350M" \
+    bash examples/research/run_ladder.sh "${1:-}"
+  code=$?
+  if [ $code -ne 0 ]; then
+    say "study A exited $code -- stopping before study B (its baseline comes from A's checkpoint)"
+    exit $code
+  fi
 fi
 
 # ---------------------------------------------------------------------------
 # Study B -- the base encoders, against the tuned model on the same backbone.
 # ---------------------------------------------------------------------------
-say "study B (base masked-LM encoders) -- baseline LiquidAI/LFM2.5-Embedding-350M"
-LADDER_ARTIFACT="docs/research/20260729_lfm25_base_encoders" \
-LADDER_REFERENCE_MODEL="LiquidAI/LFM2.5-Embedding-350M" \
-LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M random-init-control-350M" \
-  bash examples/research/run_ladder.sh
-code=$?
-if [ $code -ne 0 ]; then
-  say "study B exited $code"
-  exit $code
+if [ "$STUDY" = "b" ] || [ "$STUDY" = "both" ]; then
+  say "study B (base masked-LM encoders) -- baseline LiquidAI/LFM2.5-Embedding-350M"
+  LADDER_ARTIFACT="docs/research/20260729_lfm25_base_encoders" \
+  LADDER_REFERENCE_MODEL="LiquidAI/LFM2.5-Embedding-350M" \
+  LADDER_MODELS="LiquidAI/LFM2.5-Embedding-350M LiquidAI/LFM2.5-Encoder-350M LiquidAI/LFM2.5-Encoder-230M random-init-control-350M" \
+    bash examples/research/run_ladder.sh
+  code=$?
+  if [ $code -ne 0 ]; then
+    say "study B exited $code"
+    exit $code
+  fi
 fi
 
 # ---------------------------------------------------------------------------
