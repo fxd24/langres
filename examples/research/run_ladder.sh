@@ -257,15 +257,43 @@ swap_used_mib() {
   sysctl vm.swapusage 2>/dev/null | sed -n 's/.*used = \([0-9.]*\)M.*/\1/p'
 }
 
+#: Reclaimable physical memory. This is the observable that actually predicts a
+#: kill, and it is here because the rise-counter below did NOT catch the failure
+#: it was written for: on 2026-07-29 the sweep was killed by the OS mid-cell with
+#: swap at 19892/20480M, while the counter sat at 0-2 rises the whole way up. Used
+#: swap dipped between samples often enough to reset the counter, so a guard that
+#: watches the *derivative* stayed silent through the exhaustion it existed to
+#: prevent -- the repo's recurring "gate decoupled from what it checks" shape.
+#: Free swap alone is not enough either: macOS grows the swap file on demand, so
+#: `total` moves under you (an earlier sample read used=22903M against total
+#: 20480M). Available physical memory does not have that problem.
+mem_available_mib() {
+  vm_stat 2>/dev/null | awk '
+    /page size of/ {ps=$8}
+    /Pages free/ {f=$3} /Pages inactive/ {i=$3} /Pages speculative/ {s=$3}
+    END {gsub(/\./,"",f); gsub(/\./,"",i); gsub(/\./,"",s);
+         if (ps=="") exit; printf "%.0f", (f+i+s)*ps/1048576}'
+}
+
 SWAP_BASELINE="$(swap_used_mib)"
 SWAP_PREV="$SWAP_BASELINE"
 SWAP_RISES=0
 #: Consecutive per-cell rises before the sweep stops. Three, not one: swap
 #: fluctuates with everything else on the machine, and a single sample is noise.
 SWAP_RISE_LIMIT=3
+#: Hard floor on reclaimable memory, checked BEFORE each cell as well as after.
+#: Below this the next encode is what tips the machine over.
+MEM_FLOOR_MIB="${MEM_FLOOR_MIB:-1500}"
 
-check_swap() {
-  local now
+check_memory() {
+  local now avail
+  avail="$(mem_available_mib)"
+  if [ -n "$avail" ] && [ "$avail" -lt "$MEM_FLOOR_MIB" ] 2>/dev/null; then
+    log "ABORT: only ${avail}MiB reclaimable memory left (floor ${MEM_FLOOR_MIB}MiB)."
+    log "  Continuing would get this process killed mid-cell, as happened on 2026-07-29."
+    log "  Everything measured so far is committed. Re-run to resume from it."
+    return 1
+  fi
   now="$(swap_used_mib)"
   [ -z "$now" ] || [ -z "$SWAP_PREV" ] && { SWAP_PREV="$now"; return 0; }
   if awk "BEGIN{exit !($now > $SWAP_PREV)}"; then
@@ -273,7 +301,7 @@ check_swap() {
   else
     SWAP_RISES=0
   fi
-  log "  swap used ${now}M (baseline ${SWAP_BASELINE}M, consecutive rises ${SWAP_RISES})"
+  log "  swap used ${now}M (baseline ${SWAP_BASELINE}M, rises ${SWAP_RISES}, avail ${avail}MiB)"
   SWAP_PREV="$now"
   if [ "$SWAP_RISES" -ge "$SWAP_RISE_LIMIT" ]; then
     log "ABORT: used swap rose on $SWAP_RISES consecutive cells (${SWAP_BASELINE}M -> ${now}M)."
@@ -283,6 +311,9 @@ check_swap() {
   fi
   return 0
 }
+
+#: Back-compat alias -- the call sites below read as "check swap" historically.
+check_swap() { check_memory; }
 
 for model in "${MODELS[@]}"; do
   safe="${model//\//__}"
@@ -316,6 +347,9 @@ for model in "${MODELS[@]}"; do
     # at 0.8 GB RSS).
     first=truncate
     for benchmark in $BENCHMARKS; do
+      # Checked BEFORE the encode, not only after it. The 2026-07-29 kill landed
+      # *inside* a cell, so a purely post-cell guard never got its turn to run.
+      check_memory || { code=9; break; }
       log "  -- $model on $benchmark"
       measure_cell "$benchmark" "$first"
       cell_code=$?
