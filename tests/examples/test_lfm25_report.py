@@ -275,6 +275,35 @@ class TestNoiseFloor:
         assert "cannot support an embedder claim" in report
         assert "is not evidence" in report
 
+    def test_a_tie_credits_a_deterministic_model(self, artifacts: Path) -> None:
+        """A tie must not hand the credit to whichever row was hashed first.
+
+        Regression: the table iterated a *set* of model names, and ``max``
+        returns the FIRST maximum -- so on a benchmark where several models
+        reach the same recall, the model named as "best tuned model" flipped
+        between processes (set order varies with ``PYTHONHASHSEED``) while the
+        number stayed correct. The file then failed its own
+        reproduce-the-committed-table check.
+
+        Reversing the input cannot reproduce this in-process, because set order
+        for the same elements is stable within one interpreter. So this pins the
+        guarantee instead: ties break on model name, and the fixture's
+        ``fodors_zagat`` is a real tie at 0.99.
+        """
+        table, _, _ = REPORT._noise_floor_table(
+            REPORT._read_rows(REPORT.TUNED_ROWS), REPORT._read_rows(REPORT.BASE_ROWS)
+        )
+
+        tied_line = next(line for line in table.splitlines() if "fodors_zagat" in line)
+        # max() on (recall, model) -> the alphabetically LAST name wins the tie,
+        # and "intfloat/..." sorts after "LiquidAI/..." (lowercase 'i' > 'L').
+        assert "intfloat/e5-base-v2" in tied_line
+        assert "LiquidAI/LFM2.5-Embedding-350M" not in tied_line
+
+    def test_rendering_twice_gives_the_same_bytes(self, artifacts: Path) -> None:
+        """The harness must reproduce its own committed table on a re-run."""
+        assert REPORT.render() == REPORT.render()
+
 
 class TestLicenceBlocker:
     def test_the_threshold_clause_is_quoted_from_the_committed_licence(self) -> None:

@@ -177,7 +177,7 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 |---|---|---|---|
 | `abt_buy` | 0.9109 | 0.9741 (`LiquidAI/LFM2.5-Embedding-350M`) | **+0.0632** usable |
 | `amazon_google` | 0.7058 | 0.8338 (`intfloat/e5-base-v2`) | **+0.1281** usable |
-| `fodors_zagat` | 1.0000 | 1.0000 (`LiquidAI/LFM2.5-Embedding-350M`) | **+0.0000** **uninformative** |
+| `fodors_zagat` | 1.0000 | 1.0000 (`intfloat/e5-base-v2`) | **+0.0000** **uninformative** |
 | `walmart_amazon` | 0.8626 | 0.8810 (`intfloat/e5-base-v2`) | **+0.0183** **uninformative** |
 | `wdc_computers` | 0.5788 | 0.7363 (`intfloat/e5-base-v2`) | **+0.1575** usable |
 
@@ -185,6 +185,13 @@ Mean **per-record** recall difference, bootstrap-resampled **by gold cluster** (
 **Benchmarks that cannot support an embedder claim: `fodors_zagat`, `walmart_amazon`.** On these the whole tuned-vs-random range is under five recall points, so the measurement's own noise floor sits inside any effect it would have to detect. A model ranking read off them is not evidence.
 
 Benchmarks with usable range: `abt_buy`, `amazon_google`, `wdc_computers`.
+
+**The control also outscores the real base encoders.** Both wear the same untrained mean-pooling head, so the only difference between these rows is whether the backbone weights were pretrained at all:
+
+- Random weights match or beat `LiquidAI/LFM2.5-Encoder-230M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`).
+- Random weights match or beat `LiquidAI/LFM2.5-Encoder-350M` on **5 of 5** benchmarks (`abt_buy`, `amazon_google`, `fodors_zagat`, `walmart_amazon`, `wdc_computers`).
+
+Pretrained masked-LM features read through an untrained mean-pooling head are therefore **worse than random features read the same way** on this task. That is a statement about the *pooling*, not about the checkpoints: MLM training shapes token representations for a head this pipeline never attaches, and averaging them destroys more than averaging random projections does. It is also the cleanest available demonstration of why an untuned encoder must not be ranked against a retrieval-tuned one.
 
 This reframes `fodors_zagat` specifically. It was already labelled *saturated* — every usable embedder scoring near the ceiling. The control shows it is stronger than that: it is **uninformative in the strict sense**, because an untrained network also scores near the ceiling. Saturation says the models agree; this says the benchmark cannot tell a trained retriever from noise. It must never be cited as evidence that one embedder beats another.
 
@@ -221,7 +228,7 @@ The paired intervals were computed by `paired_entity_bootstrap` at **B=1000** re
 | `src/langres/experiments/statistics.py` | `5436b938b70e` | 9192ebf 2026-07-28T16:47:58+02:00 |
 | `examples/research/embedder_ladder.py` | `26ee49f473e7` | c23d95e 2026-07-29T01:17:51+02:00 |
 
-Rendered at `HEAD` = `40c192b5520b`. The blob hashes are what to compare against another branch; the render-time `HEAD` is only a pointer to them.
+Blob hashes, deliberately, and **not** the render-time `HEAD`: `HEAD` moves with every commit, so embedding it would make this file re-render differently on each run and break the harness's own reproduce-the-committed-table check. A blob hash changes only when the file's content does, which is the property being recorded.
 
 ## Reproduce
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,66 @@ BASE_BASELINE = "LiquidAI/LFM2.5-Embedding-350M"
 #: Imported from the portfolio stream, not measured here — a single-family sweep
 #: cannot tell "every model agrees" from "the benchmark is solved".
 SATURATED = {"fodors_zagat"}
+
+#: Files whose content decides what the numbers MEAN, so the write-up records the
+#: exact blob each one was at. The statistics module is here because "were these
+#: numbers produced by the same code that is in main?" was asked of this study
+#: while it was still running: it was answerable in minutes only because the code
+#: was diffable. Rows that cannot name the code that produced them force a re-run
+#: to answer that question.
+PROVENANCE_FILES = (
+    "src/langres/experiments/statistics.py",
+    "examples/research/embedder_ladder.py",
+)
+
+
+def _git(*args: str) -> str:
+    """``git`` output, or an empty string when git cannot answer."""
+    try:
+        out = subprocess.run(
+            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _bootstrap_default_samples() -> str:
+    """The bootstrap replicate count these intervals were actually computed with.
+
+    Read out of the signature rather than repeated as a literal, so it cannot go
+    stale the way a hand-typed ``B=1000`` in prose would.
+    """
+    src = (REPO_ROOT / "src" / "langres" / "experiments" / "statistics.py").read_text()
+    match = re.search(r"^\s*samples:\s*int\s*=\s*(\d+)", src, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+def _provenance_section() -> list[str]:
+    """Name the code that produced these numbers, read from git rather than typed."""
+    lines = [
+        "## Provenance — which code produced these numbers",
+        "",
+        f"The paired intervals were computed by `paired_entity_bootstrap` at "
+        f"**B={_bootstrap_default_samples()}** replicates (the library default; this "
+        "harness does not override it), resampling **gold clusters**. Blob hashes of "
+        "the files that decide what the numbers mean:",
+        "",
+        "| file | blob | last commit touching it |",
+        "|---|---|---|",
+    ]
+    for path in PROVENANCE_FILES:
+        blob = _git("rev-parse", f"HEAD:{path}") or "unavailable"
+        last = _git("log", "-1", "--format=%h %cI", "--", path) or "unavailable"
+        lines.append(f"| `{path}` | `{blob[:12]}` | {last} |")
+    lines += [
+        "",
+        "Blob hashes, deliberately, and **not** the render-time `HEAD`: `HEAD` moves with "
+        "every commit, so embedding it would make this file re-render differently on each "
+        "run and break the harness's own reproduce-the-committed-table check. A blob hash "
+        "changes only when the file's content does, which is the property being recorded.",
+    ]
+    return lines
 
 
 def _read_rows(path: Path) -> list[dict[str, Any]]:
@@ -217,16 +278,23 @@ def _noise_floor_table(
     informative: list[str] = []
     for benchmark in benchmarks:
         control = _best_arm(base, CONTROL, benchmark)
+        # sorted(), not the raw set: iteration order over a set of strings varies
+        # between processes, and `max` returns the FIRST maximum -- so on a tie
+        # (fodors_zagat, where four models all score 1.0000) the model CREDITED
+        # here flipped from run to run while the number stayed right. That made
+        # the file fail its own reproduce-the-committed-table check, and it is
+        # the same shape as attributing a result to whichever row was hashed
+        # first. Ties now break on model name, deterministically.
         tuned_cells = [
             cell
-            for model in {row["model"] for row in tuned}
+            for model in sorted({row["model"] for row in tuned})
             if (cell := _best_arm(tuned, model, benchmark))
         ]
         if control is None or not tuned_cells:
             table += f"| `{benchmark}` | — | — | — |\n"
             continue
         floor = control["candidate_recall"]
-        best = max(tuned_cells, key=lambda c: c["candidate_recall"])
+        best = max(tuned_cells, key=lambda c: (c["candidate_recall"], c["model"]))
         margin = best["candidate_recall"] - floor
         # 0.05 is a judgement call, stated rather than hidden: a benchmark whose
         # entire tuned-vs-random range is under five recall points cannot support
@@ -239,6 +307,33 @@ def _noise_floor_table(
             f"(`{best['model']}`) | **{margin:+.4f}** {verdict} |\n"
         )
     return table, uninformative, informative
+
+
+def _control_vs_base_encoders(base: list[dict[str, Any]]) -> list[str]:
+    """Where the untrained control outscores the *real* base encoders.
+
+    Both sides wear the same untrained mean-pooling head, so this isolates the
+    pretrained MLM weights themselves: the only difference between the control
+    and an encoder row is whether those weights were trained at all.
+    """
+    encoders = sorted(
+        {row["model"] for row in base if "Encoder" in row["model"]},
+    )
+    benchmarks = sorted({row["benchmark"] for row in base})
+    lines: list[str] = []
+    for encoder in encoders:
+        beaten = []
+        for benchmark in benchmarks:
+            control = _best_arm(base, CONTROL, benchmark)
+            cell = _best_arm(base, encoder, benchmark)
+            if control and cell and control["candidate_recall"] >= cell["candidate_recall"]:
+                beaten.append(benchmark)
+        lines.append(
+            f"- Random weights match or beat `{encoder}` on **{len(beaten)} of "
+            f"{len(benchmarks)}** benchmarks"
+            + (f" ({', '.join(f'`{b}`' for b in beaten)})." if beaten else ".")
+        )
+    return lines
 
 
 def _licence_clauses() -> list[str]:
@@ -297,6 +392,10 @@ def render() -> str:
         if row.get("vs_reference_ci_low") is not None
     )
     fwer = 1 - 0.95**n_tests if n_tests else 0.0
+    #: Expected number of nominal 95% intervals that exclude zero purely by chance
+    #: when nothing is really different. Reported alongside the observed count so a
+    #: reader can compare "how many hits" against "how many hits are free".
+    expected_by_chance = 0.05 * n_tests
 
     base_interval_table, base_degenerate = _interval_table(base, BASE_BASELINE)
     noise_table, uninformative, informative = _noise_floor_table(tuned, base)
@@ -432,6 +531,13 @@ def render() -> str:
         f"**{fwer:.0%}** if they were independent. No multiplicity correction was applied, "
         f'so a claim of the form "it wins on at least one benchmark" is **not** supported '
         f"at 95% family-wise — read each benchmark on its own.",
+        f"- **How many hits are free:** if nothing were really different, "
+        f"{n_tests} nominal 95% intervals would be expected to exclude zero "
+        f"**{expected_by_chance:.2f}** times by chance alone. Compare that against the "
+        f"observed counts above before reading any single interval as a finding. "
+        f"No Holm or other family-wise correction is claimed here, because none was "
+        f"computed — the p-values a step-down procedure needs are not recoverable from "
+        f"percentile-interval endpoints at Holm's varying thresholds.",
         "- The bootstrap resamples **gold clusters**, and `clusters` in the table is the "
         "honest denominator — not the record count.",
         "- A percentile bootstrap on a discrete recall statistic can place a bound "
@@ -469,6 +575,20 @@ def render() -> str:
             f"Benchmarks with usable range: "
             f"{', '.join(f'`{b}`' for b in informative) if informative else '**none**'}."
         ),
+        "",
+        "**The control also outscores the real base encoders.** Both wear the same "
+        "untrained mean-pooling head, so the only difference between these rows is "
+        "whether the backbone weights were pretrained at all:",
+        "",
+        *_control_vs_base_encoders(base),
+        "",
+        "Pretrained masked-LM features read through an untrained mean-pooling head are "
+        "therefore **worse than random features read the same way** on this task. That is "
+        "a statement about the *pooling*, not about the checkpoints: MLM training shapes "
+        "token representations for a head this pipeline never attaches, and averaging them "
+        "destroys more than averaging random projections does. It is also the cleanest "
+        "available demonstration of why an untuned encoder must not be ranked against a "
+        "retrieval-tuned one.",
         "",
         "This reframes `fodors_zagat` specifically. It was already labelled *saturated* — "
         "every usable embedder scoring near the ceiling. The control shows it is stronger "
@@ -520,14 +640,22 @@ def render() -> str:
     else:
         parts.append("Every model loaded and every cell measured — no failure rows.")
 
+    parts += ["", *_provenance_section()]
+
     parts += [
         "",
         "## Reproduce",
         "",
         "```bash",
         "bash examples/research/run_lfm25.sh          # both sweeps + this write-up",
+        "LFM25_STUDY=b bash examples/research/run_lfm25.sh     # just the base-encoder study",
         "uv run python examples/research/lfm25_load_probe.py   # the loading artifact",
         "```",
+        "",
+        "There is **no skip-completed logic**: `merge_rows()` replaces a re-measured "
+        "cell, and re-measuring the reference model clears every other model's "
+        "`vs_reference_*` on the benchmarks it touches. Re-running a finished study is "
+        "a re-do, not a resume — use `LFM25_STUDY` to name the part that is missing.",
         "",
     ]
     return "\n".join(parts)
