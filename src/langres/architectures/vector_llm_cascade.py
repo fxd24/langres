@@ -17,6 +17,7 @@ from langres.core.matchers.embedding_score import EmbeddingScoreMatcher
 from langres.core.model_ref import DEFAULT_EMBEDDING_MODEL, ModelRef, normalize_model_ref, to_config
 from langres.core.registry import register_model
 from langres.core.resolver import ERModel
+from langres.core.score_type import resolve_threshold
 
 __all__ = ["VectorLLMCascade"]
 
@@ -97,7 +98,14 @@ class VectorLLMCascade(ERModel):
             (``"BAAI/bge-base-en-v1.5"``). Defaults to
             :data:`~langres.core.model_ref.DEFAULT_EMBEDDING_MODEL`. Runs
             in-process; costs nothing but time.
-        threshold: The match cut on the cascade's output.
+        threshold: The match cut on the cascade's output. ``None`` (the default)
+            takes the ``"prob_llm"`` family's shipped cut from
+            :data:`~langres.core.score_type.DEFAULT_THRESHOLDS` -- **0.7, not
+            0.5**. The registry has declared 0.7 for every LLM-family method
+            since the ``MethodSpec`` unification, but nothing read it, so this
+            constructor's own hard-coded ``0.5`` was what actually cut. Wiring
+            the declaration up changes this architecture's out-of-the-box cut;
+            pass ``threshold=0.5`` for the previous behaviour.
         escalation_band: The student-score interval that escalates to the LLM.
             Widen to spend more, narrow to spend less.
         k_neighbors: Neighbors per record the blocker retrieves.
@@ -161,7 +169,7 @@ class VectorLLMCascade(ERModel):
         *,
         llm: str | dict[str, str] | ModelRef,
         embedder: str | dict[str, str] | ModelRef = DEFAULT_EMBEDDING_MODEL,
-        threshold: float = 0.5,
+        threshold: float | None = None,
         escalation_band: tuple[float, float] = _ESCALATION_BAND,
         k_neighbors: int = _K_NEIGHBORS,
         entity_noun: str = "entity",
@@ -174,7 +182,7 @@ class VectorLLMCascade(ERModel):
         # rather than deep inside a blocker build on the first dedupe().
         self.llm = normalize_model_ref(llm)
         self.embedder = normalize_model_ref(embedder)
-        self.threshold = threshold
+        self.threshold = resolve_threshold(threshold, "prob_llm")
         self.escalation_band = escalation_band
         self.k_neighbors = k_neighbors
         self.entity_noun = entity_noun

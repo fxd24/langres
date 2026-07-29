@@ -227,6 +227,40 @@ It is **optional on purpose**, and the compatibility rules follow from that:
 
 Both name-dispatch paths — `from_schema` and the benchmark harness (`langres.methods`) — resolve judge names through the single **method registry** (`langres.core.method_registry`): one `MethodSpec` per name carrying its builder, `score_type`, `default_threshold`, and `default_model`. A name means the same thing everywhere; `/` in a method id is reserved for future `author/method` namespacing of third-party methods (model ids like `openrouter/openai/gpt-4o-mini` keep their slashes in the orthogonal `model=` kwarg). (A third path, the deleted verbs' `core.presets.build_judge`, existed before named architectures replaced the verbs and resolved names the same way; naming a model explicitly replaced it, not a better heuristic.)
 
+**Where a default threshold comes from.** Score scales are not comparable across
+families — a rapidfuzz similarity, a cosine, and an LLM's probability all live in
+`[0, 1]` and mean different things — so there is no single right constant. The
+per-family value lives once, in
+`langres.core.score_type.DEFAULT_THRESHOLDS`, and everything reads it from there:
+`MethodSpec.default_threshold` fills from the spec's own `score_type` when
+omitted, and every front door with a `threshold: float | None = None` parameter
+(`FuzzyString`, `VectorLLMCascade`, the four `architectures/retrieval.py`
+recipes, `Reranker.for_schema`) resolves `None` through
+`resolve_threshold(threshold, score_type)`. An explicit value is always returned
+untouched, including one that happens to equal the default.
+
+Only `heuristic` and `sim_cos` are measured
+(`docs/research/20260728_threshold_constant.md`); the LLM families cost paid
+calls per score, and `prob_fs` / `prob_rf` come from matchers fitted **per
+dataset**, so their score scale is re-estimated for your data and a shared
+constant is not the same question. (Note `prob_fs` is *not* labels-only:
+`FellegiSunterMatcher.fit_unlabeled` performs an unsupervised random-pair
+u-estimate plus EM. Only `prob_rf` requires labels.) Their entries record the
+status quo rather than a finding.
+
+**Measured does not mean changed, and that distinction is the point.** Of the two
+swept families only `sim_cos` got a new constant (`0.90` — `0.5` accepts nearly
+every pair on a normalized-embedding cosine). `heuristic` *kept* `0.5` even
+though a better-on-median constant exists, because it reliably harms one
+benchmark and the study's pre-registered rule rejects a default with a
+predictable victim. So the three states an entry can be in — measured-and-changed,
+measured-and-deliberately-kept, and never-measured — are documented per family in
+the `DEFAULT_THRESHOLDS` docstring and pinned against literals in
+`tests/core/test_score_type_defaults.py`. Note also that a `sim_cos` cut lives on
+the *encoder's* scale, so the shipped value is the one measured safe across
+checkpoints rather than the best on any single one; with labels, prefer
+`langres.training.calibration.derive_threshold`.
+
 See [DX_RESOLVER.md](DX_RESOLVER.md) for the before/after of the manual lambda pipeline vs. the declarative `from_schema` + `save`/`load` path.
 
 ### Explicit topology authoring and execution
