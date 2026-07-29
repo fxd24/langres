@@ -492,29 +492,36 @@ the checkpoint's own default; it ties on `abt_buy` and is clearly worse on
 This answers the underlying question better than the positive result does. Our
 ER instruction — *"Find records that describe the same real-world entity as: "* —
 is a genuinely better *description* of blocking than "retrieve relevant passages
-that answer the query". It describes the task correctly. It is also, on **four of
-the five** checkpoints, **actively harmful** — and on the fifth, helpful:
+that answer the query". It describes the task correctly. It is also **harmful on
+every one of the five checkpoints** — and on exactly one of them, also helpful.
+Every `er_symmetric` cell that survives Holm, none omitted:
 
 | model | benchmark | `er_symmetric` Δ per-record recall (macro) | 95% CI |
 |---|---|---:|---|
 | `intfloat/e5-base-v2` | wdc_computers | **−0.1038** | [−0.1245, −0.0840] |
+| `Qwen/Qwen3-Embedding-0.6B` | wdc_computers | **−0.0907** | [−0.1150, −0.0668] |
 | `BAAI/bge-base-en-v1.5` | wdc_computers | **−0.0775** | [−0.0992, −0.0556] |
 | `all-MiniLM-L6-v2` (control) | abt_buy | **−0.0667** | [−0.0837, −0.0506] |
 | `all-MiniLM-L6-v2` (control) | wdc_computers | **−0.0632** | [−0.0835, −0.0433] |
 | `intfloat/e5-base-v2` | abt_buy | **−0.0436** | [−0.0564, −0.0318] |
-| `google/embeddinggemma-300m` | wdc_computers | +0.0004 | [−0.0136, +0.0143] |
+| `BAAI/bge-base-en-v1.5` | abt_buy | **−0.0368** | [−0.0501, −0.0236] |
+| `google/embeddinggemma-300m` | abt_buy | **−0.0078** | [−0.0138, −0.0020] |
 | `google/embeddinggemma-300m` | amazon_google | **+0.0118** | [+0.0041, +0.0199] |
 
 > **The last row is the counter-example, and it is kept deliberately.** Our raw
-> ER sentence is *significantly positive* for EmbeddingGemma on `amazon_google`.
-> An earlier draft of this table stopped at the five negatives and labelled the
-> tier "reliably harmful" — which reads as a universal law and is not what the
-> rows say. The honest statement is **4 of 5 checkpoints**, with Gemma the
-> exception. It does not rescue the recommendation (Gemma's *documented*
-> retrieval prompt beats its raw-sentence arm on all three unsaturated
-> benchmarks), but a rule stated as universal when the data is 4-of-5 is the kind
-> of overreach this document exists to avoid. (Caught by automated review on
-> PR #252.)
+> ER sentence is *significantly positive* for EmbeddingGemma on `amazon_google`
+> — the only positive cell this arm produces anywhere. An earlier draft stopped
+> at the negatives and labelled the tier "reliably harmful", which reads as a
+> universal law; the correction to that then over-swung the other way, calling
+> Gemma "the exception" while the table quietly omitted Gemma's *own* significant
+> harm on `abt_buy`. Both statements were selections. The rows say: this arm
+> harms **all five** checkpoints somewhere, and Gemma is the only one it also
+> helps somewhere. That does not rescue the recommendation either way — Gemma's
+> *documented* retrieval prompt beats its raw-sentence arm on all three
+> unsaturated benchmarks — but a table that drops the row contradicting its own
+> caption is exactly the failure this document exists to avoid. (The first
+> over-claim was caught by automated review on PR #252; the second by re-deriving
+> the table from the rows instead of reading the prose.)
 
 **The lever is the checkpoint's trained prefix, not better English.** That is the
 measured claim, and it is all the data supports.
