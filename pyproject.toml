@@ -141,7 +141,7 @@ trackio = [
 # to install this transitively: local save/load remains client-free, while
 # remote from_pretrained/push_to_hub imports it lazily.
 hub = [
-    "huggingface-hub>=0.34,<2",
+    "huggingface-hub>=0.34,<3",
 ]
 
 [build-system]
